@@ -1,26 +1,281 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-sidebar-bg: #0f1923;
+  --color-sidebar-hover: #1a2a3c;
+  --color-sidebar-active: #1e3a5f;
+  --color-page-bg: #eaecf0;
+  --color-card-bg: #ffffff;
+  --color-border: #d5d9e2;
+  --color-primary: #2563eb;
+  --color-primary-dark: #1d4ed8;
+  --color-emerald: #059669;
+  --color-emerald-light: #10b981;
+  --color-amber: #d97706;
+  --color-red: #dc2626;
+  --color-indigo: #4f46e5;
+  --color-text-dark: #0f172a;
+  --color-text-mid: #374151;
+  --color-text-light: #6b7280;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-page-bg);
+  color: var(--color-text-dark);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Richer scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #e5e7eb; }
+::-webkit-scrollbar-thumb { background: #9ca3af; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+
+/* Card hover transition */
+.card-hover:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.06);
+  transform: translateY(-1px);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Mobile Responsive Styles                                           */
+/* ------------------------------------------------------------------ */
+
+/* Mobile overlay for sidebar */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 99;
+}
+.sidebar-overlay.active {
+  display: block;
+}
+
+/* Hamburger button */
+.mobile-menu-btn {
+  display: none !important;
+}
+
+/* Tables scroll wrapper */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.table-scroll > div {
+  min-width: 700px;
+}
+
+/* ---- Breakpoint: Tablet (< 1024px) ---- */
+@media (max-width: 1023px) {
+  /* Stat grids: 2 cols */
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  /* Main content grids: single col */
+  .cards-grid-3 {
+    grid-template-columns: 1fr !important;
+  }
+  .cards-grid-2 {
+    grid-template-columns: 1fr !important;
+  }
+  /* Overview grid (reports) */
+  .overview-grid {
+    grid-template-columns: 1fr !important;
+  }
+  /* Kanban horizontal scroll */
+  .kanban-grid {
+    grid-template-columns: repeat(7, 220px) !important;
+  }
+  /* Profile form grid */
+  .profile-form-grid {
+    grid-template-columns: 1fr !important;
+  }
+  /* Mini stats in profile */
+  .mini-stats-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  /* Advertising campaign row */
+  .campaign-row {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+  /* Advertising expanded details */
+  .campaign-details-grid {
+    grid-template-columns: 1fr !important;
+  }
+  /* Filter bars: wrap */
+  .toolbar-row {
+    flex-wrap: wrap !important;
+    gap: 10px !important;
+  }
+  .toolbar-row > * {
+    flex-shrink: 0;
+  }
+  /* Pricing filter pills: scroll */
+  .filter-pills {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ---- Breakpoint: Mobile (< 768px) ---- */
+@media (max-width: 767px) {
+  /* Show hamburger */
+  .mobile-menu-btn {
+    display: flex !important;
+  }
+
+  /* Hide sidebar by default */
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  /* Content area: no margin */
+  .main-content {
+    margin-left: 0 !important;
+  }
+
+  /* Page padding reduced */
+  .page-padding {
+    padding: 16px !important;
+  }
+
+  /* Header adjustments */
+  .header-bar {
+    padding: 0 16px !important;
+    height: 56px !important;
+  }
+  .header-search {
+    display: none !important;
+  }
+  .header-divider {
+    display: none !important;
+  }
+  .header-user-info {
+    display: none !important;
+  }
+
+  /* Stat grids: single col */
+  .stats-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Tabs: scroll horizontally */
+  .tab-bar {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap !important;
+  }
+  .tab-bar > button {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Filter buttons: scroll */
+  .filter-pills {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap !important;
+  }
+  .filter-pills > button {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Toolbar: stack vertically */
+  .toolbar-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  /* Pipeline kanban */
+  .kanban-grid {
+    grid-template-columns: 280px !important;
+    overflow-x: auto !important;
+  }
+
+  /* Auth pages: single column */
+  .auth-layout {
+    flex-direction: column !important;
+  }
+  .auth-left-panel {
+    width: 100% !important;
+    min-height: auto !important;
+    padding: 32px 24px !important;
+  }
+  .auth-right-panel {
+    padding: 24px !important;
+  }
+  .auth-left-panel .auth-headline {
+    font-size: 28px !important;
+  }
+  .auth-left-panel .auth-features {
+    display: none !important;
+  }
+  .auth-left-panel .auth-stats {
+    display: none !important;
+  }
+
+  /* Profile header: stack */
+  .profile-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 16px !important;
+    padding: 20px !important;
+  }
+
+  /* Mini stats: 2 cols */
+  .mini-stats-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  /* Reports overview grid */
+  .overview-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Pipeline toolbar buttons */
+  .pipeline-actions {
+    flex-direction: column !important;
+  }
+
+  /* Advertising machines table: scroll */
+  .ad-table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Summary pills: wrap */
+  .summary-pills {
+    flex-wrap: wrap !important;
+  }
+}
+
+/* ---- Breakpoint: Small mobile (< 480px) ---- */
+@media (max-width: 479px) {
+  .page-padding {
+    padding: 12px !important;
+  }
+  .stats-grid {
+    gap: 10px !important;
+  }
+  .auth-left-panel .auth-subtitle {
+    display: none !important;
+  }
 }

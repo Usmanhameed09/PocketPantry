@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  Box, Eye, EyeOff, UserPlus, AlertCircle, CheckCircle2,
+  Eye, EyeOff, UserPlus, AlertCircle, CheckCircle2,
   Monitor, TrendingUp, Brain, BarChart3,
 } from "lucide-react";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -61,19 +61,19 @@ export default function SignupPage() {
       {/* ===== LEFT PANEL — Branding ===== */}
       <div className="auth-left-panel" style={{
         width: isMobile ? "100%" : "45%", minHeight: isMobile ? "auto" : "100vh",
-        background: "linear-gradient(160deg, #070d15 0%, #0c1a2e 40%, #132f52 70%, #1a3f6f 100%)",
+        background: "linear-gradient(160deg, #052e16 0%, #14532d 40%, #166534 70%, #15803d 100%)",
         display: "flex", flexDirection: "column", justifyContent: "center",
         padding: isMobile ? "32px 24px" : "60px 56px", position: "relative", overflow: "hidden",
       }}>
         {/* Background glow effects */}
         <div style={{
           position: "absolute", top: -120, right: -120, width: 350, height: 350,
-          background: "radial-gradient(circle, rgba(37,99,235,0.12) 0%, transparent 70%)",
+          background: "radial-gradient(circle, rgba(22,163,74,0.12) 0%, transparent 70%)",
           borderRadius: "50%",
         }} />
         <div style={{
           position: "absolute", bottom: -80, left: -80, width: 280, height: 280,
-          background: "radial-gradient(circle, rgba(99,102,241,0.08) 0%, transparent 70%)",
+          background: "radial-gradient(circle, rgba(234,179,8,0.08) 0%, transparent 70%)",
           borderRadius: "50%",
         }} />
 
@@ -81,11 +81,15 @@ export default function SignupPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 48 }}>
           <div style={{
             width: 48, height: 48, borderRadius: 14,
-            background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+            background: "linear-gradient(135deg, #16a34a 0%, #15803d 100%)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            boxShadow: "0 4px 20px rgba(37,99,235,0.35)",
+            boxShadow: "0 4px 20px rgba(22,163,74,0.35)",
           }}>
-            <Box size={24} color="white" />
+            <img
+              src="/Logo_1.png"
+              alt="PocketPantry logo"
+              style={{ width: 28, height: 28, borderRadius: 6, objectFit: "cover" }}
+            />
           </div>
           <div>
             <div style={{ color: "#f1f5f9", fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>PocketPantry</div>
@@ -108,7 +112,7 @@ export default function SignupPage() {
         {/* Feature pills */}
         <div className="auth-features" style={{ display: isMobile ? "none" : "flex", flexDirection: "column", gap: 14 }}>
           {[
-            { icon: Monitor, label: "Real-time machine monitoring", color: "#3b82f6" },
+            { icon: Monitor, label: "Real-time machine monitoring", color: "#22c55e" },
             { icon: TrendingUp, label: "Sales analytics & predictions", color: "#10b981" },
             { icon: Brain, label: "AI-powered product optimization", color: "#8b5cf6" },
             { icon: BarChart3, label: "Automated reporting & alerts", color: "#f59e0b" },
@@ -239,7 +243,7 @@ export default function SignupPage() {
               cursor: "pointer", marginBottom: 24, fontWeight: 500, lineHeight: 1.5,
             }}>
               <input type="checkbox" required style={{
-                width: 18, height: 18, accentColor: "#2563eb", borderRadius: 4, cursor: "pointer",
+                width: 18, height: 18, accentColor: "#16a34a", borderRadius: 4, cursor: "pointer",
                 marginTop: 2, flexShrink: 0,
               }} />
               I agree to the Terms of Service and Privacy Policy
@@ -248,10 +252,10 @@ export default function SignupPage() {
             {/* Submit */}
             <button type="submit" disabled={loading} style={{
               width: "100%", padding: "13px", borderRadius: 12,
-              background: loading ? "#93c5fd" : "#2563eb",
+              background: loading ? "#93c5fd" : "#16a34a",
               color: "#fff", border: "none", fontSize: 15, fontWeight: 700,
               cursor: loading ? "not-allowed" : "pointer",
-              boxShadow: loading ? "none" : "0 4px 14px rgba(37,99,235,0.3)",
+              boxShadow: loading ? "none" : "0 4px 14px rgba(22,163,74,0.3)",
               display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
               transition: "all 0.2s",
               letterSpacing: -0.2,
@@ -274,7 +278,7 @@ export default function SignupPage() {
           {/* Login link */}
           <div style={{ textAlign: "center", marginTop: 28, fontSize: 14, color: "#64748b" }}>
             Already have an account?{" "}
-            <Link href="/login" style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}>
+            <Link href="/login" style={{ color: "#16a34a", fontWeight: 700, textDecoration: "none" }}>
               Sign in
             </Link>
           </div>
@@ -312,8 +316,8 @@ const eyeBtnStyle: React.CSSProperties = {
 };
 
 function focusInput(e: React.FocusEvent<HTMLInputElement>) {
-  e.target.style.borderColor = "#2563eb";
-  e.target.style.boxShadow = "0 0 0 3px rgba(37,99,235,0.08)";
+  e.target.style.borderColor = "#16a34a";
+  e.target.style.boxShadow = "0 0 0 3px rgba(22,163,74,0.08)";
 }
 
 function blurInput(e: React.FocusEvent<HTMLInputElement>) {

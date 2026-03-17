@@ -168,7 +168,7 @@ const statusConfig: Record<MachineStatus, { color: string; bg: string; icon: typ
 
 const refillColor: Record<RefillStatus, string> = {
   "Refill in 4-5 Days": "#059669",
-  "Refill in 2-3 Days": "#2563eb",
+  "Refill in 2-3 Days": "#16a34a",
   "Refill in 1-3 Days": "#d97706",
   "Needs Refill Today": "#dc2626",
 };
@@ -242,7 +242,7 @@ export default function MachinesPage() {
 
           <button style={{
             display: "flex", alignItems: "center", gap: 6, padding: "9px 18px",
-            background: "#2563eb", color: "#fff", border: "none", borderRadius: 8,
+            background: "#16a34a", color: "#fff", border: "none", borderRadius: 8,
             fontSize: 13, fontWeight: 600, cursor: "pointer",
           }}>
             <Plus size={16} /> Add Machine

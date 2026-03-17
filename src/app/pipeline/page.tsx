@@ -221,7 +221,7 @@ const stageConfig: Record<Stage, { color: string; bg: string; border: string }> 
   "Interested":            { color: "#059669", bg: "#d1fae5", border: "#a7f3d0" },
   "Not Interested":        { color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
   "Callback":              { color: "#d97706", bg: "#fef3c7", border: "#fde68a" },
-  "Site Visit Requested":  { color: "#2563eb", bg: "#dbeafe", border: "#bfdbfe" },
+  "Site Visit Requested":  { color: "#16a34a", bg: "#dcfce7", border: "#bfdbfe" },
   "Proposal Requested":    { color: "#ea580c", bg: "#fff7ed", border: "#fed7aa" },
 };
 
@@ -250,7 +250,7 @@ export default function PipelinePage() {
       <div className="page-padding" style={{ padding: isMobile ? 16 : "24px 32px" }}>
         {/* Stat Cards */}
         <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
-          <StatBox icon={<Users size={20} color="#2563eb" />} iconBg="#dbeafe"
+          <StatBox icon={<Users size={20} color="#16a34a" />} iconBg="#dcfce7"
             label="Total Leads" value={`${leads.length}`} sub={`${leads.filter(l => l.stage === "New Lead").length} pending first contact`} />
           <StatBox icon={<PhoneCall size={20} color="#7c3aed" />} iconBg="#ede9fe"
             label="AI Calls Made" value={`${totalCalls}`} sub={`${totalEmails} emails sent`} />
@@ -271,7 +271,7 @@ export default function PipelinePage() {
               {(["kanban", "list"] as const).map((v) => (
                 <button key={v} onClick={() => setView(v)} style={{
                   padding: "8px 16px", fontSize: 13, fontWeight: 500, border: "none", cursor: "pointer",
-                  background: view === v ? "#2563eb" : "transparent",
+                  background: view === v ? "#16a34a" : "transparent",
                   color: view === v ? "#fff" : "#6b7280",
                   textTransform: "capitalize" as const,
                 }}>{v === "kanban" ? "Board" : "List"}</button>
@@ -295,7 +295,7 @@ export default function PipelinePage() {
             }}><MapPin size={14} /> Google Maps</button>
             <button style={{
               display: "flex", alignItems: "center", gap: 6, padding: "9px 18px",
-              background: "#2563eb", color: "#fff", border: "none", borderRadius: 8,
+              background: "#16a34a", color: "#fff", border: "none", borderRadius: 8,
               fontSize: 13, fontWeight: 600, cursor: "pointer",
             }}><Plus size={16} /> Add Lead</button>
           </div>
@@ -484,8 +484,8 @@ export default function PipelinePage() {
                                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                   <span style={{
                                     fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10,
-                                    color: em.status === "Replied" ? "#059669" : em.status === "Opened" ? "#2563eb" : em.status === "Bounced" ? "#dc2626" : "#6b7280",
-                                    background: em.status === "Replied" ? "#d1fae5" : em.status === "Opened" ? "#dbeafe" : em.status === "Bounced" ? "#fef2f2" : "#e2e8f0",
+                                    color: em.status === "Replied" ? "#059669" : em.status === "Opened" ? "#16a34a" : em.status === "Bounced" ? "#dc2626" : "#6b7280",
+                                    background: em.status === "Replied" ? "#d1fae5" : em.status === "Opened" ? "#dcfce7" : em.status === "Bounced" ? "#fef2f2" : "#e2e8f0",
                                   }}>{em.status}</span>
                                   <span style={{ fontSize: 11, color: "#94a3b8" }}>{em.date}</span>
                                 </div>

@@ -77,7 +77,7 @@ const paymentSplit = [
   { name: "Cash", value: 18, amount: 2241.00 },
   { name: "Mobile Pay", value: 4, amount: 498.20 },
 ];
-const PIE_COLORS = ["#2563eb", "#059669", "#d97706"];
+const PIE_COLORS = ["#16a34a", "#059669", "#d97706"];
 
 // Machine-level report — from Nayax + cost data
 const machineReport = [
@@ -147,7 +147,7 @@ export default function ReportsPage() {
             }}><Download size={14} /> Export</button>
             <button style={{
               display: "flex", alignItems: "center", gap: 6, padding: "9px 18px",
-              background: "#2563eb", color: "#fff", border: "none", borderRadius: 8,
+              background: "#16a34a", color: "#fff", border: "none", borderRadius: 8,
               fontSize: 13, fontWeight: 600, cursor: "pointer",
             }}><Calendar size={14} /> Schedule Report</button>
           </div>
@@ -155,7 +155,7 @@ export default function ReportsPage() {
 
         {/* Stat Cards */}
         <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
-          <BigStat icon={<DollarSign size={20} color="#2563eb" />} iconBg="#dbeafe"
+          <BigStat icon={<DollarSign size={20} color="#16a34a" />} iconBg="#dcfce7"
             label="Total Revenue" value={`$${totalRevenue.toLocaleString()}`}
             sub="From Nayax transactions" />
           <BigStat icon={<TrendingUp size={20} color="#059669" />} iconBg="#d1fae5"
@@ -164,7 +164,7 @@ export default function ReportsPage() {
           <BigStat icon={<CreditCard size={20} color="#d97706" />} iconBg="#fef3c7"
             label="Processing Fees" value={`$${processingFees.toFixed(2)}`}
             sub="~3.5% on card payments" />
-          <BigStat icon={<Percent size={20} color="#6366f1" />} iconBg="#e0e7ff"
+          <BigStat icon={<Percent size={20} color="#6366f1" />} iconBg="#fef9c3"
             label="Avg. Margin" value={`${avgMargin.toFixed(1)}%`}
             sub="Revenue minus supplier cost" />
         </div>
@@ -175,8 +175,8 @@ export default function ReportsPage() {
             <button key={t} onClick={() => setTab(t)} style={{
               padding: "10px 20px", fontSize: 14, fontWeight: 600, border: "none",
               cursor: "pointer", background: "transparent",
-              color: tab === t ? "#2563eb" : "#9ca3af",
-              borderBottom: tab === t ? "2px solid #2563eb" : "2px solid transparent",
+              color: tab === t ? "#16a34a" : "#9ca3af",
+              borderBottom: tab === t ? "2px solid #16a34a" : "2px solid transparent",
               marginBottom: -2,
             }}>{t}</button>
           ))}
@@ -209,7 +209,7 @@ export default function ReportsPage() {
                     contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #d5d9e2", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }}
                     formatter={(value) => [`$${value}`, "Revenue"]}
                   />
-                  <Line type="monotone" dataKey="revenue" stroke="#2563eb" strokeWidth={2.5} dot={false} activeDot={{ r: 5, fill: "#2563eb" }} />
+                  <Line type="monotone" dataKey="revenue" stroke="#16a34a" strokeWidth={2.5} dot={false} activeDot={{ r: 5, fill: "#16a34a" }} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -267,7 +267,7 @@ export default function ReportsPage() {
                         <div style={{
                           height: "100%", borderRadius: 4,
                           width: `${(m.revenue / maxRev) * 100}%`,
-                          background: "linear-gradient(90deg, #2563eb, #3b82f6)",
+                          background: "linear-gradient(90deg, #16a34a, #22c55e)",
                         }} />
                       </div>
                     </div>
@@ -418,7 +418,7 @@ export default function ReportsPage() {
                   <YAxis type="category" dataKey="product" tick={{ fontSize: 12, fill: "#374151" }} tickLine={false} axisLine={false} width={120} />
                   <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #d5d9e2" }}
                     formatter={(value) => [`$${value}`, "Revenue"]} />
-                  <Bar dataKey="revenue" fill="#2563eb" radius={[0, 6, 6, 0]} barSize={20} />
+                  <Bar dataKey="revenue" fill="#16a34a" radius={[0, 6, 6, 0]} barSize={20} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -458,7 +458,7 @@ export default function ReportsPage() {
                     <div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <div style={{ flex: 1, height: 6, background: "#e2e8f0", borderRadius: 3, overflow: "hidden" }}>
-                          <div style={{ height: "100%", borderRadius: 3, width: `${share}%`, background: "#2563eb" }} />
+                          <div style={{ height: "100%", borderRadius: 3, width: `${share}%`, background: "#16a34a" }} />
                         </div>
                         <span style={{ fontSize: 11, color: "#64748b", minWidth: 35 }}>{share}%</span>
                       </div>

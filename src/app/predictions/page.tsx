@@ -162,7 +162,7 @@ const productMixRecs: ProductMixRec[] = [
 const actionStyle: Record<RecAction, { color: string; bg: string; icon: typeof ArrowUpRight }> = {
   Add:      { color: "#059669", bg: "#d1fae5", icon: ArrowUpRight },
   Remove:   { color: "#dc2626", bg: "#fee2e2", icon: XCircle },
-  Increase: { color: "#2563eb", bg: "#dbeafe", icon: TrendingUp },
+  Increase: { color: "#16a34a", bg: "#dcfce7", icon: TrendingUp },
   Decrease: { color: "#d97706", bg: "#fef3c7", icon: TrendingDown },
 };
 
@@ -195,7 +195,7 @@ export default function PredictionsPage() {
         {/* Model Info Banner */}
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
-          background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+          background: "linear-gradient(135deg, #1e3a5f 0%, #16a34a 100%)",
           borderRadius: 14, padding: "18px 24px", marginBottom: 24, color: "#fff",
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -240,13 +240,13 @@ export default function PredictionsPage() {
             sub={<span style={{ color: Number(overallChange) >= 0 ? "#059669" : "#dc2626", fontWeight: 600, fontSize: 12 }}>
               {Number(overallChange) >= 0 ? "↑" : "↓"} {overallChange}% vs current
             </span>} />
-          <StatBox icon={<Target size={20} color="#2563eb" />} iconBg="#dbeafe"
+          <StatBox icon={<Target size={20} color="#16a34a" />} iconBg="#dcfce7"
             label="Model Confidence" value={`${avgConfidence}%`}
             sub={<span style={{ fontSize: 12, color: "#94a3b8" }}>Avg across all machines</span>} />
           <StatBox icon={<Zap size={20} color="#d97706" />} iconBg="#fef3c7"
             label="Product Mix Actions" value={`${recsCount}`}
             sub={<span style={{ fontSize: 12, color: "#d97706", fontWeight: 500 }}>{deadProducts} dead products to remove</span>} />
-          <StatBox icon={<Truck size={20} color="#6366f1" />} iconBg="#e0e7ff"
+          <StatBox icon={<Truck size={20} color="#6366f1" />} iconBg="#fef9c3"
             label="Next Refill" value={machineForecast.sort((a, b) => a.daysUntilRefill - b.daysUntilRefill)[0].machine.split(" ")[0]}
             sub={<span style={{ fontSize: 12, color: "#dc2626", fontWeight: 500 }}>
               In {machineForecast.sort((a, b) => a.daysUntilRefill - b.daysUntilRefill)[0].daysUntilRefill} days
@@ -266,8 +266,8 @@ export default function PredictionsPage() {
             <button key={t.key} onClick={() => setTab(t.key)} style={{
               padding: "10px 20px", fontSize: 14, fontWeight: 600, border: "none",
               cursor: "pointer", background: "transparent",
-              color: tab === t.key ? "#2563eb" : "#9ca3af",
-              borderBottom: tab === t.key ? "2px solid #2563eb" : "2px solid transparent",
+              color: tab === t.key ? "#16a34a" : "#9ca3af",
+              borderBottom: tab === t.key ? "2px solid #16a34a" : "2px solid transparent",
               marginBottom: -2, transition: "all 0.15s",
             }}>{t.label}</button>
           ))}
@@ -444,7 +444,7 @@ export default function PredictionsPage() {
                     <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#059669" }}>
                       <Sun size={13} /> Peak: {s.peakMonth}
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#2563eb" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#16a34a" }}>
                       <Snowflake size={13} /> Low: {s.lowMonth}
                     </div>
                   </div>
@@ -514,8 +514,8 @@ export default function PredictionsPage() {
 
         {/* How it works */}
         <div style={{
-          marginTop: 20, padding: "14px 18px", background: "#dbeafe",
-          border: "1px solid #bfdbfe", borderRadius: 10, fontSize: 12, color: "#1e40af",
+          marginTop: 20, padding: "14px 18px", background: "#dcfce7",
+          border: "1px solid #bfdbfe", borderRadius: 10, fontSize: 12, color: "#15803d",
           lineHeight: 1.6,
         }}>
           <strong>How predictions work:</strong> The model is trained on 1.5 years of Nayax transaction

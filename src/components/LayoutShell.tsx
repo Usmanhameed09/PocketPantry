@@ -25,7 +25,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         style={{
           marginLeft: isMobile ? 0 : 240,
           minHeight: "100vh",
-          background: "#eaecf0",
+          background: "#f0f2f0",
           transition: "margin-left 0.3s ease",
         }}
       >

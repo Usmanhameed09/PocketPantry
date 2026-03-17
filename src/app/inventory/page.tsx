@@ -160,8 +160,8 @@ export default function InventoryPage() {
         {/* Stat Cards */}
         <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
           <StatBox
-            icon={<Warehouse size={20} color="#2563eb" />}
-            iconBg="#dbeafe"
+            icon={<Warehouse size={20} color="#16a34a" />}
+            iconBg="#dcfce7"
             label="Warehouse Stock"
             value={`$${warehouseValue.toFixed(2)}`}
             sub={`${totalProducts} products tracked`}
@@ -176,7 +176,7 @@ export default function InventoryPage() {
           />
           <StatBox
             icon={<ShoppingCart size={20} color="#6366f1" />}
-            iconBg="#e0e7ff"
+            iconBg="#fef9c3"
             label="On Order"
             value={`$${onOrderValue.toFixed(2)}`}
             sub="1 pending PO draft"
@@ -206,7 +206,7 @@ export default function InventoryPage() {
                   style={{
                     padding: "8px 16px", fontSize: 13, fontWeight: 500, border: "none",
                     cursor: "pointer", transition: "all 0.15s",
-                    background: catFilter === cat ? "#2563eb" : "transparent",
+                    background: catFilter === cat ? "#16a34a" : "transparent",
                     color: catFilter === cat ? "#fff" : "#6b7280",
                   }}
                 >
@@ -251,7 +251,7 @@ export default function InventoryPage() {
 
           <button style={{
             display: "flex", alignItems: "center", gap: 6, padding: "9px 18px",
-            background: "#2563eb", color: "#fff", border: "none", borderRadius: 8,
+            background: "#16a34a", color: "#fff", border: "none", borderRadius: 8,
             fontSize: 13, fontWeight: 600, cursor: "pointer",
           }}>
             <Plus size={16} /> Create Purchase Order
@@ -308,7 +308,7 @@ export default function InventoryPage() {
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <div style={{
                     width: 38, height: 38, borderRadius: 8,
-                    background: p.category === "Drinks" ? "#dbeafe" : "#fef3c7",
+                    background: p.category === "Drinks" ? "#dcfce7" : "#fef3c7",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: 16,
                   }}>

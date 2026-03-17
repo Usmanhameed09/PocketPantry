@@ -12,7 +12,6 @@ import {
   Megaphone,
   BarChart3,
   UserCircle,
-  Box,
   Brain,
   X,
 } from "lucide-react";
@@ -63,7 +62,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
           top: 0,
           bottom: 0,
           width: 240,
-          background: "linear-gradient(180deg, #0c1520 0%, #111d2c 100%)",
+          background: "linear-gradient(180deg, #052e16 0%, #14532d 100%)",
           display: "flex",
           flexDirection: "column",
           zIndex: 100,
@@ -81,14 +80,18 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
                 width: 38,
                 height: 38,
                 borderRadius: 10,
-                background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+                background: "linear-gradient(135deg, #16a34a 0%, #15803d 100%)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                boxShadow: "0 2px 8px rgba(37,99,235,0.35)",
+                boxShadow: "0 2px 8px rgba(22,163,74,0.35)",
               }}
             >
-              <Box size={19} color="white" />
+              <img
+                src="/Logo_1.png"
+                alt="PocketPantry logo"
+                style={{ width: 24, height: 24, borderRadius: 6, objectFit: "cover" }}
+              />
             </div>
             <div>
               <div style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 17, lineHeight: 1.2, letterSpacing: -0.3 }}>
@@ -141,11 +144,11 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
                     fontWeight: isActive ? 600 : 500,
                     color: isActive ? "#fff" : "rgba(203,213,225,0.65)",
                     background: isActive
-                      ? "linear-gradient(90deg, rgba(37,99,235,0.25), rgba(37,99,235,0.12))"
+                      ? "linear-gradient(90deg, rgba(234,179,8,0.25), rgba(234,179,8,0.10))"
                       : "transparent",
                     textDecoration: "none",
                     transition: "all 0.15s ease",
-                    borderLeft: isActive ? "3px solid #3b82f6" : "3px solid transparent",
+                    borderLeft: isActive ? "3px solid #eab308" : "3px solid transparent",
                     letterSpacing: -0.1,
                   }}
                   onMouseEnter={(e) => {
@@ -184,10 +187,10 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
               fontWeight: 500,
               color: pathname === "/profile" ? "#fff" : "rgba(203,213,225,0.65)",
               background: pathname === "/profile"
-                ? "linear-gradient(90deg, rgba(37,99,235,0.25), rgba(37,99,235,0.12))"
+                ? "linear-gradient(90deg, rgba(234,179,8,0.25), rgba(234,179,8,0.10))"
                 : "transparent",
               textDecoration: "none",
-              borderLeft: pathname === "/profile" ? "3px solid #3b82f6" : "3px solid transparent",
+              borderLeft: pathname === "/profile" ? "3px solid #eab308" : "3px solid transparent",
             }}
           >
             <UserCircle size={18} style={{ opacity: pathname === "/profile" ? 1 : 0.55 }} />

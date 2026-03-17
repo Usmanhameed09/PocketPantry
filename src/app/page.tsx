@@ -70,7 +70,7 @@ const btnBase: React.CSSProperties = {
 };
 
 const greenBtn: React.CSSProperties = { ...btnBase, background: "#059669", color: "#fff" };
-const blueBtn: React.CSSProperties = { ...btnBase, background: "#2563eb", color: "#fff" };
+const blueBtn: React.CSSProperties = { ...btnBase, background: "#16a34a", color: "#fff" };
 const redBtn: React.CSSProperties = { ...btnBase, background: "#dc2626", color: "#fff" };
 
 const listRow: React.CSSProperties = {
@@ -127,7 +127,7 @@ export default function Dashboard() {
       {/* ---- Quick Stats ---- */}
       <div style={{ padding: isMobile ? "16px 16px 0" : "24px 32px 0" }}>
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: isMobile ? 10 : 16 }}>
-          <StatCard icon={<TrendingUp size={20} color="#2563eb" />} iconBg="#dbeafe"
+          <StatCard icon={<TrendingUp size={20} color="#16a34a" />} iconBg="#dcfce7"
             label="Today's Revenue" value="$145.80"
             tag={<span style={{ color: "#059669", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 2 }}><ArrowUpRight size={14} /> 12% vs yesterday</span>} />
           <StatCard icon={<CheckCircle2 size={20} color="#059669" />} iconBg="#dcfce7"
@@ -136,7 +136,7 @@ export default function Dashboard() {
           <StatCard icon={<AlertTriangle size={20} color="#d97706" />} iconBg="#fef3c7"
             label="Pending Actions" value="7"
             tag={<span style={{ color: "#dc2626", fontSize: 12, fontWeight: 500 }}>3 urgent</span>} />
-          <StatCard icon={<Clock size={20} color="#6366f1" />} iconBg="#e0e7ff"
+          <StatCard icon={<Clock size={20} color="#6366f1" />} iconBg="#fef9c3"
             label="Route ETA" value="2h 15m"
             tag={<span style={{ color: "#64748b", fontSize: 12, fontWeight: 500 }}>3 stops planned</span>} />
         </div>
@@ -149,11 +149,11 @@ export default function Dashboard() {
           {/* --- Card 1: Refill Stops --- */}
           <div style={card}>
             <div style={cardHeader}>
-              <div style={iconBox("#2563eb")}><Truck size={20} color="#fff" /></div>
+              <div style={iconBox("#16a34a")}><Truck size={20} color="#fff" /></div>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Today&apos;s Refill Stops</div>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-                  <span style={{ fontWeight: 600, color: "#2563eb" }}>3</span> Machines Need Refill
+                  <span style={{ fontWeight: 600, color: "#16a34a" }}>3</span> Machines Need Refill
                 </div>
               </div>
             </div>
@@ -210,7 +210,7 @@ export default function Dashboard() {
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Price Change Review</div>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-                  <span style={{ fontWeight: 600, color: "#2563eb" }}>3</span> Price Updates Suggested
+                  <span style={{ fontWeight: 600, color: "#16a34a" }}>3</span> Price Updates Suggested
                 </div>
               </div>
             </div>
@@ -234,7 +234,7 @@ export default function Dashboard() {
           {/* --- Card 4: New Location Reply --- */}
           <div style={card}>
             <div style={cardHeader}>
-              <div style={iconBox("#4f46e5")}><MapPin size={20} color="#fff" /></div>
+              <div style={iconBox("#eab308")}><MapPin size={20} color="#fff" /></div>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>New Location Reply</div>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>1 new response</div>
@@ -242,12 +242,12 @@ export default function Dashboard() {
             </div>
             <div style={cardBody}>
               <div style={{
-                background: "#e0e7ff", border: "1px solid #c7d2fe", borderRadius: 10,
+                background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 10,
                 padding: "16px", marginBottom: 14,
               }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                   <div style={{
-                    width: 36, height: 36, borderRadius: "50%", background: "#4f46e5",
+                    width: 36, height: 36, borderRadius: "50%", background: "#eab308",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     color: "#fff", fontSize: 12, fontWeight: 700,
                   }}>JT</div>
@@ -256,7 +256,7 @@ export default function Dashboard() {
                     <div style={{ fontSize: 11, color: "#64748b" }}>Replied today</div>
                   </div>
                 </div>
-                <div style={{ fontSize: 13, color: "#4338ca", fontWeight: 600 }}>Interested in a Meeting</div>
+                <div style={{ fontSize: 13, color: "#a16207", fontWeight: 600 }}>Interested in a Meeting</div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#64748b" }}>
@@ -264,7 +264,7 @@ export default function Dashboard() {
                   Pipeline: 3 active prospects
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#64748b" }}>
-                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#2563eb" }} />
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#16a34a" }} />
                   2 follow-ups scheduled this week
                 </div>
               </div>

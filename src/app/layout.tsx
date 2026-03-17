@@ -12,6 +12,12 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "PocketPantry Vending",
   description: "AI-Powered Vending Operations Management",
+  icons: {
+    icon: [
+      { url: "/Logo_1.png", type: "image/png" },
+    ],
+    apple: "/Logo_1.png",
+  },
 };
 
 export default function RootLayout({
@@ -24,6 +30,8 @@ export default function RootLayout({
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link rel="icon" type="image/png" href="/Logo_1.png" />
+        <link rel="apple-touch-icon" href="/Logo_1.png" />
         <link
           href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
           rel="stylesheet"

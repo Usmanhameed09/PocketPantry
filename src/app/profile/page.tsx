@@ -114,17 +114,17 @@ export default function ProfilePage() {
             <div style={{ position: "relative" }}>
               <div style={{
                 width: 72, height: 72, borderRadius: "50%",
-                background: "linear-gradient(135deg, #2563eb, #7c3aed)",
+                background: "linear-gradient(135deg, #16a34a, #7c3aed)",
                 display: "flex", alignItems: "center", justifyContent: "center",
                 color: "#fff", fontSize: 24, fontWeight: 800,
-                boxShadow: "0 4px 14px rgba(37,99,235,0.35)",
+                boxShadow: "0 4px 14px rgba(22,163,74,0.35)",
                 border: "3px solid rgba(255,255,255,0.2)",
               }}>
                 {initials}
               </div>
               <div style={{
                 position: "absolute", bottom: 0, right: 0, width: 24, height: 24,
-                borderRadius: "50%", background: "#2563eb", border: "2px solid #1e3a5f",
+                borderRadius: "50%", background: "#16a34a", border: "2px solid #1e3a5f",
                 display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
               }}>
                 <Camera size={12} color="#fff" />
@@ -136,7 +136,7 @@ export default function ProfilePage() {
               <div style={{
                 display: "inline-flex", alignItems: "center", gap: 5,
                 marginTop: 8, padding: "4px 12px", borderRadius: 20,
-                background: "rgba(37,99,235,0.2)", border: "1px solid rgba(37,99,235,0.3)",
+                background: "rgba(22,163,74,0.2)", border: "1px solid rgba(22,163,74,0.3)",
                 color: "#93c5fd", fontSize: 12, fontWeight: 600,
               }}>
                 <Shield size={12} /> {profile.role}
@@ -165,8 +165,8 @@ export default function ProfilePage() {
                 display: "flex", alignItems: "center", gap: 6,
                 padding: "10px 22px", fontSize: 14, fontWeight: 600, border: "none",
                 cursor: "pointer", background: "transparent",
-                color: tab === t.key ? "#2563eb" : "#94a3b8",
-                borderBottom: tab === t.key ? "2px solid #2563eb" : "2px solid transparent",
+                color: tab === t.key ? "#16a34a" : "#94a3b8",
+                borderBottom: tab === t.key ? "2px solid #16a34a" : "2px solid transparent",
                 marginBottom: -2, transition: "all 0.15s",
               }}>
                 <Icon size={15} /> {t.label}
@@ -214,9 +214,9 @@ export default function ProfilePage() {
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 24 }}>
               <button onClick={handleSave} style={{
                 display: "flex", alignItems: "center", gap: 6, padding: "11px 24px",
-                background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+                background: "linear-gradient(135deg, #16a34a, #15803d)",
                 color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700,
-                cursor: "pointer", boxShadow: "0 3px 10px rgba(37,99,235,0.25)",
+                cursor: "pointer", boxShadow: "0 3px 10px rgba(22,163,74,0.25)",
               }}>
                 <Save size={16} /> Save Changes
               </button>
@@ -273,9 +273,9 @@ export default function ProfilePage() {
                 <PasswordField label="Confirm New Password" />
                 <button style={{
                   display: "flex", alignItems: "center", gap: 6, padding: "10px 20px",
-                  background: "#2563eb", color: "#fff", border: "none", borderRadius: 10,
+                  background: "#16a34a", color: "#fff", border: "none", borderRadius: 10,
                   fontSize: 13, fontWeight: 600, cursor: "pointer", alignSelf: "flex-start",
-                  boxShadow: "0 2px 8px rgba(37,99,235,0.2)",
+                  boxShadow: "0 2px 8px rgba(22,163,74,0.2)",
                 }}>
                   <Key size={14} /> Update Password
                 </button>
@@ -292,10 +292,10 @@ export default function ProfilePage() {
               }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <div style={{
-                    width: 40, height: 40, borderRadius: 10, background: "#dbeafe",
+                    width: 40, height: 40, borderRadius: 10, background: "#dcfce7",
                     display: "flex", alignItems: "center", justifyContent: "center",
                   }}>
-                    <Monitor size={18} color="#2563eb" />
+                    <Monitor size={18} color="#16a34a" />
                   </div>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>Current Session</div>
@@ -379,7 +379,7 @@ function NotifToggle({ label, desc, checked, onChange }: {
           style={{ opacity: 0, width: 0, height: 0, position: "absolute" }} />
         <div style={{
           width: 44, height: 24, borderRadius: 12,
-          background: checked ? "#2563eb" : "#cbd5e1",
+          background: checked ? "#16a34a" : "#cbd5e1",
           transition: "background 0.2s",
           position: "relative",
         }}>

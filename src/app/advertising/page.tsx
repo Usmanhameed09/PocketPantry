@@ -217,7 +217,7 @@ const machineAdSlots: MachineAdSlot[] = [
 
 const statusConfig: Record<CampaignStatus, { color: string; bg: string; border: string }> = {
   Active:    { color: "#059669", bg: "#ecfdf5", border: "#a7f3d0" },
-  Scheduled: { color: "#2563eb", bg: "#eff6ff", border: "#bfdbfe" },
+  Scheduled: { color: "#16a34a", bg: "#eff6ff", border: "#bfdbfe" },
   Completed: { color: "#475569", bg: "#f1f5f9", border: "#cbd5e1" },
   Paused:    { color: "#d97706", bg: "#fffbeb", border: "#fde68a" },
 };
@@ -258,8 +258,8 @@ export default function AdvertisingPage() {
         {/* Stat Cards */}
         <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
           <StatBox
-            icon={<Megaphone size={20} color="#2563eb" />}
-            iconBg="#dbeafe"
+            icon={<Megaphone size={20} color="#16a34a" />}
+            iconBg="#dcfce7"
             label="Active Campaigns"
             value={`${activeCampaigns}`}
             sub={`${campaigns.length} total campaigns`}
@@ -274,7 +274,7 @@ export default function AdvertisingPage() {
           />
           <StatBox
             icon={<ScanLine size={20} color="#7c3aed" />}
-            iconBg="#e0e7ff"
+            iconBg="#fef9c3"
             label="Barcode Scans"
             value={`${totalScans}`}
             sub={`${totalImpressions.toLocaleString()} est. impressions`}
@@ -298,8 +298,8 @@ export default function AdvertisingPage() {
               <button key={t} onClick={() => setTab(t)} style={{
                 padding: "10px 22px", fontSize: 14, fontWeight: 600, border: "none",
                 cursor: "pointer", background: "transparent",
-                color: tab === t ? "#2563eb" : "#94a3b8",
-                borderBottom: tab === t ? "2px solid #2563eb" : "2px solid transparent",
+                color: tab === t ? "#16a34a" : "#94a3b8",
+                borderBottom: tab === t ? "2px solid #16a34a" : "2px solid transparent",
                 marginBottom: -2, transition: "all 0.15s",
               }}>{t}</button>
             ))}
@@ -308,9 +308,9 @@ export default function AdvertisingPage() {
           <div style={{ display: "flex", gap: 10 }}>
             <button style={{
               display: "flex", alignItems: "center", gap: 6, padding: "9px 18px",
-              background: "#2563eb", color: "#fff", border: "none", borderRadius: 9,
+              background: "#16a34a", color: "#fff", border: "none", borderRadius: 9,
               fontSize: 13, fontWeight: 600, cursor: "pointer",
-              boxShadow: "0 2px 6px rgba(37,99,235,0.25)",
+              boxShadow: "0 2px 6px rgba(22,163,74,0.25)",
             }}>
               <Plus size={16} /> New Campaign
             </button>
@@ -472,7 +472,7 @@ export default function AdvertisingPage() {
                             <div style={{
                               display: "flex", alignItems: "center", gap: 6,
                               marginTop: 6, padding: "6px 10px", background: "#ede9fe",
-                              borderRadius: 6, fontSize: 11, color: "#6d28d9", fontWeight: 500,
+                              borderRadius: 6, fontSize: 11, color: "#16a34a", fontWeight: 500,
                             }}>
                               <QrCode size={12} />
                               Tracking: {c.trackingUrl}
@@ -565,7 +565,7 @@ export default function AdvertisingPage() {
                       {Array.from({ length: m.totalSlots }).map((_, si) => (
                         <div key={si} style={{
                           width: 8, height: 8, borderRadius: 2,
-                          background: si < m.usedSlots ? "#2563eb" : "#e2e8f0",
+                          background: si < m.usedSlots ? "#16a34a" : "#e2e8f0",
                         }} />
                       ))}
                     </div>
@@ -587,7 +587,7 @@ export default function AdvertisingPage() {
                       <button style={{
                         display: "flex", alignItems: "center", gap: 4,
                         padding: "6px 12px", borderRadius: 7,
-                        background: "#2563eb", border: "none",
+                        background: "#16a34a", border: "none",
                         fontSize: 11, fontWeight: 600, color: "#fff", cursor: "pointer",
                       }}>
                         <Plus size={12} /> Assign Ad
@@ -704,7 +704,7 @@ export default function AdvertisingPage() {
               }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>Impression Formula</div>
                 <div style={{
-                  fontSize: 14, fontWeight: 600, color: "#2563eb",
+                  fontSize: 14, fontWeight: 600, color: "#16a34a",
                   background: "#eff6ff", padding: "10px 14px", borderRadius: 8, fontFamily: "monospace",
                   textAlign: "center",
                 }}>
@@ -815,10 +815,10 @@ function ActionBtn({ icon, label, primary }: { icon: React.ReactNode; label: str
     <button style={{
       display: "flex", alignItems: "center", gap: 5, padding: "7px 14px",
       borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
-      background: primary ? "#2563eb" : "#fff",
+      background: primary ? "#16a34a" : "#fff",
       color: primary ? "#fff" : "#475569",
       border: primary ? "none" : "1px solid #d5d9e2",
-      boxShadow: primary ? "0 2px 6px rgba(37,99,235,0.2)" : "none",
+      boxShadow: primary ? "0 2px 6px rgba(22,163,74,0.2)" : "none",
     }}>
       {icon} {label}
     </button>

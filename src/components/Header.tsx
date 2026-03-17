@@ -37,6 +37,17 @@ export default function Header({ title, subtitle }: HeaderProps) {
     >
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 8 : 14 }}>
+          <img
+            src="/Logo_1.png"
+            alt="PocketPantry logo"
+            style={{
+              width: isMobile ? 22 : 26,
+              height: isMobile ? 22 : 26,
+              borderRadius: 6,
+              objectFit: "cover",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.12)",
+            }}
+          />
           <h1 style={{ fontSize: isMobile ? 17 : 21, fontWeight: 800, color: "#0f172a", letterSpacing: -0.5 }}>{title}</h1>
           {!isMobile && (
             <span
@@ -124,14 +135,14 @@ export default function Header({ title, subtitle }: HeaderProps) {
                   width: 38,
                   height: 38,
                   borderRadius: "50%",
-                  background: "linear-gradient(135deg, #1e40af, #6d28d9)",
+                  background: "linear-gradient(135deg, #15803d, #16a34a)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   color: "white",
                   fontSize: 13,
                   fontWeight: 700,
-                  boxShadow: "0 2px 6px rgba(109,40,217,0.3)",
+                  boxShadow: "0 2px 6px rgba(22,163,74,0.3)",
                   flexShrink: 0,
                 }}
               >

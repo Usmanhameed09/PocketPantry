@@ -116,8 +116,8 @@ const pricingData: PricingItem[] = [
 const statusStyles: Record<PriceStatus, { color: string; bg: string; label: string }> = {
   "Cost Margin":      { color: "#059669", bg: "#d1fae5", label: "Cost Margin" },
   "Pending Approval": { color: "#d97706", bg: "#fef3c7", label: "Pending Approval" },
-  "Seasonal Price":   { color: "#6366f1", bg: "#e0e7ff", label: "Seasonal Price" },
-  "Approved":         { color: "#2563eb", bg: "#dbeafe", label: "Approved" },
+  "Seasonal Price":   { color: "#6366f1", bg: "#fef9c3", label: "Seasonal Price" },
+  "Approved":         { color: "#16a34a", bg: "#dcfce7", label: "Approved" },
 };
 
 /* ------------------------------------------------------------------ */
@@ -179,8 +179,8 @@ export default function PricingPage() {
                 style={{
                   padding: "10px 20px", fontSize: 14, fontWeight: 600, border: "none",
                   cursor: "pointer", background: "transparent", position: "relative",
-                  color: activeTab === tab ? "#2563eb" : "#9ca3af",
-                  borderBottom: activeTab === tab ? "2px solid #2563eb" : "2px solid transparent",
+                  color: activeTab === tab ? "#16a34a" : "#9ca3af",
+                  borderBottom: activeTab === tab ? "2px solid #16a34a" : "2px solid transparent",
                   marginBottom: -2, transition: "all 0.15s",
                 }}
               >
@@ -191,7 +191,7 @@ export default function PricingPage() {
 
           <button style={{
             display: "flex", alignItems: "center", gap: 6, padding: "9px 18px",
-            background: "#2563eb", color: "#fff", border: "none", borderRadius: 8,
+            background: "#16a34a", color: "#fff", border: "none", borderRadius: 8,
             fontSize: 13, fontWeight: 600, cursor: "pointer",
           }}>
             <RefreshCw size={14} /> Batch Update Prices
@@ -224,8 +224,8 @@ export default function PricingPage() {
             subColor="#d97706"
           />
           <StatBox
-            icon={<DollarSign size={20} color="#2563eb" />}
-            iconBg="#dbeafe"
+            icon={<DollarSign size={20} color="#16a34a" />}
+            iconBg="#dcfce7"
             label="Daily Revenue"
             value={`$${dailyRevenue.toFixed(2)}`}
             sub="Based on current prices"
@@ -248,7 +248,7 @@ export default function PricingPage() {
                   style={{
                     padding: "8px 14px", fontSize: 12, fontWeight: 500, border: "none",
                     cursor: "pointer", transition: "all 0.15s",
-                    background: filterType === f ? "#2563eb" : "transparent",
+                    background: filterType === f ? "#16a34a" : "transparent",
                     color: filterType === f ? "#fff" : "#6b7280",
                   }}
                 >
@@ -356,7 +356,7 @@ export default function PricingPage() {
                 <div>
                   <span style={{
                     fontSize: 14, fontWeight: 700,
-                    color: priceChanged ? "#2563eb" : "#374151",
+                    color: priceChanged ? "#16a34a" : "#374151",
                   }}>
                     ${p.suggestedPrice.toFixed(2)}
                   </span>
@@ -422,7 +422,7 @@ export default function PricingPage() {
                       </button>
                     </div>
                   ) : p.status === "Approved" ? (
-                    <span style={{ fontSize: 12, color: "#2563eb", fontWeight: 600 }}>
+                    <span style={{ fontSize: 12, color: "#16a34a", fontWeight: 600 }}>
                       ✓ Price Updated
                     </span>
                   ) : (

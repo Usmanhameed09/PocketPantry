@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateLeadFromCallOutcome, getLead, updateLead } from "@/lib/leads-store";
-// VAPI webhook endpoint — v1.0
+import {
+  getLead,
+  updateLead,
+  addCallLogAndUpdateStage,
+  updateLastCallDuration,
+  logOutreachAction,
+} from "@/lib/leads-store";
 
 /**
  * VAPI Webhook Handler
  *
- * VAPI sends events here during and after calls:
- * - "function-call" → AI wants to execute a tool (collect_lead_info, schedule_site_visit, log_call_outcome)
- * - "end-of-call-report" → Call has ended, contains transcript and summary
+ * Receives events from VAPI during and after calls:
+ * - "function-call" → AI executes a tool (collect_lead_info, schedule_site_visit, log_call_outcome)
+ * - "end-of-call-report" → Call ended, contains transcript & summary
  * - "status-update" → Call status changes (ringing, in-progress, ended)
- *
- * Setup: Set this URL as the serverUrl in your VAPI assistant config.
- * For local dev, use ngrok: ngrok http 3000 → https://xxx.ngrok.io/api/vapi/webhook
  */
 
 export async function POST(request: NextRequest) {
@@ -53,26 +55,28 @@ export async function POST(request: NextRequest) {
 /**
  * Handle tool/function calls from the AI during a call
  */
-function handleFunctionCall(
+async function handleFunctionCall(
   message: { functionCall: { name: string; parameters: Record<string, unknown> } },
-  body: { call?: { metadata?: { leadId?: string } } }
+  body: { call?: { metadata?: { leadId?: string }; id?: string } }
 ) {
   const { name, parameters } = message.functionCall;
   const leadId = body.call?.metadata?.leadId;
+  const vapiCallId = body.call?.id;
 
   console.log(`[VAPI Webhook] Function call: ${name}`, parameters);
 
   switch (name) {
     case "collect_lead_info": {
-      // Update lead with collected info
       if (leadId) {
-        const updates: Record<string, unknown> = {};
+        const updates: Record<string, string> = {};
         if (parameters.business_name) updates.business = parameters.business_name as string;
         if (parameters.contact_name) updates.contact = parameters.contact_name as string;
         if (parameters.phone) updates.phone = parameters.phone as string;
         if (parameters.email) updates.email = parameters.email as string;
         if (parameters.address) updates.address = parameters.address as string;
-        updateLead(leadId, updates as Partial<typeof updates & { business: string; contact: string; phone: string; email: string; address: string }>);
+
+        await updateLead(leadId, updates);
+        console.log(`[VAPI Webhook] Lead ${leadId} info updated`);
       }
 
       return NextResponse.json({
@@ -82,12 +86,22 @@ function handleFunctionCall(
 
     case "schedule_site_visit": {
       const visitDate = parameters.preferred_date as string;
-      const visitTime = parameters.preferred_time as string || "TBD";
+      const visitTime = (parameters.preferred_time as string) || "TBD";
+      const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
       if (leadId) {
-        updateLead(leadId, {
+        await updateLead(leadId, {
           stage: "Site Visit Requested",
-          lastActivity: `Site visit scheduled: ${visitDate} at ${visitTime}`,
+          lastActivity: `Site visit scheduled: ${visitDate} at ${visitTime} — ${dateStr}`,
+        });
+
+        await logOutreachAction(leadId, "site_visit_scheduled", {
+          date: visitDate,
+          time: visitTime,
+          business: parameters.business_name,
+          contact: parameters.contact_name,
+          address: parameters.address,
+          notes: parameters.notes,
         });
       }
 
@@ -103,24 +117,36 @@ function handleFunctionCall(
       const summary = parameters.summary as string;
 
       if (leadId) {
-        const lead = getLead(leadId);
-        const now = new Date();
-        const dateStr = now.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-
-        updateLeadFromCallOutcome(leadId, outcome, {
-          attempt: (lead?.callAttempts || 0) + 1,
-          date: dateStr,
-          duration: "—",  // Will be updated from end-of-call-report
-          outcome: outcome,
-          summary: summary,
+        const lead = await getLead(leadId);
+        const dateStr = new Date().toLocaleDateString("en-US", {
+          month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
         });
 
-        // Store callback info if applicable
-        if (outcome === "callback" && (parameters.callback_date || parameters.callback_time)) {
-          updateLead(leadId, {
+        await addCallLogAndUpdateStage(leadId, {
+          attempt: (lead?.callAttempts || 0) + 1,
+          date: dateStr,
+          duration: "—",  // Updated later from end-of-call-report
+          outcome: outcome,
+          summary: summary,
+          vapiCallId: vapiCallId,
+        }, outcome);
+
+        // Store callback info
+        if (outcome === "callback") {
+          await updateLead(leadId, {
             callbackDate: parameters.callback_date as string,
             callbackTime: parameters.callback_time as string,
           });
+
+          await logOutreachAction(leadId, "callback_scheduled", {
+            date: parameters.callback_date,
+            time: parameters.callback_time,
+          });
+        }
+
+        // Log voicemail
+        if (outcome === "voicemail") {
+          await logOutreachAction(leadId, "voicemail", { summary });
         }
       }
 
@@ -138,9 +164,9 @@ function handleFunctionCall(
 }
 
 /**
- * Handle end-of-call report — contains full transcript and call metadata
+ * Handle end-of-call report — full transcript and call metadata
  */
-function handleEndOfCallReport(
+async function handleEndOfCallReport(
   message: {
     endedReason?: string;
     transcript?: string;
@@ -157,24 +183,15 @@ function handleEndOfCallReport(
     leadId,
     endedReason: message.endedReason,
     duration: message.durationSeconds,
-    summary: message.summary,
+    summary: message.summary?.substring(0, 100),
   });
 
-  // Update the lead's last call log with duration
   if (leadId && message.durationSeconds) {
-    const lead = getLead(leadId);
-    if (lead && lead.callLogs.length > 0) {
-      const lastLog = lead.callLogs[lead.callLogs.length - 1];
-      const mins = Math.floor(message.durationSeconds / 60);
-      const secs = message.durationSeconds % 60;
-      lastLog.duration = `${mins}m ${secs}s`;
+    const mins = Math.floor(message.durationSeconds / 60);
+    const secs = message.durationSeconds % 60;
+    const durationStr = `${mins}m ${secs}s`;
 
-      if (message.summary && !lastLog.summary) {
-        lastLog.summary = message.summary;
-      }
-
-      updateLead(leadId, { callLogs: lead.callLogs });
-    }
+    await updateLastCallDuration(leadId, durationStr, message.summary || undefined);
   }
 
   return NextResponse.json({ ok: true });
@@ -183,7 +200,7 @@ function handleEndOfCallReport(
 /**
  * Handle call status updates (ringing, in-progress, ended)
  */
-function handleStatusUpdate(
+async function handleStatusUpdate(
   message: { status?: string },
   body: { call?: { metadata?: { leadId?: string }; id?: string } }
 ) {
@@ -193,7 +210,7 @@ function handleStatusUpdate(
   console.log(`[VAPI Webhook] Status update: ${message.status} (lead: ${leadId}, call: ${callId})`);
 
   if (leadId && message.status === "in-progress") {
-    updateLead(leadId, {
+    await updateLead(leadId, {
       stage: "Contacted",
       vapiCallId: callId,
     });

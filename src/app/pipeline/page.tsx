@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import Header from "@/components/Header";
 import {
@@ -12,30 +12,20 @@ import {
   Building2,
   User,
   Bot,
-  DollarSign,
   TrendingUp,
   Users,
   PhoneCall,
   MailCheck,
   MailX,
   Clock,
-  ExternalLink,
+  X,
+  Loader2,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
-/**
- * Pipeline stages — all determined by AI call/email outcomes:
- * 1. New Lead         — Imported, not yet contacted by AI
- * 2. Contacted        — AI made call or sent email
- * 3. Interested       — Client expressed interest during AI call
- * 4. Not Interested   — Client declined during AI call
- * 5. Site Visit Req.  — Client asked for site visit during AI call
- * 6. Proposal Req.    — Client asked for proposal/pricing during AI call
- * 7. Callback         — Client asked AI to call back later
- */
 type Stage =
   | "New Lead"
   | "Contacted"
@@ -46,14 +36,14 @@ type Stage =
   | "Callback";
 
 type ContactMethod = "Call" | "Email" | "Call + Email";
-type LeadSource = "Excel Import" | "Google Maps";
+type LeadSource = "Manual" | "Excel Import" | "Google Maps";
 
 interface CallLog {
   attempt: number;
   date: string;
   duration: string;
   outcome: string;
-  summary: string;  // AI-generated transcript summary
+  summary: string;
 }
 
 interface EmailLog {
@@ -78,138 +68,9 @@ interface Lead {
   emailLogs: EmailLog[];
   addedDate: string;
   lastActivity: string;
+  callAttempts?: number;
+  vapiCallId?: string;
 }
-
-/* ------------------------------------------------------------------ */
-/*  Test Data — only system-trackable information                      */
-/* ------------------------------------------------------------------ */
-
-const leads: Lead[] = [
-  {
-    id: "L-001", business: "Bruder's Auto Group", contact: "Mike Bruder",
-    phone: "(713) 555-0142", email: "mike@brudersauto.com",
-    address: "4520 Westheimer Rd", distance: "8 mi", businessType: "Auto Dealership",
-    source: "Google Maps", stage: "New Lead", contactMethod: "Call",
-    callLogs: [], emailLogs: [],
-    addedDate: "Mar 13", lastActivity: "Imported Mar 13",
-  },
-  {
-    id: "L-002", business: "BrightView Landscape", contact: "Sarah Chen",
-    phone: "(713) 555-0198", email: "sarah@brightview.com",
-    address: "8900 Katy Fwy", distance: "12 mi", businessType: "Landscaping HQ",
-    source: "Excel Import", stage: "New Lead", contactMethod: "Call + Email",
-    callLogs: [], emailLogs: [],
-    addedDate: "Mar 13", lastActivity: "Imported Mar 13",
-  },
-  {
-    id: "L-003", business: "ABC Logistics", contact: "Tom Rivera",
-    phone: "(713) 555-0234", email: "tom@abclogistics.com",
-    address: "2100 N Loop W", distance: "6 mi", businessType: "Warehouse",
-    source: "Google Maps", stage: "Callback", contactMethod: "Call",
-    callLogs: [
-      { attempt: 1, date: "Mar 14, 9:15 AM", duration: "1m 42s", outcome: "Callback Requested",
-        summary: "Receptionist answered. Tom is in a meeting. She said he handles facility decisions. Asked to call back Thursday after 2pm." },
-    ],
-    emailLogs: [],
-    addedDate: "Mar 11", lastActivity: "AI Call — Mar 14",
-  },
-  {
-    id: "L-004", business: "QFC Logistics", contact: "Dan Marsh",
-    phone: "(713) 555-0301", email: "dan@qfclogistics.com",
-    address: "5500 Airline Dr", distance: "9 mi", businessType: "Distribution Center",
-    source: "Excel Import", stage: "Interested", contactMethod: "Call + Email",
-    callLogs: [
-      { attempt: 1, date: "Mar 12, 10:30 AM", duration: "0m 22s", outcome: "Voicemail",
-        summary: "No answer. Left voicemail introducing PocketPantry vending services." },
-      { attempt: 2, date: "Mar 13, 2:15 PM", duration: "3m 48s", outcome: "Interested",
-        summary: "Dan answered. 80+ employees, no current vending. Interested in snack and drink machines. Said he'd like to know more about pricing and product selection." },
-    ],
-    emailLogs: [
-      { date: "Mar 12", status: "Sent", subject: "Vending Machine Services for QFC Logistics" },
-      { date: "Mar 13", status: "Opened", subject: "Vending Machine Services for QFC Logistics" },
-    ],
-    addedDate: "Mar 10", lastActivity: "AI Call — Mar 13",
-  },
-  {
-    id: "L-005", business: "ABC Manufacturing", contact: "Lisa Wong",
-    phone: "(713) 555-0187", email: "lisa@abcmfg.com",
-    address: "3200 Navigation Blvd", distance: "4 mi", businessType: "Manufacturing",
-    source: "Google Maps", stage: "Not Interested", contactMethod: "Call",
-    callLogs: [
-      { attempt: 1, date: "Mar 12, 11:00 AM", duration: "1m 15s", outcome: "Not Interested",
-        summary: "Lisa answered. Already has vending contract with Aramark, 2 years remaining. Not interested in switching." },
-    ],
-    emailLogs: [],
-    addedDate: "Mar 9", lastActivity: "AI Call — Mar 12",
-  },
-  {
-    id: "L-006", business: "Smith Medical Center", contact: "Admin Desk",
-    phone: "(713) 555-0412", email: "admin@smithmedical.com",
-    address: "6700 Main St", distance: "3 mi", businessType: "Medical Office",
-    source: "Excel Import", stage: "Site Visit Requested", contactMethod: "Call + Email",
-    callLogs: [
-      { attempt: 1, date: "Mar 10, 9:45 AM", duration: "0m 18s", outcome: "No Answer",
-        summary: "No answer after 6 rings." },
-      { attempt: 2, date: "Mar 11, 3:30 PM", duration: "4m 12s", outcome: "Site Visit Requested",
-        summary: "Office manager answered. 50+ daily visitors in waiting room. Interested in healthy snack options. Asked for someone to come visit and see the space — suggested Tuesday or Thursday afternoon." },
-    ],
-    emailLogs: [
-      { date: "Mar 10", status: "Sent", subject: "Healthy Vending Options for Smith Medical" },
-      { date: "Mar 11", status: "Replied", subject: "Re: Healthy Vending Options for Smith Medical" },
-    ],
-    addedDate: "Mar 7", lastActivity: "AI Call — Mar 11",
-  },
-  {
-    id: "L-007", business: "Brown & White Law", contact: "Jennifer Brown",
-    phone: "(713) 555-0523", email: "jbrown@bwlaw.com",
-    address: "1200 Smith St", distance: "2 mi", businessType: "Law Firm",
-    source: "Google Maps", stage: "Proposal Requested", contactMethod: "Call",
-    callLogs: [
-      { attempt: 1, date: "Mar 8, 10:00 AM", duration: "5m 30s", outcome: "Proposal Requested",
-        summary: "Jennifer answered directly. 3 floors, 120 employees. Very interested. Already visited a building with PocketPantry machines and liked the selection. Wants a proposal with pricing, product list, and machine specs sent to her email." },
-    ],
-    emailLogs: [],
-    addedDate: "Mar 5", lastActivity: "AI Call — Mar 8",
-  },
-  {
-    id: "L-008", business: "SureTech Plastics", contact: "Ray Gutierrez",
-    phone: "(713) 555-0289", email: "ray@suretech.com",
-    address: "7800 Lawndale St", distance: "11 mi", businessType: "Manufacturing",
-    source: "Excel Import", stage: "Interested", contactMethod: "Call + Email",
-    callLogs: [
-      { attempt: 1, date: "Mar 6, 1:45 PM", duration: "4m 05s", outcome: "Interested",
-        summary: "Ray answered. 200+ floor workers, 2 shifts. Current vending machine is broken and vendor hasn't responded in weeks. Very interested in replacement. Wants to know turnaround time for installation." },
-    ],
-    emailLogs: [
-      { date: "Mar 6", status: "Sent", subject: "Vending Solutions for SureTech Plastics" },
-      { date: "Mar 7", status: "Opened", subject: "Vending Solutions for SureTech Plastics" },
-    ],
-    addedDate: "Mar 3", lastActivity: "AI Call — Mar 6",
-  },
-  {
-    id: "L-009", business: "Woodridge Office Park", contact: "Amanda Fields",
-    phone: "(713) 555-0634", email: "afields@woodridge.com",
-    address: "9400 Woodridge Pkwy", distance: "15 mi", businessType: "Office Complex",
-    source: "Google Maps", stage: "Contacted", contactMethod: "Email",
-    callLogs: [],
-    emailLogs: [
-      { date: "Mar 14", status: "Sent", subject: "Vending Services for Woodridge Office Park" },
-    ],
-    addedDate: "Mar 12", lastActivity: "Email sent — Mar 14",
-  },
-  {
-    id: "L-010", business: "Metro Fire Equipment", contact: "Carlos Reyes",
-    phone: "(713) 555-0771", email: "carlos@metrofire.com",
-    address: "3100 Polk St", distance: "5 mi", businessType: "Equipment Sales",
-    source: "Excel Import", stage: "Contacted", contactMethod: "Call",
-    callLogs: [
-      { attempt: 1, date: "Mar 14, 11:30 AM", duration: "0m 30s", outcome: "Voicemail",
-        summary: "No answer. Left voicemail with callback number and brief intro about vending services." },
-    ],
-    emailLogs: [],
-    addedDate: "Mar 12", lastActivity: "AI Call — Mar 14",
-  },
-];
 
 /* ------------------------------------------------------------------ */
 /*  Config                                                             */
@@ -238,6 +99,51 @@ export default function PipelinePage() {
   const isTablet = useIsMobile(1024);
   const [view, setView] = useState<"kanban" | "list">("kanban");
   const [expandedLead, setExpandedLead] = useState<string | null>(null);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [callingLeadId, setCallingLeadId] = useState<string | null>(null);
+  const [callStatus, setCallStatus] = useState<{ leadId: string; message: string; type: "success" | "error" } | null>(null);
+
+  // Fetch leads from API
+  const fetchLeads = useCallback(async () => {
+    try {
+      const res = await fetch("/api/leads");
+      if (res.ok) {
+        const data = await res.json();
+        setLeads(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch leads:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLeads();
+  }, [fetchLeads]);
+
+  // Trigger a VAPI call
+  const triggerCall = async (leadId: string) => {
+    setCallingLeadId(leadId);
+    setCallStatus(null);
+    try {
+      const res = await fetch("/api/calls/trigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCallStatus({ leadId, message: data.message || "Call initiated!", type: "success" });
+        fetchLeads(); // Refresh leads to show updated status
+      } else {
+        setCallStatus({ leadId, message: data.error || "Failed to trigger call", type: "error" });
+      }
+    } catch {
+      setCallStatus({ leadId, message: "Network error — could not trigger call", type: "error" });
+    } finally {
+      setCallingLeadId(null);
+    }
+  };
 
   const totalCalls = leads.reduce((s, l) => s + l.callLogs.length, 0);
   const totalEmails = leads.reduce((s, l) => s + l.emailLogs.length, 0);
@@ -293,16 +199,57 @@ export default function PipelinePage() {
               background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
               fontSize: 13, fontWeight: 500, cursor: "pointer",
             }}><MapPin size={14} /> Google Maps</button>
-            <button style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "9px 18px",
-              background: "#16a34a", color: "#fff", border: "none", borderRadius: 8,
-              fontSize: 13, fontWeight: 600, cursor: "pointer",
-            }}><Plus size={16} /> Add Lead</button>
+            <button
+              onClick={() => setShowAddModal(true)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "9px 18px",
+                background: "#16a34a", color: "#fff", border: "none", borderRadius: 8,
+                fontSize: 13, fontWeight: 600, cursor: "pointer",
+              }}
+            ><Plus size={16} /> Add Lead</button>
           </div>
         </div>
 
+        {/* Call Status Toast */}
+        {callStatus && (
+          <div style={{
+            marginBottom: 16, padding: "12px 18px", borderRadius: 10, fontSize: 13, fontWeight: 500,
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            background: callStatus.type === "success" ? "#dcfce7" : "#fef2f2",
+            color: callStatus.type === "success" ? "#166534" : "#991b1b",
+            border: `1px solid ${callStatus.type === "success" ? "#a7f3d0" : "#fecaca"}`,
+          }}>
+            <span>{callStatus.message}</span>
+            <button onClick={() => setCallStatus(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+              <X size={14} color={callStatus.type === "success" ? "#166534" : "#991b1b"} />
+            </button>
+          </div>
+        )}
+
+        {/* Empty State */}
+        {leads.length === 0 && (
+          <div style={{
+            textAlign: "center", padding: "60px 20px", background: "#fff",
+            borderRadius: 14, border: "1px solid #d5d9e2",
+          }}>
+            <Users size={48} color="#d1d5db" style={{ marginBottom: 16 }} />
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#374151", marginBottom: 8 }}>No leads yet</div>
+            <div style={{ fontSize: 14, color: "#94a3b8", marginBottom: 20 }}>
+              Add your first lead manually to get started, then trigger an AI call.
+            </div>
+            <button
+              onClick={() => setShowAddModal(true)}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6, padding: "12px 24px",
+                background: "#16a34a", color: "#fff", border: "none", borderRadius: 10,
+                fontSize: 14, fontWeight: 600, cursor: "pointer",
+              }}
+            ><Plus size={18} /> Add First Lead</button>
+          </div>
+        )}
+
         {/* ========== KANBAN VIEW ========== */}
-        {view === "kanban" && (
+        {leads.length > 0 && view === "kanban" && (
           <div style={{ overflowX: "auto" }}>
           <div className="kanban-grid" style={{
             display: "grid",
@@ -339,6 +286,8 @@ export default function PipelinePage() {
                         lead={lead}
                         expanded={expandedLead === lead.id}
                         onToggle={() => setExpandedLead(expandedLead === lead.id ? null : lead.id)}
+                        onTriggerCall={() => triggerCall(lead.id)}
+                        isCalling={callingLeadId === lead.id}
                       />
                     ))}
                     {stageLeads.length === 0 && (
@@ -355,15 +304,15 @@ export default function PipelinePage() {
         )}
 
         {/* ========== LIST VIEW ========== */}
-        {view === "list" && (
+        {leads.length > 0 && view === "list" && (
           <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
           <div style={{
             background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
-            boxShadow: "0 2px 6px rgba(0,0,0,0.06)", overflow: "hidden", minWidth: 700,
+            boxShadow: "0 2px 6px rgba(0,0,0,0.06)", overflow: "hidden", minWidth: 800,
           }}>
             <div style={{
               display: "grid",
-              gridTemplateColumns: "1.8fr 1fr 90px 100px 130px 110px",
+              gridTemplateColumns: "1.8fr 1fr 90px 100px 130px 110px 90px",
               padding: "14px 22px", borderBottom: "1px solid #e5e7eb", background: "#f1f5f9",
             }}>
               <TH>Business</TH>
@@ -372,16 +321,16 @@ export default function PipelinePage() {
               <TH>AI Calls</TH>
               <TH>Stage</TH>
               <TH>Last Activity</TH>
+              <TH>Action</TH>
             </div>
             {leads.map((l) => {
               const sc = stageConfig[l.stage];
-              const lastCall = l.callLogs[l.callLogs.length - 1];
               return (
                 <div key={l.id}>
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "1.8fr 1fr 90px 100px 130px 110px",
+                      gridTemplateColumns: "1.8fr 1fr 90px 100px 130px 110px 90px",
                       padding: "14px 22px", borderBottom: "1px solid #f3f4f6", alignItems: "center",
                       cursor: "pointer", transition: "background 0.1s",
                       background: expandedLead === l.id ? "#f9fafb" : "transparent",
@@ -402,7 +351,7 @@ export default function PipelinePage() {
                     </div>
                     <div>
                       <span style={{ fontSize: 11, color: "#64748b", background: "#e2e8f0", padding: "3px 8px", borderRadius: 10 }}>
-                        {l.source === "Google Maps" ? "📍 Maps" : "📄 Excel"}
+                        {l.source === "Google Maps" ? "Maps" : l.source === "Excel Import" ? "Excel" : "Manual"}
                       </span>
                     </div>
                     <div>
@@ -420,6 +369,28 @@ export default function PipelinePage() {
                       }}>{l.stage}</span>
                     </div>
                     <div style={{ fontSize: 12, color: "#94a3b8" }}>{l.lastActivity}</div>
+                    <div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); triggerCall(l.id); }}
+                        disabled={callingLeadId === l.id || l.callLogs.length >= 3}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 4, padding: "6px 12px",
+                          background: l.callLogs.length >= 3 ? "#e5e7eb" : "#7c3aed",
+                          color: l.callLogs.length >= 3 ? "#94a3b8" : "#fff",
+                          border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                          cursor: l.callLogs.length >= 3 ? "not-allowed" : "pointer",
+                          opacity: callingLeadId === l.id ? 0.7 : 1,
+                        }}
+                      >
+                        {callingLeadId === l.id ? (
+                          <><Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Calling...</>
+                        ) : l.callLogs.length >= 3 ? (
+                          "Max Calls"
+                        ) : (
+                          <><PhoneCall size={12} /> Call</>
+                        )}
+                      </button>
+                    </div>
                   </div>
 
                   {/* Expanded detail */}
@@ -446,12 +417,12 @@ export default function PipelinePage() {
                                     <span style={{ fontSize: 11, color: "#94a3b8" }}>{call.duration}</span>
                                     <span style={{
                                       fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10,
-                                      color: call.outcome === "Interested" || call.outcome === "Site Visit Requested" || call.outcome === "Proposal Requested" ? "#059669" :
-                                             call.outcome === "Not Interested" ? "#dc2626" :
-                                             call.outcome === "Callback Requested" ? "#d97706" : "#6b7280",
-                                      background: call.outcome === "Interested" || call.outcome === "Site Visit Requested" || call.outcome === "Proposal Requested" ? "#d1fae5" :
-                                                  call.outcome === "Not Interested" ? "#fef2f2" :
-                                                  call.outcome === "Callback Requested" ? "#fef3c7" : "#e2e8f0",
+                                      color: call.outcome === "interested" || call.outcome === "Interested" || call.outcome === "Site Visit Requested" || call.outcome === "Proposal Requested" ? "#059669" :
+                                             call.outcome === "not_interested" || call.outcome === "Not Interested" ? "#dc2626" :
+                                             call.outcome === "callback" || call.outcome === "Callback Requested" ? "#d97706" : "#6b7280",
+                                      background: call.outcome === "interested" || call.outcome === "Interested" || call.outcome === "Site Visit Requested" || call.outcome === "Proposal Requested" ? "#d1fae5" :
+                                                  call.outcome === "not_interested" || call.outcome === "Not Interested" ? "#fef2f2" :
+                                                  call.outcome === "callback" || call.outcome === "Callback Requested" ? "#fef3c7" : "#e2e8f0",
                                     }}>{call.outcome}</span>
                                   </div>
                                 </div>
@@ -509,13 +480,213 @@ export default function PipelinePage() {
           border: "1px solid #ddd6fe", borderRadius: 10, fontSize: 12, color: "#5b21b6",
           lineHeight: 1.6,
         }}>
-          <strong>How it works:</strong> Leads are imported via Excel or Google Maps (25mi radius).
+          <strong>How it works:</strong> Leads are imported via Excel or Google Maps (25mi radius), or added manually.
           AI agent (Vapi) initiates calls and emails — max 3 call attempts per lead.
           All call details, duration, and AI-generated summaries are logged automatically.
           Leads are classified based on the client&apos;s response during the call:
           Interested, Not Interested, Callback, Site Visit Requested, or Proposal Requested.
           AI does not close deals — it only initiates and classifies.
         </div>
+      </div>
+
+      {/* ========== ADD LEAD MODAL ========== */}
+      {showAddModal && (
+        <AddLeadModal
+          onClose={() => setShowAddModal(false)}
+          onAdded={() => { setShowAddModal(false); fetchLeads(); }}
+        />
+      )}
+
+      {/* Spinner animation */}
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Add Lead Modal                                                     */
+/* ------------------------------------------------------------------ */
+
+function AddLeadModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState({
+    business: "",
+    contact: "",
+    phone: "",
+    email: "",
+    address: "",
+    distance: "",
+    businessType: "",
+    contactMethod: "Call" as ContactMethod,
+  });
+
+  const update = (field: string, value: string) => {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.business || !form.contact || !form.phone) {
+      setError("Business name, contact name, and phone are required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const res = await fetch("/api/leads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...form, source: "Manual" }),
+      });
+      if (res.ok) {
+        onAdded();
+      } else {
+        const data = await res.json();
+        setError(data.error || "Failed to add lead");
+      }
+    } catch {
+      setError("Network error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%", padding: "10px 12px", fontSize: 13, border: "1px solid #d5d9e2",
+    borderRadius: 8, outline: "none", background: "#fff", color: "#0f172a",
+    boxSizing: "border-box",
+  };
+
+  const labelStyle: React.CSSProperties = {
+    fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4, display: "block",
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
+      alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16,
+    }} onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 16, width: "100%", maxWidth: 520,
+          boxShadow: "0 20px 60px rgba(0,0,0,0.2)", overflow: "hidden",
+        }}
+      >
+        {/* Header */}
+        <div style={{
+          padding: "20px 24px", borderBottom: "1px solid #e5e7eb",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 10, background: "#dcfce7",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <Plus size={18} color="#16a34a" />
+            </div>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Add New Lead</div>
+              <div style={{ fontSize: 12, color: "#94a3b8" }}>Enter lead details to add to pipeline</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+            <X size={20} color="#94a3b8" />
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} style={{ padding: "20px 24px" }}>
+          {error && (
+            <div style={{ marginBottom: 16, padding: "10px 14px", background: "#fef2f2", color: "#991b1b", borderRadius: 8, fontSize: 12, border: "1px solid #fecaca" }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+            <div>
+              <label style={labelStyle}>Business Name *</label>
+              <input style={inputStyle} placeholder="e.g., ABC Logistics" value={form.business} onChange={(e) => update("business", e.target.value)} />
+            </div>
+            <div>
+              <label style={labelStyle}>Business Type</label>
+              <input style={inputStyle} placeholder="e.g., Warehouse, Office" value={form.businessType} onChange={(e) => update("businessType", e.target.value)} />
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+            <div>
+              <label style={labelStyle}>Contact Name *</label>
+              <input style={inputStyle} placeholder="e.g., John Smith" value={form.contact} onChange={(e) => update("contact", e.target.value)} />
+            </div>
+            <div>
+              <label style={labelStyle}>Phone Number *</label>
+              <input style={inputStyle} placeholder="e.g., (713) 555-0142" value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={labelStyle}>Email</label>
+            <input style={inputStyle} type="email" placeholder="e.g., john@abclogistics.com" value={form.email} onChange={(e) => update("email", e.target.value)} />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 14 }}>
+            <div>
+              <label style={labelStyle}>Address</label>
+              <input style={inputStyle} placeholder="e.g., 2100 N Loop W, Houston" value={form.address} onChange={(e) => update("address", e.target.value)} />
+            </div>
+            <div>
+              <label style={labelStyle}>Distance</label>
+              <input style={inputStyle} placeholder="e.g., 8 mi" value={form.distance} onChange={(e) => update("distance", e.target.value)} />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 20 }}>
+            <label style={labelStyle}>Contact Method</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {(["Call", "Email", "Call + Email"] as const).map((method) => (
+                <button
+                  key={method}
+                  type="button"
+                  onClick={() => update("contactMethod", method)}
+                  style={{
+                    padding: "8px 16px", fontSize: 12, fontWeight: 500, borderRadius: 8,
+                    border: form.contactMethod === method ? "2px solid #16a34a" : "1px solid #d5d9e2",
+                    background: form.contactMethod === method ? "#dcfce7" : "#fff",
+                    color: form.contactMethod === method ? "#166534" : "#374151",
+                    cursor: "pointer",
+                  }}
+                >{method}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: "10px 20px", fontSize: 13, fontWeight: 500,
+                background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
+                cursor: "pointer",
+              }}
+            >Cancel</button>
+            <button
+              type="submit"
+              disabled={saving}
+              style={{
+                padding: "10px 24px", fontSize: 13, fontWeight: 600,
+                background: "#16a34a", color: "#fff", border: "none", borderRadius: 8,
+                cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.7 : 1,
+                display: "flex", alignItems: "center", gap: 6,
+              }}
+            >
+              {saving ? <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Saving...</> : <><Plus size={14} /> Add Lead</>}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -525,7 +696,10 @@ export default function PipelinePage() {
 /*  Kanban Card                                                        */
 /* ------------------------------------------------------------------ */
 
-function KanbanCard({ lead, expanded, onToggle }: { lead: Lead; expanded: boolean; onToggle: () => void }) {
+function KanbanCard({ lead, expanded, onToggle, onTriggerCall, isCalling }: {
+  lead: Lead; expanded: boolean; onToggle: () => void;
+  onTriggerCall: () => void; isCalling: boolean;
+}) {
   const lastCall = lead.callLogs[lead.callLogs.length - 1];
   const lastEmail = lead.emailLogs[lead.emailLogs.length - 1];
 
@@ -553,6 +727,11 @@ function KanbanCard({ lead, expanded, onToggle }: { lead: Lead; expanded: boolea
         <User size={10} /> {lead.contact}
       </div>
 
+      {/* Phone */}
+      <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+        <Phone size={10} /> {lead.phone}
+      </div>
+
       {/* Call info */}
       {lead.callLogs.length > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b", marginBottom: 4 }}>
@@ -566,6 +745,30 @@ function KanbanCard({ lead, expanded, onToggle }: { lead: Lead; expanded: boolea
           <Mail size={10} /> Email: {lastEmail?.status}
         </div>
       )}
+
+      {/* Trigger Call Button */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onTriggerCall(); }}
+        disabled={isCalling || lead.callLogs.length >= 3}
+        style={{
+          width: "100%", marginTop: 8, display: "flex", alignItems: "center", justifyContent: "center",
+          gap: 6, padding: "7px 12px",
+          background: lead.callLogs.length >= 3 ? "#f1f5f9" : "#7c3aed",
+          color: lead.callLogs.length >= 3 ? "#94a3b8" : "#fff",
+          border: lead.callLogs.length >= 3 ? "1px solid #e2e8f0" : "none",
+          borderRadius: 8, fontSize: 11, fontWeight: 600,
+          cursor: lead.callLogs.length >= 3 ? "not-allowed" : "pointer",
+          opacity: isCalling ? 0.7 : 1,
+        }}
+      >
+        {isCalling ? (
+          <><Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Calling...</>
+        ) : lead.callLogs.length >= 3 ? (
+          "Max Attempts Reached"
+        ) : (
+          <><PhoneCall size={12} /> Trigger AI Call</>
+        )}
+      </button>
 
       {/* Last call summary (when expanded) */}
       {expanded && lastCall && (
@@ -583,7 +786,7 @@ function KanbanCard({ lead, expanded, onToggle }: { lead: Lead; expanded: boolea
       {/* Footer */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
         <span style={{ fontSize: 10, color: "#94a3b8" }}>
-          {lead.source === "Google Maps" ? "📍" : "📄"} {lead.addedDate}
+          {lead.source === "Google Maps" ? "Maps" : lead.source === "Excel Import" ? "Excel" : "Manual"} · {lead.addedDate}
         </span>
         <span style={{ fontSize: 10, color: "#94a3b8" }}>
           {lead.lastActivity}

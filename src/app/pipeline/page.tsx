@@ -237,14 +237,14 @@ function excelCandidateMatchesExistingLead(candidate: ExcelLeadCandidate, leads:
   });
 }
 
-const EXCEL_HEADER_ALIASES = {
+const EXCEL_HEADER_ALIASES: Record<keyof ExcelMappedColumns, string[]> = {
   business: ["business", "business name", "company", "company name", "organization", "organisation", "account", "location", "site", "facility"],
   contact: ["contact", "contact name", "person", "person name", "name", "full name", "manager", "owner", "decision maker", "decision maker name"],
   phone: ["phone", "phone number", "mobile", "cell", "telephone", "contact number", "direct line", "business phone"],
   email: ["email", "email address", "mail", "contact email"],
   address: ["address", "street address", "street", "full address", "location address", "business address"],
   businessType: ["type", "business type", "industry", "category", "vertical", "segment"],
-} as const;
+};
 
 type ExcelMappedColumns = {
   business?: string;

@@ -102,6 +102,42 @@ function getTranscriptFallbackSummary(transcript: unknown) {
   return summary.length > 900 ? `${summary.slice(0, 897)}...` : summary;
 }
 
+function normalizeWebhookTranscript(transcript: unknown): string | null | undefined {
+  if (typeof transcript === "string") {
+    const trimmed = transcript.trim();
+    return trimmed || null;
+  }
+
+  if (!Array.isArray(transcript)) {
+    return transcript == null ? transcript as null | undefined : JSON.stringify(transcript);
+  }
+
+  const parts = transcript
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return entry.trim();
+      }
+
+      const turn = entry as TranscriptTurn;
+      const role = asString(turn.role);
+      const message = asString(turn.message);
+      if (role && message) {
+        return `${role}: ${message}`;
+      }
+      if (message) {
+        return message;
+      }
+      return JSON.stringify(entry);
+    })
+    .filter(Boolean) as string[];
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  return parts.join("\n");
+}
+
 function readDynamicVariable(
   dynamicVariables: Record<string, unknown>,
   keys: string[]
@@ -261,7 +297,7 @@ export async function processElevenLabsEvent(body: ElevenLabsWebhookEvent) {
         conversation_initiation_client_data:
           (conversation.conversation_initiation_client_data as { dynamic_variables?: Record<string, unknown> } | undefined) ||
           data.conversation_initiation_client_data,
-        transcript: conversation.transcript || data.transcript,
+        transcript: normalizeWebhookTranscript(conversation.transcript) ?? normalizeWebhookTranscript(data.transcript),
       };
     } catch (error) {
       console.error("[ElevenLabs Webhook] Conversation lookup failed:", error);

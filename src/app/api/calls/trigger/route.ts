@@ -61,6 +61,8 @@ export async function POST(request: NextRequest) {
     const knownPhoneNumber = (lead.decisionMakerPhone || lead.phone || "").trim();
     const knownAddress = (lead.address || "").trim();
     const knownBusinessName = (lead.business || "").trim();
+    const knownEmployeeCount = (lead.employeeCount || "").trim();
+    const knownVendingStatus = (lead.currentVendingStatus || "").trim();
 
     console.log(`[Calls] Triggering ElevenLabs call to ${lead.business} (${formattedPhone}) - Attempt ${lead.callAttempts + 1}`);
 
@@ -89,6 +91,11 @@ export async function POST(request: NextRequest) {
         currentDialedNumber: knownPhoneNumber || formattedPhone,
         knownAddress,
         hasKnownAddress: knownAddress ? "true" : "false",
+        knownEmployeeCount,
+        hasKnownEmployeeCount: knownEmployeeCount ? "true" : "false",
+        knownVendingStatus,
+        hasKnownVendingStatus: knownVendingStatus ? "true" : "false",
+        mustKeepConfirmedName: bestKnownContactName ? "true" : "false",
         decisionMakerName: bestKnownContactName || lead.contact || "",
         decisionMakerPhone: lead.decisionMakerPhone || lead.phone,
         decisionMakerEmail: lead.decisionMakerEmail || lead.email || "",

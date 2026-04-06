@@ -383,13 +383,15 @@ export async function processElevenLabsEvent(body: ElevenLabsWebhookEvent) {
     readFirstCollectedValue(collectionResults, ["contact_name", "contact_person_name"])
   );
   const safeCollectedContact = looksLikeAgentName(collectedContact) ? undefined : collectedContact;
+  const knownDynamicContact =
+    readDynamicVariable(dynamicVariables, ["decisionMakerName", "namedContact", "knownLeadName", "contactName", "contact_name"]);
 
   const leadUpdates: Parameters<typeof updateLead>[1] = {
     business: businessName,
     businessType: asString(readFirstCollectedValue(collectionResults, ["business_type"])),
     contact:
-      safeCollectedContact ||
-      readDynamicVariable(dynamicVariables, ["contactName", "contact_name"]),
+      knownDynamicContact ||
+      safeCollectedContact,
     contactTitle: asString(readFirstCollectedValue(collectionResults, ["contact_title"])),
     email:
       asString(readFirstCollectedValue(collectionResults, ["email", "contact_email"])) ||

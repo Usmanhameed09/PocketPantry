@@ -115,6 +115,19 @@ function parseTimePortion(value: string) {
   return { hour, minute };
 }
 
+function hasExplicitTimeInValue(value: string | undefined) {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return false;
+
+  return (
+    /\b\d{1,2}:\d{2}\s*(am|pm)?\b/.test(normalized) ||
+    /\b\d{1,2}\s*(am|pm)\b/.test(normalized) ||
+    /\b(morning|afternoon|evening|noon|midnight)\b/.test(normalized) ||
+    /t\d{2}:\d{2}/i.test(normalized)
+  );
+}
+
 function parseRelativeRequestedTime(value: string) {
   const normalized = value.trim().toLowerCase().replace(/,/g, " ");
   const currentEt = getTimeZoneParts(new Date(), EASTERN_TIMEZONE);
@@ -292,9 +305,26 @@ export async function bookLeadInCalendly(params: { leadId: string; startTime?: s
     };
   }
 
-  const desiredStartTime = toIsoString(params.startTime || lead.visitDate || lead.callbackDate);
+  const requestedTimeInput = params.startTime || lead.visitDate || lead.callbackDate;
+  const desiredStartTime = toIsoString(requestedTimeInput);
   if (!desiredStartTime) {
     throw new Error("Lead does not have a valid ISO appointment time yet.");
+  }
+
+  if (!hasExplicitTimeInValue(requestedTimeInput)) {
+    return {
+      ok: false as const,
+      schedulingRequired: true as const,
+      requestedStartTime: requestedTimeInput || null,
+      availableStartTime: null,
+      eventType: {
+        name: "Google Calendar",
+        uri: calendarStatus.calendarId,
+        schedulingUrl: "",
+      },
+      schedulingUrl: "",
+      error: "A specific meeting time still needs to be confirmed before booking. Please confirm both the day and time with the prospect.",
+    };
   }
 
   if (!lead.email) {

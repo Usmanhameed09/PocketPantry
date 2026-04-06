@@ -20,10 +20,11 @@ interface ElevenLabsOutboundResponse {
 
 interface ElevenLabsConversationResponse {
   conversation_id?: string;
+  status?: string;
   analysis?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   conversation_initiation_client_data?: Record<string, unknown>;
-  transcript?: string | null;
+  transcript?: string | string[] | null;
 }
 
 export async function triggerOutboundCall(params: TriggerCallParams): Promise<ElevenLabsOutboundResponse> {

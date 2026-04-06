@@ -248,7 +248,7 @@ async function fetchLegacyPlaceDetails(placeId: string) {
 
 async function enrichLegacyPlaces(places: LegacyPlaceSearchResult[]): Promise<GooglePlace[]> {
   const topPlaces = places.slice(0, 20);
-  const detailResults = await Promise.all(
+  const detailResults: Array<GooglePlace | null> = await Promise.all(
     topPlaces.map(async (place) => {
       if (!place.place_id) {
         return null;
@@ -274,7 +274,7 @@ async function enrichLegacyPlaces(places: LegacyPlaceSearchResult[]): Promise<Go
     })
   );
 
-  return detailResults.filter((place): place is GooglePlace => Boolean(place));
+  return detailResults.filter((place): place is GooglePlace => place !== null);
 }
 
 async function searchNearbyLegacy(center: LatLng, radiusMeters: number) {

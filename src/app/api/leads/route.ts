@@ -1,5 +1,105 @@
 import { NextRequest, NextResponse } from "next/server";
-import { addLead, getAllLeads, getLead, updateLead, deleteLead } from "@/lib/leads-store";
+import { getAllLeads, getLead, updateLead, deleteLead } from "@/lib/leads-store";
+import { createServerClient } from "@/lib/supabase";
+
+type LeadInsertInput = {
+  business: string;
+  contact: string;
+  phone: string;
+  email?: string;
+  address?: string;
+  distance?: string;
+  businessType?: string;
+  source?: string;
+  contactMethod?: string;
+  contactTitle?: string;
+  decisionMakerName?: string;
+  decisionMakerPhone?: string;
+  decisionMakerEmail?: string;
+};
+
+function parseLeadNumber(id: string | undefined) {
+  if (!id) return 0;
+  const match = id.match(/^L-(\d+)$/i);
+  return match ? Number(match[1]) : 0;
+}
+
+function buildLeadInsertPayload(data: LeadInsertInput, id: string, dateStr: string) {
+  const payload: Record<string, unknown> = {
+    id,
+    business: data.business,
+    contact: data.contact,
+    phone: data.phone,
+    email: data.email || "",
+    address: data.address || "",
+    distance: data.distance || "--",
+    business_type: data.businessType || "",
+    source: data.source || "Manual",
+    stage: "New Lead",
+    contact_method: data.contactMethod || "Call",
+    call_attempts: 0,
+    added_date: dateStr,
+    last_activity: `Added ${dateStr}`,
+  };
+
+  if (data.contactTitle?.trim()) payload.contact_title = data.contactTitle.trim();
+  if (data.decisionMakerName?.trim()) payload.decision_maker_name = data.decisionMakerName.trim();
+  if (data.decisionMakerPhone?.trim()) payload.decision_maker_phone = data.decisionMakerPhone.trim();
+  if (data.decisionMakerEmail?.trim()) payload.decision_maker_email = data.decisionMakerEmail.trim();
+
+  return payload;
+}
+
+async function insertLeadWithSafeId(data: LeadInsertInput) {
+  const supabase = createServerClient();
+  const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+  const { data: idRows, error: latestError } = await supabase
+    .from("leads")
+    .select("id")
+    .like("id", "L-%");
+
+  if (latestError) {
+    throw latestError;
+  }
+
+  const nextNumber =
+    (idRows || []).reduce((max, row) => Math.max(max, parseLeadNumber(row.id as string | undefined)), 0) + 1;
+  const id = `L-${String(nextNumber).padStart(3, "0")}`;
+
+  let result = await supabase.from("leads").insert(buildLeadInsertPayload(data, id, dateStr));
+
+  if (result.error) {
+    const message = `${result.error.message || ""} ${result.error.details || ""} ${result.error.hint || ""}`.toLowerCase();
+    const optionalColumnIssue =
+      message.includes("contact_title") ||
+      message.includes("decision_maker_name") ||
+      message.includes("decision_maker_phone") ||
+      message.includes("decision_maker_email");
+
+    if (optionalColumnIssue) {
+      result = await supabase.from("leads").insert(
+        buildLeadInsertPayload(
+          {
+            ...data,
+            contactTitle: "",
+            decisionMakerName: "",
+            decisionMakerPhone: "",
+            decisionMakerEmail: "",
+          },
+          id,
+          dateStr
+        )
+      );
+    }
+  }
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return getLead(id);
+}
 
 /**
  * GET /api/leads — List all leads (with call & email logs)
@@ -40,27 +140,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const lead = await addLead({
+    const lead = await insertLeadWithSafeId({
       business: body.business,
       contact: body.contact,
       phone: body.phone,
       email: body.email || "",
       address: body.address || "",
-      distance: body.distance || "—",
+      distance: body.distance || "--",
       businessType: body.businessType || "",
       source: body.source || "Manual",
       contactMethod: body.contactMethod || "Call",
+      contactTitle: body.contactTitle || "",
+      decisionMakerName: body.decisionMakerName || "",
+      decisionMakerPhone: body.decisionMakerPhone || "",
+      decisionMakerEmail: body.decisionMakerEmail || "",
     });
 
     if (!lead) {
       return NextResponse.json({ error: "Failed to add lead" }, { status: 500 });
     }
 
-    console.log(`[Leads] New lead added: ${lead.id} — ${lead.business}`);
+    console.log(`[Leads] New lead added: ${lead.id} - ${lead.business}`);
     return NextResponse.json(lead, { status: 201 });
   } catch (error) {
     console.error("[API /leads POST] Error:", error);
-    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+    const message = error instanceof Error ? error.message : "Failed to create lead.";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }
 

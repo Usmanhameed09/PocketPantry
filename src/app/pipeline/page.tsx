@@ -1,15 +1,16 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import * as XLSX from "xlsx";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import Header from "@/components/Header";
+import type { OutreachTemplateMap, OutreachTemplateStage } from "@/lib/outreach-template-store";
 import {
   Plus,
   Upload,
   MapPin,
   Phone,
   Mail,
-  Building2,
   User,
   Bot,
   TrendingUp,
@@ -17,9 +18,13 @@ import {
   PhoneCall,
   MailCheck,
   MailX,
-  Clock,
   X,
   Loader2,
+  Search,
+  FileSpreadsheet,
+  Settings2,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -70,6 +75,92 @@ interface Lead {
   lastActivity: string;
   callAttempts?: number;
   vapiCallId?: string;
+  callbackDate?: string;
+  callbackTime?: string;
+  contactTitle?: string;
+  employeeCount?: string;
+  currentVendingStatus?: string;
+  currentVendorName?: string;
+  productPreferences?: string;
+  painPoints?: string[];
+  decisionMakerName?: string;
+  decisionMakerPhone?: string;
+  decisionMakerEmail?: string;
+  visitDate?: string;
+  visitTime?: string;
+  emailSent?: boolean;
+}
+
+interface CapturedLeadData {
+  contactName?: string;
+  contactTitle?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  businessName?: string;
+  businessType?: string;
+  employeeCount?: string;
+  interestLevel?: string;
+  currentVendingStatus?: string;
+  currentVendorName?: string;
+  productPreferences?: string;
+  decisionMakerName?: string;
+  decisionMakerPhone?: string;
+  decisionMakerEmail?: string;
+  siteVisit?: string;
+  callback?: string;
+  notes?: string;
+}
+
+interface SchedulerAvailableSlot {
+  start_time: string;
+  scheduling_url: string;
+  status: string;
+  invitees_remaining: number;
+}
+
+interface BookingStatusMessage {
+  type: "success" | "error" | "info";
+  message: string;
+  actionUrl?: string;
+  actionLabel?: string;
+}
+
+interface GoogleCalendarStatus {
+  connected: boolean;
+  calendarId?: string | null;
+  connectedAt?: string | null;
+}
+
+interface GoogleMapsLeadCandidate {
+  placeId: string;
+  business: string;
+  contact: string;
+  contactTitle?: string;
+  phone: string;
+  email: string;
+  address: string;
+  distance: string;
+  distanceMiles?: number;
+  businessType: string;
+  source: LeadSource;
+  website?: string;
+  googleMapsUri?: string;
+  importable: boolean;
+  reason?: string;
+}
+
+interface ExcelLeadCandidate {
+  rowNumber: number;
+  business: string;
+  contact: string;
+  phone: string;
+  email: string;
+  address: string;
+  businessType: string;
+  source: LeadSource;
+  importable: boolean;
+  reason?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -90,6 +181,192 @@ const kanbanStages: Stage[] = [
   "New Lead", "Contacted", "Callback", "Interested", "Site Visit Requested", "Proposal Requested", "Not Interested",
 ];
 
+const EASTERN_TIMEZONE = "America/New_York";
+const LIST_PAGE_SIZE = 15;
+
+function formatEasternDateTime(value?: string) {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: EASTERN_TIMEZONE,
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  }).format(date);
+}
+
+function normalizeText(value?: string) {
+  return (value || "").trim().toLowerCase();
+}
+
+function normalizePhoneDigits(value?: string) {
+  return (value || "").replace(/\D/g, "");
+}
+
+function candidateMatchesExistingLead(candidate: GoogleMapsLeadCandidate, leads: Lead[]) {
+  const candidateBusiness = normalizeText(candidate.business);
+  const candidatePhone = normalizePhoneDigits(candidate.phone);
+  const candidateAddress = normalizeText(candidate.address);
+
+  return leads.some((lead) => {
+    const sameBusiness = normalizeText(lead.business) === candidateBusiness;
+    const samePhone = candidatePhone && normalizePhoneDigits(lead.phone) === candidatePhone;
+    const sameAddress = candidateAddress && normalizeText(lead.address) === candidateAddress;
+    return sameBusiness && (samePhone || sameAddress);
+  });
+}
+
+function excelCandidateMatchesExistingLead(candidate: ExcelLeadCandidate, leads: Lead[]) {
+  const candidateBusiness = normalizeText(candidate.business);
+  const candidatePhone = normalizePhoneDigits(candidate.phone);
+  const candidateAddress = normalizeText(candidate.address);
+
+  return leads.some((lead) => {
+    const sameBusiness = normalizeText(lead.business) === candidateBusiness;
+    const samePhone = candidatePhone && normalizePhoneDigits(lead.phone) === candidatePhone;
+    const sameAddress = candidateAddress && normalizeText(lead.address) === candidateAddress;
+    return sameBusiness && (samePhone || sameAddress);
+  });
+}
+
+const EXCEL_HEADER_ALIASES = {
+  business: ["business", "business name", "company", "company name", "organization", "organisation", "account", "location", "site", "facility"],
+  contact: ["contact", "contact name", "person", "person name", "name", "full name", "manager", "owner", "decision maker", "decision maker name"],
+  phone: ["phone", "phone number", "mobile", "cell", "telephone", "contact number", "direct line", "business phone"],
+  email: ["email", "email address", "mail", "contact email"],
+  address: ["address", "street address", "street", "full address", "location address", "business address"],
+  businessType: ["type", "business type", "industry", "category", "vertical", "segment"],
+} as const;
+
+type ExcelMappedColumns = {
+  business?: string;
+  contact?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  businessType?: string;
+};
+
+function normalizeHeader(value: string) {
+  return normalizeText(value).replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function detectExcelColumns(headers: string[]): ExcelMappedColumns {
+  const normalizedHeaders = headers.map((header) => ({
+    original: header,
+    normalized: normalizeHeader(header),
+  }));
+
+  const matched: ExcelMappedColumns = {};
+
+  (Object.keys(EXCEL_HEADER_ALIASES) as Array<keyof ExcelMappedColumns>).forEach((field) => {
+    const aliases = EXCEL_HEADER_ALIASES[field];
+
+    const exactMatch = normalizedHeaders.find((header) => aliases.includes(header.normalized));
+    if (exactMatch) {
+      matched[field] = exactMatch.original;
+      return;
+    }
+
+    const looseMatch = normalizedHeaders.find((header) =>
+      aliases.some((alias) => header.normalized.includes(alias) || alias.includes(header.normalized))
+    );
+
+    if (looseMatch) {
+      matched[field] = looseMatch.original;
+    }
+  });
+
+  return matched;
+}
+
+function readCellValue(row: Record<string, unknown>, key?: string) {
+  if (!key) return "";
+  const value = row[key];
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function parseExcelCandidates(rows: Record<string, unknown>[]): { candidates: ExcelLeadCandidate[]; columns: ExcelMappedColumns } {
+  const headers = Array.from(
+    new Set(
+      rows.flatMap((row) => Object.keys(row).filter(Boolean))
+    )
+  );
+
+  const columns = detectExcelColumns(headers);
+
+  const candidates = rows
+    .map((row, index) => {
+      const business = readCellValue(row, columns.business);
+      const contact = readCellValue(row, columns.contact) || "Front Desk";
+      const phone = readCellValue(row, columns.phone);
+      const email = readCellValue(row, columns.email);
+      const address = readCellValue(row, columns.address);
+      const businessType = readCellValue(row, columns.businessType);
+
+      const importable = Boolean(business && phone);
+      let reason = "";
+      if (!business && !phone) {
+        reason = "Missing business and phone";
+      } else if (!business) {
+        reason = "Missing business name";
+      } else if (!phone) {
+        reason = "Missing phone number";
+      }
+
+      return {
+        rowNumber: index + 2,
+        business,
+        contact,
+        phone,
+        email,
+        address,
+        businessType,
+        source: "Excel Import" as LeadSource,
+        importable,
+        reason: reason || undefined,
+      };
+    })
+    .filter((candidate) =>
+      candidate.business ||
+      candidate.contact ||
+      candidate.phone ||
+      candidate.email ||
+      candidate.address ||
+      candidate.businessType
+    );
+
+  return { candidates, columns };
+}
+
+function hasLeadInsights(lead: Lead) {
+  return Boolean(
+    lead.contactTitle ||
+      lead.employeeCount ||
+      lead.currentVendingStatus ||
+      lead.currentVendorName ||
+      lead.productPreferences ||
+      lead.decisionMakerName ||
+      lead.decisionMakerPhone ||
+      lead.decisionMakerEmail ||
+      lead.visitDate ||
+      lead.visitTime ||
+      lead.callbackDate ||
+      lead.callbackTime ||
+      lead.emailSent ||
+      (lead.painPoints && lead.painPoints.length > 0)
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
@@ -101,8 +378,30 @@ export default function PipelinePage() {
   const [expandedLead, setExpandedLead] = useState<string | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showGoogleMapsModal, setShowGoogleMapsModal] = useState(false);
+  const [showExcelImportModal, setShowExcelImportModal] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [callingLeadId, setCallingLeadId] = useState<string | null>(null);
   const [callStatus, setCallStatus] = useState<{ leadId: string; message: string; type: "success" | "error" } | null>(null);
+  const [pipelineLoading, setPipelineLoading] = useState(true);
+  const [capturedByLead, setCapturedByLead] = useState<Record<string, CapturedLeadData | null>>({});
+  const [bookingLeadId, setBookingLeadId] = useState<string | null>(null);
+  const [bookingStatus, setBookingStatus] = useState<Record<string, BookingStatusMessage>>({});
+  const [bookingOptions, setBookingOptions] = useState<Record<string, SchedulerAvailableSlot[]>>({});
+  const [googleCalendarStatus, setGoogleCalendarStatus] = useState<GoogleCalendarStatus | null>(null);
+  const [googleCalendarBusy, setGoogleCalendarBusy] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [listPage, setListPage] = useState(1);
+
+  const syncPendingCalls = useCallback(async () => {
+    try {
+      await fetch("/api/outreach/sync-calls", {
+        method: "POST",
+      });
+    } catch (error) {
+      console.error("Failed to sync pending calls:", error);
+    }
+  }, []);
 
   // Fetch leads from API
   const fetchLeads = useCallback(async () => {
@@ -114,14 +413,130 @@ export default function PipelinePage() {
       }
     } catch (err) {
       console.error("Failed to fetch leads:", err);
+    } finally {
+      setPipelineLoading(false);
+    }
+  }, []);
+
+  const fetchGoogleCalendarStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/google-calendar/status");
+      const data = await res.json();
+      if (res.ok) {
+        setGoogleCalendarStatus(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch Google Calendar status:", error);
     }
   }, []);
 
   useEffect(() => {
-    fetchLeads();
-  }, [fetchLeads]);
+    syncPendingCalls().finally(() => {
+      fetchLeads();
+    });
+    fetchGoogleCalendarStatus();
+  }, [fetchGoogleCalendarStatus, fetchLeads, syncPendingCalls]);
 
-  // Trigger a VAPI call
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      syncPendingCalls().finally(() => {
+        fetchLeads();
+      });
+    }, 15000);
+
+    const handleFocus = () => {
+      syncPendingCalls().finally(() => {
+        fetchLeads();
+      });
+    };
+
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [fetchLeads, syncPendingCalls]);
+
+  const connectGoogleCalendar = () => {
+    window.open("/api/google-calendar/connect", "_blank", "noopener,noreferrer");
+  };
+
+  const disconnectGoogleCalendar = async () => {
+    setGoogleCalendarBusy(true);
+    try {
+      const res = await fetch("/api/google-calendar/status", {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to disconnect Google Calendar.");
+      }
+
+      setGoogleCalendarStatus({
+        connected: false,
+        calendarId: null,
+        connectedAt: null,
+      });
+      setCallStatus({
+        leadId: "calendar",
+        message: data.message || "Google Calendar disconnected.",
+        type: "success",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to disconnect Google Calendar.";
+      setCallStatus({
+        leadId: "calendar",
+        message,
+        type: "error",
+      });
+    } finally {
+      setGoogleCalendarBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!expandedLead || capturedByLead[expandedLead] !== undefined) {
+      return;
+    }
+
+    const lead = leads.find((item) => item.id === expandedLead);
+    if (!lead?.vapiCallId && lead?.callLogs.length === 0) {
+      setCapturedByLead((current) => ({ ...current, [expandedLead]: null }));
+      return;
+    }
+
+    let isCancelled = false;
+
+    const fetchCapturedLeadData = async () => {
+      try {
+        const res = await fetch(`/api/leads/${expandedLead}/captured`);
+        if (!res.ok) {
+          throw new Error("Failed to fetch captured lead data");
+        }
+
+        const data = await res.json();
+        if (!isCancelled) {
+          setCapturedByLead((current) => ({
+            ...current,
+            [expandedLead]: data.captured || null,
+          }));
+        }
+      } catch (error) {
+        console.error("Failed to fetch captured lead data:", error);
+        if (!isCancelled) {
+          setCapturedByLead((current) => ({ ...current, [expandedLead]: null }));
+        }
+      }
+    };
+
+    fetchCapturedLeadData();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [capturedByLead, expandedLead, leads]);
+
+  // Trigger an ElevenLabs call
   const triggerCall = async (leadId: string) => {
     setCallingLeadId(leadId);
     setCallStatus(null);
@@ -145,6 +560,161 @@ export default function PipelinePage() {
     }
   };
 
+  const removeLead = async (leadId: string) => {
+    try {
+      const res = await fetch(`/api/leads?id=${encodeURIComponent(leadId)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to delete lead.");
+      }
+
+      setLeads((current) => current.filter((lead) => lead.id !== leadId));
+      setCapturedByLead((current) => {
+        const next = { ...current };
+        delete next[leadId];
+        return next;
+      });
+      setBookingStatus((current) => {
+        const next = { ...current };
+        delete next[leadId];
+        return next;
+      });
+      setBookingOptions((current) => {
+        const next = { ...current };
+        delete next[leadId];
+        return next;
+      });
+      if (expandedLead === leadId) {
+        setExpandedLead(null);
+      }
+      setCallStatus({ leadId, message: "Lead deleted.", type: "success" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to delete lead.";
+      setCallStatus({ leadId, message, type: "error" });
+    }
+  };
+
+  const bookCalendlyMeeting = async (leadId: string, startTime?: string) => {
+    setBookingLeadId(leadId);
+    setBookingStatus((current) => {
+      const next = { ...current };
+      delete next[leadId];
+      return next;
+    });
+
+    try {
+      const res = await fetch("/api/calendly/book", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId, ...(startTime ? { startTime } : {}) }),
+      });
+      const data = await res.json();
+
+      if (res.ok && data.booked) {
+        setBookingStatus((current) => ({
+          ...current,
+          [leadId]: {
+            type: "success",
+            message: data.autoAdjusted
+              ? `Requested time was unavailable, so Google Calendar booked the nearest slot: ${formatEasternDateTime(data.booking.startTime)}`
+              : `Google Calendar meeting booked for ${formatEasternDateTime(data.booking.startTime)}`,
+          },
+        }));
+        setBookingOptions((current) => ({ ...current, [leadId]: [] }));
+        fetchLeads();
+        return;
+      }
+
+      if (data.unavailable) {
+        setBookingStatus((current) => ({
+          ...current,
+          [leadId]: {
+            type: "info",
+            message: "Requested time is unavailable in Google Calendar. Pick one of the nearby open slots below.",
+          },
+        }));
+        setBookingOptions((current) => ({ ...current, [leadId]: data.availableSlots || [] }));
+        return;
+      }
+
+      if (data.schedulingRequired) {
+        setBookingStatus((current) => ({
+          ...current,
+          [leadId]: {
+            type: "info",
+            message:
+              data.error ||
+              "Google Calendar is not connected yet. Connect it once to enable booking and invite sending.",
+            actionUrl: data.schedulingUrl,
+            actionLabel: data.schedulingUrl === "/api/google-calendar/connect" ? "Connect Google Calendar" : "Open Scheduling Link",
+          },
+        }));
+        setBookingOptions((current) => ({ ...current, [leadId]: [] }));
+        return;
+      }
+
+      setBookingStatus((current) => ({
+        ...current,
+        [leadId]: {
+          type: "error",
+          message: data.error || "Failed to book Google Calendar meeting.",
+        },
+      }));
+    } catch {
+      setBookingStatus((current) => ({
+        ...current,
+        [leadId]: {
+          type: "error",
+          message: "Network error while booking Google Calendar meeting.",
+        },
+      }));
+    } finally {
+      setBookingLeadId(null);
+    }
+  };
+
+  const filteredLeads = useMemo(() => {
+    const query = normalizeText(searchQuery);
+    if (!query) return leads;
+
+    return leads.filter((lead) => {
+      const haystack = [
+        lead.business,
+        lead.contact,
+        lead.phone,
+        lead.email,
+        lead.address,
+        lead.businessType,
+        lead.stage,
+        lead.source,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(query);
+    });
+  }, [leads, searchQuery]);
+
+  const totalListPages = Math.max(1, Math.ceil(filteredLeads.length / LIST_PAGE_SIZE));
+
+  useEffect(() => {
+    setListPage(1);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (listPage > totalListPages) {
+      setListPage(totalListPages);
+    }
+  }, [listPage, totalListPages]);
+
+  const paginatedLeads = useMemo(() => {
+    const startIndex = (listPage - 1) * LIST_PAGE_SIZE;
+    return filteredLeads.slice(startIndex, startIndex + LIST_PAGE_SIZE);
+  }, [filteredLeads, listPage]);
+
   const totalCalls = leads.reduce((s, l) => s + l.callLogs.length, 0);
   const totalEmails = leads.reduce((s, l) => s + l.emailLogs.length, 0);
   const interested = leads.filter((l) => ["Interested", "Site Visit Requested", "Proposal Requested"].includes(l.stage)).length;
@@ -154,6 +724,29 @@ export default function PipelinePage() {
       <Header title="Pipeline" />
 
       <div className="page-padding" style={{ padding: isMobile ? 16 : "24px 32px" }}>
+        {pipelineLoading && (
+          <div style={{
+            marginBottom: 20,
+            background: "#fff",
+            border: "1px solid #d5d9e2",
+            borderRadius: 14,
+            padding: isMobile ? "18px 16px" : "20px 22px",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            color: "#475569",
+            boxShadow: "0 2px 6px rgba(0,0,0,0.05)",
+          }}>
+            <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>Loading pipeline</div>
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                Pulling leads, call history, email activity, and meeting data.
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Stat Cards */}
         <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
           <StatBox icon={<Users size={20} color="#16a34a" />} iconBg="#dcfce7"
@@ -172,7 +765,7 @@ export default function PipelinePage() {
           display: "flex", alignItems: isMobile ? "stretch" : "center", justifyContent: "space-between", marginBottom: 20,
           flexWrap: "wrap", gap: isMobile ? 10 : 12, flexDirection: isMobile ? "column" : "row",
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", flex: 1 }}>
             <div style={{ display: "flex", background: "#fff", borderRadius: 8, border: "1px solid #d5d9e2", overflow: "hidden" }}>
               {(["kanban", "list"] as const).map((v) => (
                 <button key={v} onClick={() => setView(v)} style={{
@@ -183,22 +776,61 @@ export default function PipelinePage() {
                 }}>{v === "kanban" ? "Board" : "List"}</button>
               ))}
             </div>
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              minWidth: isMobile ? "100%" : 280,
+              flex: isMobile ? undefined : 1,
+              maxWidth: isMobile ? "100%" : 360,
+              background: "#fff",
+              borderRadius: 8,
+              border: "1px solid #d5d9e2",
+              padding: "0 12px",
+            }}>
+              <Search size={14} color="#94a3b8" />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search leads, phone, email, address..."
+                style={{
+                  flex: 1,
+                  border: "none",
+                  outline: "none",
+                  background: "transparent",
+                  fontSize: 13,
+                  color: "#0f172a",
+                  padding: "10px 0",
+                }}
+              />
+            </div>
             <span style={{ fontSize: 13, color: "#94a3b8" }}>
+              {filteredLeads.length} of {leads.length} leads · {kanbanStages.length} stages
+            </span>
+            <span style={{ fontSize: 13, color: "#94a3b8", display: "none" }}>
               {leads.length} leads · {kanbanStages.length} stages
             </span>
           </div>
 
-          <div className="pipeline-actions" style={{ display: "flex", gap: 10 }}>
+          <div className="pipeline-actions" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={() => setShowExcelImportModal(true)} style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
+              background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
+              fontSize: 13, fontWeight: 500, cursor: "pointer",
+            }}><FileSpreadsheet size={14} /> Import Excel</button>
             <button style={{
               display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
               background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
               fontSize: 13, fontWeight: 500, cursor: "pointer",
-            }}><Upload size={14} /> Import Excel</button>
-            <button style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
-              background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
-              fontSize: 13, fontWeight: 500, cursor: "pointer",
-            }}><MapPin size={14} /> Google Maps</button>
+            }} onClick={() => setShowGoogleMapsModal(true)}><MapPin size={14} /> Google Maps</button>
+            <button
+              onClick={() => setShowTemplateModal(true)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
+                background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
+                fontSize: 13, fontWeight: 500, cursor: "pointer",
+              }}
+            ><Settings2 size={14} /> Email Templates</button>
             <button
               onClick={() => setShowAddModal(true)}
               style={{
@@ -207,6 +839,94 @@ export default function PipelinePage() {
                 fontSize: 13, fontWeight: 600, cursor: "pointer",
               }}
             ><Plus size={16} /> Add Lead</button>
+          </div>
+        </div>
+
+        <div style={{
+          marginBottom: 16,
+          padding: isMobile ? "12px 14px" : "14px 16px",
+          borderRadius: 12,
+          border: "1px solid #d5d9e2",
+          background: "#fff",
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+        }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", marginBottom: 4 }}>
+              Google Calendar Account
+            </div>
+            <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+              {googleCalendarStatus?.connected
+                ? `Connected to ${googleCalendarStatus.calendarId || "primary"}${googleCalendarStatus.connectedAt ? ` · ${formatEasternDateTime(googleCalendarStatus.connectedAt)}` : ""}`
+                : "No Google Calendar account connected yet."}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {googleCalendarStatus?.connected ? (
+              <>
+                <button
+                  onClick={disconnectGoogleCalendar}
+                  disabled={googleCalendarBusy}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "8px 14px",
+                    background: "#fff1f2",
+                    color: "#be123c",
+                    border: "1px solid #fecdd3",
+                    borderRadius: 8,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: googleCalendarBusy ? "not-allowed" : "pointer",
+                    opacity: googleCalendarBusy ? 0.7 : 1,
+                  }}
+                >
+                  {googleCalendarBusy ? <><Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Disconnecting...</> : "Disconnect Calendar"}
+                </button>
+                <button
+                  onClick={connectGoogleCalendar}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "8px 14px",
+                    background: "#fff",
+                    color: "#0f172a",
+                    border: "1px solid #d5d9e2",
+                    borderRadius: 8,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Connect Different Account
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={connectGoogleCalendar}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "8px 14px",
+                  background: "#16a34a",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Connect Google Calendar
+              </button>
+            )}
           </div>
         </div>
 
@@ -227,7 +947,7 @@ export default function PipelinePage() {
         )}
 
         {/* Empty State */}
-        {leads.length === 0 && (
+        {!pipelineLoading && leads.length === 0 && (
           <div style={{
             textAlign: "center", padding: "60px 20px", background: "#fff",
             borderRadius: 14, border: "1px solid #d5d9e2",
@@ -248,21 +968,39 @@ export default function PipelinePage() {
           </div>
         )}
 
+        {!pipelineLoading && leads.length > 0 && filteredLeads.length === 0 && (
+          <div style={{
+            padding: "32px 24px",
+            borderRadius: 14,
+            border: "1px solid #d5d9e2",
+            background: "#fff",
+            textAlign: "center",
+            color: "#64748b",
+            marginBottom: 16,
+          }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", marginBottom: 6 }}>No matching leads</div>
+            <div style={{ fontSize: 13 }}>
+              Try a different search term or clear the search box to see the full pipeline again.
+            </div>
+          </div>
+        )}
+
         {/* ========== KANBAN VIEW ========== */}
-        {leads.length > 0 && view === "kanban" && (
-          <div style={{ overflowX: "auto" }}>
+        {!pipelineLoading && filteredLeads.length > 0 && view === "kanban" && (
+          <div style={{ overflowX: "auto", maxHeight: "calc(100vh - 240px)" }}>
           <div className="kanban-grid" style={{
             display: "grid",
             gridTemplateColumns: `repeat(${kanbanStages.length}, minmax(200px, 1fr))`,
-            gap: 10, overflowX: "auto", paddingBottom: 16,
+            gap: 10, overflowX: "auto", paddingBottom: 16, alignItems: "start",
           }}>
             {kanbanStages.map((stage) => {
               const sc = stageConfig[stage];
-              const stageLeads = leads.filter((l) => l.stage === stage);
+              const stageLeads = filteredLeads.filter((l) => l.stage === stage);
+              const visibleStageLeads = stageLeads;
               return (
                 <div key={stage} style={{
                   background: sc.bg, borderRadius: 12, border: `1px solid ${sc.border}`,
-                  display: "flex", flexDirection: "column", minHeight: 280,
+                  display: "flex", flexDirection: "column", minHeight: 280, maxHeight: "calc(100vh - 260px)",
                 }}>
                   <div style={{
                     padding: "12px 14px", borderBottom: `2px solid ${sc.border}`,
@@ -280,13 +1018,14 @@ export default function PipelinePage() {
                   </div>
 
                   <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8, flex: 1, overflowY: "auto" }}>
-                    {stageLeads.map((lead) => (
+                    {visibleStageLeads.map((lead) => (
                       <KanbanCard
                         key={lead.id}
                         lead={lead}
                         expanded={expandedLead === lead.id}
                         onToggle={() => setExpandedLead(expandedLead === lead.id ? null : lead.id)}
                         onTriggerCall={() => triggerCall(lead.id)}
+                        onDelete={() => removeLead(lead.id)}
                         isCalling={callingLeadId === lead.id}
                       />
                     ))}
@@ -304,7 +1043,7 @@ export default function PipelinePage() {
         )}
 
         {/* ========== LIST VIEW ========== */}
-        {leads.length > 0 && view === "list" && (
+        {!pipelineLoading && filteredLeads.length > 0 && view === "list" && (
           <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
           <div style={{
             background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
@@ -323,7 +1062,7 @@ export default function PipelinePage() {
               <TH>Last Activity</TH>
               <TH>Action</TH>
             </div>
-            {leads.map((l) => {
+            {paginatedLeads.map((l) => {
               const sc = stageConfig[l.stage];
               return (
                 <div key={l.id}>
@@ -359,7 +1098,7 @@ export default function PipelinePage() {
                         {l.callLogs.length}/3
                       </span>
                       <div style={{ fontSize: 11, color: "#94a3b8" }}>
-                        {l.emailLogs.length > 0 ? `${l.emailLogs.length} email${l.emailLogs.length > 1 ? "s" : ""}` : "No email"}
+                        {l.email || "No saved email"}
                       </div>
                     </div>
                     <div>
@@ -394,11 +1133,24 @@ export default function PipelinePage() {
                   </div>
 
                   {/* Expanded detail */}
-                  {expandedLead === l.id && (l.callLogs.length > 0 || l.emailLogs.length > 0) && (
+                  {expandedLead === l.id && (l.callLogs.length > 0 || l.emailLogs.length > 0 || hasLeadInsights(l)) && (
                     <div style={{
                       padding: "16px 22px 20px", background: "#f1f5f9",
                       borderBottom: "1px solid #e5e7eb",
                     }}>
+                      {(l.callLogs.length > 0 || hasLeadInsights(l)) && (
+                        <LeadInsightsPanel lead={l} captured={capturedByLead[l.id]} />
+                      )}
+                      {(l.stage === "Site Visit Requested" || Boolean(l.visitDate)) && (
+                        <CalendlyBookingPanel
+                          lead={l}
+                          status={bookingStatus[l.id] || null}
+                          options={bookingOptions[l.id] || []}
+                          isBooking={bookingLeadId === l.id}
+                          onBook={() => bookCalendlyMeeting(l.id)}
+                          onBookAlternative={(slot) => bookCalendlyMeeting(l.id, slot.start_time)}
+                        />
+                      )}
                       {l.callLogs.length > 0 && (
                         <div style={{ marginBottom: l.emailLogs.length > 0 ? 14 : 0 }}>
                           <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
@@ -470,6 +1222,61 @@ export default function PipelinePage() {
                 </div>
               );
             })}
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              padding: "14px 22px",
+              borderTop: "1px solid #e5e7eb",
+              background: "#f8fafc",
+              flexWrap: "wrap",
+            }}>
+              <div style={{ fontSize: 12, color: "#64748b" }}>
+                Showing {paginatedLeads.length === 0 ? 0 : (listPage - 1) * LIST_PAGE_SIZE + 1} - {Math.min(listPage * LIST_PAGE_SIZE, filteredLeads.length)} of {filteredLeads.length} filtered leads
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  onClick={() => setListPage((current) => Math.max(1, current - 1))}
+                  disabled={listPage === 1}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: "1px solid #d5d9e2",
+                    background: "#fff",
+                    color: listPage === 1 ? "#94a3b8" : "#374151",
+                    cursor: listPage === 1 ? "not-allowed" : "pointer",
+                  }}
+                >
+                  <ChevronLeft size={14} />
+                  Prev
+                </button>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>
+                  Page {listPage} of {totalListPages}
+                </span>
+                <button
+                  onClick={() => setListPage((current) => Math.min(totalListPages, current + 1))}
+                  disabled={listPage === totalListPages}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: "1px solid #d5d9e2",
+                    background: "#fff",
+                    color: listPage === totalListPages ? "#94a3b8" : "#374151",
+                    cursor: listPage === totalListPages ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Next
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
           </div>
           </div>
         )}
@@ -481,7 +1288,7 @@ export default function PipelinePage() {
           lineHeight: 1.6,
         }}>
           <strong>How it works:</strong> Leads are imported via Excel or Google Maps (25mi radius), or added manually.
-          AI agent (Vapi) initiates calls and emails — max 3 call attempts per lead.
+          AI agent (ElevenLabs) initiates calls and emails — max 3 call attempts per lead.
           All call details, duration, and AI-generated summaries are logged automatically.
           Leads are classified based on the client&apos;s response during the call:
           Interested, Not Interested, Callback, Site Visit Requested, or Proposal Requested.
@@ -494,6 +1301,49 @@ export default function PipelinePage() {
         <AddLeadModal
           onClose={() => setShowAddModal(false)}
           onAdded={() => { setShowAddModal(false); fetchLeads(); }}
+        />
+      )}
+
+      {showGoogleMapsModal && (
+        <GoogleMapsModal
+          existingLeads={leads}
+          onClose={() => setShowGoogleMapsModal(false)}
+          onImported={(message) => {
+            setShowGoogleMapsModal(false);
+            setCallStatus({ leadId: "google-maps", message, type: "success" });
+            fetchLeads();
+          }}
+          onError={(message) => {
+            setCallStatus({ leadId: "google-maps", message, type: "error" });
+          }}
+        />
+      )}
+
+      {showExcelImportModal && (
+        <ExcelImportModal
+          existingLeads={leads}
+          onClose={() => setShowExcelImportModal(false)}
+          onImported={(message) => {
+            setShowExcelImportModal(false);
+            setCallStatus({ leadId: "excel-import", message, type: "success" });
+            fetchLeads();
+          }}
+          onError={(message) => {
+            setCallStatus({ leadId: "excel-import", message, type: "error" });
+          }}
+        />
+      )}
+
+      {showTemplateModal && (
+        <EmailTemplatesModal
+          onClose={() => setShowTemplateModal(false)}
+          onSaved={(message) => {
+            setShowTemplateModal(false);
+            setCallStatus({ leadId: "templates", message, type: "success" });
+          }}
+          onError={(message) => {
+            setCallStatus({ leadId: "templates", message, type: "error" });
+          }}
         />
       )}
 
@@ -642,23 +1492,18 @@ function AddLeadModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
             </div>
           </div>
 
-          <div style={{ marginBottom: 20 }}>
-            <label style={labelStyle}>Contact Method</label>
-            <div style={{ display: "flex", gap: 8 }}>
-              {(["Call", "Email", "Call + Email"] as const).map((method) => (
-                <button
-                  key={method}
-                  type="button"
-                  onClick={() => update("contactMethod", method)}
-                  style={{
-                    padding: "8px 16px", fontSize: 12, fontWeight: 500, borderRadius: 8,
-                    border: form.contactMethod === method ? "2px solid #16a34a" : "1px solid #d5d9e2",
-                    background: form.contactMethod === method ? "#dcfce7" : "#fff",
-                    color: form.contactMethod === method ? "#166534" : "#374151",
-                    cursor: "pointer",
-                  }}
-                >{method}</button>
-              ))}
+          <div style={{
+            marginBottom: 20,
+            padding: "12px 14px",
+            borderRadius: 10,
+            border: "1px solid #dcfce7",
+            background: "#f0fdf4",
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#166534", marginBottom: 4 }}>
+              Outreach method
+            </div>
+            <div style={{ fontSize: 12, color: "#15803d", lineHeight: 1.5 }}>
+              Manual leads added here will start in the calling workflow. Email follow-up still works automatically later if the call is missed and an email exists on the lead.
             </div>
           </div>
 
@@ -692,13 +1537,1456 @@ function AddLeadModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
   );
 }
 
+function EmailTemplatesModal({
+  onClose,
+  onSaved,
+  onError,
+}: {
+  onClose: () => void;
+  onSaved: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const isMobile = useIsMobile(768);
+  const [activeStage, setActiveStage] = useState<OutreachTemplateStage>("primary");
+  const [templates, setTemplates] = useState<OutreachTemplateMap | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTemplates = async () => {
+      try {
+        const res = await fetch("/api/outreach/templates");
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to load email templates.");
+        }
+
+        if (!cancelled) {
+          setTemplates(data.templates as OutreachTemplateMap);
+        }
+      } catch (loadError) {
+        const message = loadError instanceof Error ? loadError.message : "Failed to load email templates.";
+        if (!cancelled) {
+          setError(message);
+          onError(message);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadTemplates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [onError]);
+
+  const updateTemplate = (field: "subject" | "body", value: string) => {
+    setTemplates((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        [activeStage]: {
+          ...current[activeStage],
+          [field]: value,
+        },
+      };
+    });
+  };
+
+  const saveTemplates = async () => {
+    if (!templates) return;
+
+    setSaving(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/outreach/templates", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ templates }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to save email templates.");
+      }
+
+      setTemplates(data.templates as OutreachTemplateMap);
+      onSaved("Email templates updated. New triggered emails will use the latest version.");
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : "Failed to save email templates.";
+      setError(message);
+      onError(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const template = templates?.[activeStage];
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1200,
+        padding: isMobile ? 12 : 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: isMobile ? "100%" : "min(920px, calc(100vw - 48px))",
+          maxHeight: "90vh",
+          overflow: "auto",
+          background: "#fff",
+          borderRadius: 16,
+          border: "1px solid #d5d9e2",
+          boxShadow: "0 18px 40px rgba(15, 23, 42, 0.18)",
+        }}
+      >
+        <div style={{
+          padding: isMobile ? "16px" : "18px 22px",
+          borderBottom: "1px solid #e5e7eb",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+        }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Email Templates</div>
+            <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>
+              Change the copy here and every new triggered outreach email will use the latest version.
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+            <X size={20} color="#94a3b8" />
+          </button>
+        </div>
+
+        <div style={{ padding: isMobile ? "16px" : "18px 22px" }}>
+          {error && (
+            <div style={{
+              marginBottom: 16,
+              padding: "10px 14px",
+              background: "#fef2f2",
+              color: "#991b1b",
+              borderRadius: 8,
+              fontSize: 12,
+              border: "1px solid #fecaca",
+            }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+            {[
+              { key: "primary" as OutreachTemplateStage, label: "Primary" },
+              { key: "follow_up_1" as OutreachTemplateStage, label: "Follow-up 1" },
+              { key: "follow_up_2" as OutreachTemplateStage, label: "Follow-up 2" },
+            ].map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setActiveStage(option.key)}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 999,
+                  border: activeStage === option.key ? "1px solid #16a34a" : "1px solid #d5d9e2",
+                  background: activeStage === option.key ? "#dcfce7" : "#fff",
+                  color: activeStage === option.key ? "#166534" : "#475569",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
+          {loading || !template ? (
+            <div style={{ padding: "40px 0", textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+              Loading templates...
+            </div>
+          ) : (
+            <>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4, display: "block" }}>Subject</label>
+                <input
+                  value={template.subject}
+                  onChange={(e) => updateTemplate("subject", e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    fontSize: 13,
+                    border: "1px solid #d5d9e2",
+                    borderRadius: 8,
+                    outline: "none",
+                    background: "#fff",
+                    color: "#0f172a",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4, display: "block" }}>Body</label>
+                <textarea
+                  value={template.body}
+                  onChange={(e) => updateTemplate("body", e.target.value)}
+                  rows={14}
+                  style={{
+                    width: "100%",
+                    padding: "12px 14px",
+                    fontSize: 13,
+                    border: "1px solid #d5d9e2",
+                    borderRadius: 10,
+                    outline: "none",
+                    background: "#fff",
+                    color: "#0f172a",
+                    boxSizing: "border-box",
+                    resize: "vertical",
+                    lineHeight: 1.6,
+                  }}
+                />
+              </div>
+
+              <div style={{
+                padding: "12px 14px",
+                borderRadius: 10,
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                fontSize: 12,
+                color: "#475569",
+                lineHeight: 1.6,
+                marginBottom: 16,
+              }}>
+                <strong>Available variables:</strong> {["{{contactFirstName}}", "{{contactName}}", "{{businessName}}", "{{senderName}}", "{{contactPhone}}", "{{replyToEmail}}"].join(" · ")}
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  style={{
+                    padding: "10px 18px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    background: "#fff",
+                    color: "#374151",
+                    border: "1px solid #d5d9e2",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveTemplates}
+                  disabled={saving}
+                  style={{
+                    padding: "10px 18px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    background: "#16a34a",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 8,
+                    cursor: saving ? "not-allowed" : "pointer",
+                    opacity: saving ? 0.7 : 1,
+                  }}
+                >
+                  {saving ? "Saving..." : "Save Templates"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExcelImportModal({
+  existingLeads,
+  onClose,
+  onImported,
+  onError,
+}: {
+  existingLeads: Lead[];
+  onClose: () => void;
+  onImported: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const isMobile = useIsMobile(768);
+  const [fileName, setFileName] = useState("");
+  const [loadingFile, setLoadingFile] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [columns, setColumns] = useState<ExcelMappedColumns>({});
+  const [candidates, setCandidates] = useState<ExcelLeadCandidate[]>([]);
+  const [extractCount, setExtractCount] = useState("50");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const visibleCandidates = useMemo(() => {
+    const parsedCount = Number(extractCount);
+    const limit = Number.isFinite(parsedCount) && parsedCount > 0 ? parsedCount : candidates.length;
+    return candidates.slice(0, Math.min(limit, candidates.length));
+  }, [candidates, extractCount]);
+
+  const importableVisibleCandidates = useMemo(
+    () => visibleCandidates.filter((candidate) => candidate.importable && !excelCandidateMatchesExistingLead(candidate, existingLeads)),
+    [existingLeads, visibleCandidates]
+  );
+
+  useEffect(() => {
+    const visibleKeys = new Set(visibleCandidates.map((candidate) => `${candidate.rowNumber}-${candidate.business}-${candidate.phone}`));
+    setSelectedIds((current) => current.filter((key) => visibleKeys.has(key)));
+  }, [visibleCandidates]);
+
+  const parseFile = async (file: File) => {
+    setLoadingFile(true);
+    setError("");
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const firstSheetName = workbook.SheetNames[0];
+
+      if (!firstSheetName) {
+        throw new Error("The file has no sheets to import.");
+      }
+
+      const sheet = workbook.Sheets[firstSheetName];
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+        defval: "",
+        raw: false,
+      });
+
+      if (!rows.length) {
+        throw new Error("The selected file is empty.");
+      }
+
+      const parsed = parseExcelCandidates(rows);
+      setColumns(parsed.columns);
+      setCandidates(parsed.candidates);
+      setExtractCount(String(Math.min(50, parsed.candidates.length)));
+      setSelectedIds(
+        parsed.candidates
+          .slice(0, Math.min(50, parsed.candidates.length))
+          .filter((candidate) => candidate.importable && !excelCandidateMatchesExistingLead(candidate, existingLeads))
+          .map((candidate) => `${candidate.rowNumber}-${candidate.business}-${candidate.phone}`)
+      );
+      setFileName(file.name);
+    } catch (fileError) {
+      const message = fileError instanceof Error ? fileError.message : "Failed to parse the selected file.";
+      setError(message);
+      onError(message);
+    } finally {
+      setLoadingFile(false);
+    }
+  };
+
+  const toggleSelection = (candidateKey: string) => {
+    setSelectedIds((current) =>
+      current.includes(candidateKey)
+        ? current.filter((item) => item !== candidateKey)
+        : [...current, candidateKey]
+    );
+  };
+
+  const selectAllVisible = () => {
+    setSelectedIds(
+      importableVisibleCandidates.map((candidate) => `${candidate.rowNumber}-${candidate.business}-${candidate.phone}`)
+    );
+  };
+
+  const clearSelection = () => {
+    setSelectedIds([]);
+  };
+
+  const importCandidates = async (triggerCalls: boolean) => {
+    const importList = importableVisibleCandidates.filter((candidate) =>
+      selectedIds.includes(`${candidate.rowNumber}-${candidate.business}-${candidate.phone}`)
+    );
+
+    if (!importList.length) {
+      setError("Select at least one importable row first.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/leads/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leads: importList.map((candidate) => ({
+            business: candidate.business,
+            contact: candidate.contact || "Front Desk",
+            phone: candidate.phone,
+            email: candidate.email,
+            address: candidate.address,
+            businessType: candidate.businessType,
+            source: "Excel Import",
+            contactMethod: "Call",
+          })),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to import Excel leads.");
+      }
+
+      if (!data.importedCount) {
+        throw new Error("No new leads were imported. The selected rows may already exist or may be missing required fields.");
+      }
+
+      let calledCount = 0;
+      if (triggerCalls && Array.isArray(data.imported)) {
+        for (const lead of data.imported as Array<{ id: string }>) {
+          try {
+            const callRes = await fetch("/api/calls/trigger", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ leadId: lead.id }),
+            });
+
+            if (callRes.ok) {
+              calledCount += 1;
+            }
+          } catch {
+            // keep importing even if one call trigger fails
+          }
+        }
+      }
+
+      const message = triggerCalls
+        ? `Imported ${data.importedCount} Excel leads and started ${calledCount} calls${data.skippedCount ? `, skipped ${data.skippedCount}` : ""}.`
+        : `Imported ${data.importedCount} Excel leads${data.skippedCount ? `, skipped ${data.skippedCount}` : ""}.`;
+
+      onImported(message);
+    } catch (importError) {
+      const message = importError instanceof Error ? importError.message : "Failed to import Excel leads.";
+      setError(message);
+      onError(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1200,
+        padding: isMobile ? 12 : 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: isMobile ? "100%" : "min(1100px, calc(100vw - 48px))",
+          maxHeight: "90vh",
+          overflow: "auto",
+          background: "#fff",
+          borderRadius: 16,
+          border: "1px solid #d5d9e2",
+          boxShadow: "0 18px 40px rgba(15, 23, 42, 0.18)",
+        }}
+      >
+        <div style={{
+          padding: isMobile ? "16px" : "18px 22px",
+          borderBottom: "1px solid #e5e7eb",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+        }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Excel Lead Import</div>
+            <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>
+              Upload CSV or XLSX, preview how many rows to extract, then import only the leads you want.
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+            <X size={20} color="#94a3b8" />
+          </button>
+        </div>
+
+        <div style={{ padding: isMobile ? "16px" : "18px 22px" }}>
+          {error && (
+            <div style={{
+              marginBottom: 16,
+              padding: "10px 14px",
+              background: "#fef2f2",
+              color: "#991b1b",
+              borderRadius: 8,
+              fontSize: 12,
+              border: "1px solid #fecaca",
+            }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: isMobile ? "1fr" : "1.6fr 180px",
+            gap: 12,
+            marginBottom: 18,
+            alignItems: "end",
+          }}>
+            <label style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              minHeight: 108,
+              borderRadius: 14,
+              border: "1px dashed #94a3b8",
+              background: "#f8fafc",
+              color: "#334155",
+              cursor: "pointer",
+              padding: "14px 18px",
+              textAlign: "center",
+              flexDirection: "column",
+            }}>
+              <Upload size={20} color="#16a34a" />
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                {loadingFile ? "Reading file..." : fileName || "Upload CSV or XLSX"}
+              </div>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                We’ll detect the important columns even if the names differ.
+              </div>
+              <input
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    parseFile(file);
+                  }
+                }}
+              />
+            </label>
+
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4, display: "block" }}>
+                How many rows should we extract?
+              </label>
+              <input
+                value={extractCount}
+                onChange={(e) => setExtractCount(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  fontSize: 13,
+                  border: "1px solid #d5d9e2",
+                  borderRadius: 8,
+                  outline: "none",
+                  background: "#fff",
+                  color: "#0f172a",
+                  boxSizing: "border-box",
+                }}
+                placeholder="e.g., 100"
+              />
+            </div>
+          </div>
+
+          {candidates.length > 0 && (
+            <>
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr" : "repeat(4, minmax(0, 1fr))",
+                gap: 12,
+                marginBottom: 16,
+              }}>
+                {[
+                  { label: "Total Rows", value: String(candidates.length) },
+                  { label: "Previewing", value: String(visibleCandidates.length) },
+                  { label: "Importable", value: String(importableVisibleCandidates.length) },
+                  { label: "Selected", value: String(selectedIds.length) },
+                ].map((item) => (
+                  <div key={item.label} style={{
+                    padding: "12px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #e2e8f0",
+                    background: "#f8fafc",
+                  }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                      {item.label}
+                    </div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 6 }}>
+                      {item.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{
+                padding: "12px 14px",
+                borderRadius: 10,
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                fontSize: 12,
+                color: "#475569",
+                lineHeight: 1.6,
+                marginBottom: 16,
+              }}>
+                <strong>Detected columns:</strong>{" "}
+                Business = <strong>{columns.business || "Not found"}</strong> · Contact = <strong>{columns.contact || "Fallback to Front Desk"}</strong> ·
+                Phone = <strong>{columns.phone || "Not found"}</strong> · Email = <strong>{columns.email || "Not found"}</strong> ·
+                Address = <strong>{columns.address || "Not found"}</strong> · Type = <strong>{columns.businessType || "Not found"}</strong>
+              </div>
+
+              <div style={{
+                marginBottom: 12,
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={selectAllVisible}
+                    style={{
+                      padding: "7px 10px",
+                      background: "#fff",
+                      color: "#374151",
+                      border: "1px solid #d5d9e2",
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Select All Visible
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearSelection}
+                    style={{
+                      padding: "7px 10px",
+                      background: "#fff",
+                      color: "#374151",
+                      border: "1px solid #d5d9e2",
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => importCandidates(false)}
+                    disabled={saving}
+                    style={{
+                      padding: "9px 12px",
+                      background: "#fff",
+                      color: "#374151",
+                      border: "1px solid #d5d9e2",
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: saving ? "not-allowed" : "pointer",
+                      opacity: saving ? 0.7 : 1,
+                    }}
+                  >
+                    Add Selected
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => importCandidates(true)}
+                    disabled={saving}
+                    style={{
+                      padding: "9px 12px",
+                      background: "#16a34a",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: saving ? "not-allowed" : "pointer",
+                      opacity: saving ? 0.7 : 1,
+                    }}
+                  >
+                    Add + Call Selected
+                  </button>
+                </div>
+              </div>
+
+              <div style={{
+                border: "1px solid #d5d9e2",
+                borderRadius: 12,
+                overflow: "hidden",
+              }}>
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: isMobile ? "36px 1.3fr 0.9fr 0.9fr 110px" : "36px 1.4fr 1fr 1fr 1.2fr 110px",
+                  background: "#f8fafc",
+                  borderBottom: "1px solid #e5e7eb",
+                }}>
+                  {(isMobile ? ["", "Business", "Phone", "Email", "Status"] : ["", "Business", "Contact", "Phone", "Email / Address", "Status"]).map((label) => (
+                    <div key={label || "check"} style={{ padding: "12px 14px", fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                      {label}
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ maxHeight: 420, overflow: "auto" }}>
+                  {visibleCandidates.map((candidate) => {
+                    const candidateKey = `${candidate.rowNumber}-${candidate.business}-${candidate.phone}`;
+                    const duplicate = excelCandidateMatchesExistingLead(candidate, existingLeads);
+                    const disabled = !candidate.importable || duplicate;
+                    const checked = selectedIds.includes(candidateKey);
+
+                    return (
+                      <div
+                        key={candidateKey}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: isMobile ? "36px 1.3fr 0.9fr 0.9fr 110px" : "36px 1.4fr 1fr 1fr 1.2fr 110px",
+                          alignItems: "start",
+                          borderBottom: "1px solid #f1f5f9",
+                          background: checked ? "#f0fdf4" : "#fff",
+                        }}
+                      >
+                        <div style={{ padding: "14px 10px" }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={disabled}
+                            onChange={() => toggleSelection(candidateKey)}
+                          />
+                        </div>
+                        <div style={{ padding: "14px" }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{candidate.business || "No business name"}</div>
+                          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+                            Row {candidate.rowNumber}{candidate.businessType ? ` · ${candidate.businessType}` : ""}
+                          </div>
+                        </div>
+                        {!isMobile && (
+                          <div style={{ padding: "14px", fontSize: 12, color: "#334155" }}>
+                            {candidate.contact || "Front Desk"}
+                          </div>
+                        )}
+                        <div style={{ padding: "14px", fontSize: 12, color: candidate.phone ? "#334155" : "#94a3b8" }}>
+                          {candidate.phone || "No phone"}
+                        </div>
+                        <div style={{ padding: "14px", fontSize: 12, color: "#475569", lineHeight: 1.5 }}>
+                          {candidate.email || "No email"}
+                          {!isMobile && candidate.address ? <div style={{ marginTop: 4, color: "#94a3b8" }}>{candidate.address}</div> : null}
+                        </div>
+                        <div style={{ padding: "14px" }}>
+                          <span style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            padding: "4px 8px",
+                            borderRadius: 999,
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: duplicate ? "#92400e" : candidate.importable ? "#166534" : "#991b1b",
+                            background: duplicate ? "#fef3c7" : candidate.importable ? "#dcfce7" : "#fef2f2",
+                            border: `1px solid ${duplicate ? "#fde68a" : candidate.importable ? "#a7f3d0" : "#fecaca"}`,
+                          }}>
+                            {duplicate ? "Already imported" : candidate.importable ? "Ready" : candidate.reason || "Missing data"}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GoogleMapsModal({
+  existingLeads,
+  onClose,
+  onImported,
+  onError,
+}: {
+  existingLeads: Lead[];
+  onClose: () => void;
+  onImported: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const isMobile = useIsMobile(768);
+  const isTablet = useIsMobile(1024);
+  const [zipcode, setZipcode] = useState("");
+  const [radiusMiles, setRadiusMiles] = useState("25");
+  const [category, setCategory] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [results, setResults] = useState<GoogleMapsLeadCandidate[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [searchMeta, setSearchMeta] = useState<{ formattedAddress?: string; mode?: "category" | "all" } | null>(null);
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "10px 12px",
+    fontSize: 13,
+    border: "1px solid #d5d9e2",
+    borderRadius: 8,
+    outline: "none",
+    background: "#fff",
+    color: "#0f172a",
+    boxSizing: "border-box",
+  };
+
+  const labelStyle: React.CSSProperties = {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#374151",
+    marginBottom: 4,
+    display: "block",
+  };
+
+  const secondaryMiniButtonStyle: React.CSSProperties = {
+    padding: "7px 10px",
+    background: "#fff",
+    color: "#374151",
+    border: "1px solid #d5d9e2",
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+  };
+
+  const secondaryActionButtonStyle: React.CSSProperties = {
+    padding: "9px 12px",
+    background: "#fff",
+    color: "#374151",
+    border: "1px solid #d5d9e2",
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: saving ? "not-allowed" : "pointer",
+    opacity: saving ? 0.7 : 1,
+  };
+
+  const primaryActionButtonStyle: React.CSSProperties = {
+    padding: "9px 12px",
+    background: "#16a34a",
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: saving ? "not-allowed" : "pointer",
+    opacity: saving ? 0.7 : 1,
+  };
+
+  const eligibleCandidates = results.filter(
+    (candidate) => candidate.importable && !candidateMatchesExistingLead(candidate, existingLeads)
+  );
+
+  const searchGoogleMaps = async (mode: "category" | "all") => {
+    if (!zipcode.trim()) {
+      setError("ZIP code is required.");
+      return;
+    }
+
+    const radius = Number(radiusMiles);
+    if (!Number.isFinite(radius) || radius <= 0) {
+      setError("Radius must be greater than 0.");
+      return;
+    }
+
+    if (mode === "category" && !category.trim()) {
+      setError("Search text is required.");
+      return;
+    }
+
+    setSearching(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/google-maps/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          zipcode: zipcode.trim(),
+          radiusMiles: radius,
+          category: category.trim(),
+          mode,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to search Google Maps.");
+      }
+
+      const fetchedResults = (data.candidates || []) as GoogleMapsLeadCandidate[];
+      setResults(fetchedResults);
+      setSearchMeta({
+        formattedAddress: data.formattedAddress,
+        mode,
+      });
+      setSelectedIds(
+        fetchedResults
+          .filter((candidate) => candidate.importable && !candidateMatchesExistingLead(candidate, existingLeads))
+          .map((candidate) => candidate.placeId)
+      );
+    } catch (searchError) {
+      const message = searchError instanceof Error ? searchError.message : "Failed to search Google Maps.";
+      setResults([]);
+      setSelectedIds([]);
+      setError(message);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const toggleSelection = (placeId: string) => {
+    setSelectedIds((current) =>
+      current.includes(placeId)
+        ? current.filter((id) => id !== placeId)
+        : [...current, placeId]
+    );
+  };
+
+  const removeCandidate = (placeId: string) => {
+    setResults((current) => current.filter((candidate) => candidate.placeId !== placeId));
+    setSelectedIds((current) => current.filter((id) => id !== placeId));
+  };
+
+  const selectAllEligible = () => {
+    setSelectedIds(eligibleCandidates.map((candidate) => candidate.placeId));
+  };
+
+  const clearSelection = () => {
+    setSelectedIds([]);
+  };
+
+  const importCandidates = async (mode: "selected" | "all", triggerCalls: boolean) => {
+    const importList =
+      mode === "all"
+        ? eligibleCandidates
+        : eligibleCandidates.filter((candidate) => selectedIds.includes(candidate.placeId));
+
+    if (importList.length === 0) {
+      setError("Select at least one importable business first.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+
+    let importedCount = 0;
+    let calledCount = 0;
+    let skippedCount = 0;
+    let firstImportError = "";
+
+    try {
+      for (const candidate of importList) {
+        let enrichedEmail = candidate.email || "";
+        let enrichedContact = candidate.contact || "Front Desk";
+        let enrichedPhone = candidate.phone || "";
+        let enrichedContactTitle = candidate.contactTitle || "";
+
+        if (candidate.website || candidate.business) {
+          try {
+            const enrichRes = await fetch("/api/lead-enrichment/enrich", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                website: candidate.website,
+                company: candidate.business,
+              }),
+            });
+
+            if (enrichRes.ok) {
+              const enrichData = await enrichRes.json();
+              const enrichment = enrichData.enrichment as {
+                provider?: "apollo" | "lusha" | "hunter";
+                email?: string;
+                phone?: string;
+                contactName?: string;
+                contactTitle?: string;
+              } | null;
+
+              if (enrichment?.email) {
+                enrichedEmail = enrichment.email;
+              }
+
+              if (enrichment?.phone) {
+                enrichedPhone = enrichment.phone;
+              }
+
+              if (enrichment?.contactName) {
+                enrichedContact = enrichment.contactName;
+              }
+
+              if (enrichment?.contactTitle) {
+                enrichedContactTitle = enrichment.contactTitle;
+              }
+            }
+          } catch {
+            // Continue importing the lead even if enrichment fails.
+          }
+        }
+
+        const leadRes = await fetch("/api/leads", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            business: candidate.business,
+            contact: enrichedContact,
+            phone: enrichedPhone || candidate.phone,
+            email: enrichedEmail,
+            address: candidate.address,
+            distance: candidate.distance,
+            businessType: candidate.businessType,
+            source: "Google Maps",
+            contactMethod: "Call",
+            contactTitle: enrichedContactTitle,
+            decisionMakerName: enrichedContact !== "Front Desk" ? enrichedContact : "",
+            decisionMakerPhone: enrichedPhone || "",
+            decisionMakerEmail: enrichedEmail || "",
+          }),
+        });
+
+        if (!leadRes.ok) {
+          if (!firstImportError) {
+            try {
+              const errorData = await leadRes.json();
+              firstImportError = errorData.error || "Failed to add lead.";
+            } catch {
+              firstImportError = "Failed to add lead.";
+            }
+          }
+          skippedCount += 1;
+          continue;
+        }
+
+        const lead = (await leadRes.json()) as Lead;
+        importedCount += 1;
+
+        if (triggerCalls) {
+          const callRes = await fetch("/api/calls/trigger", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ leadId: lead.id }),
+          });
+
+          if (callRes.ok) {
+            calledCount += 1;
+          }
+        }
+      }
+
+      if (importedCount === 0) {
+        throw new Error(firstImportError || "No new leads were imported. The selected businesses may already exist or may be missing phone numbers.");
+      }
+
+      const summary = triggerCalls
+        ? `Imported ${importedCount} Google Maps lead${importedCount === 1 ? "" : "s"} and started ${calledCount} call${calledCount === 1 ? "" : "s"}${skippedCount ? `, skipped ${skippedCount}` : ""}.`
+        : `Imported ${importedCount} Google Maps lead${importedCount === 1 ? "" : "s"}${skippedCount ? `, skipped ${skippedCount}` : ""}.`;
+
+      onImported(summary);
+    } catch (importError) {
+      const message = importError instanceof Error ? importError.message : "Failed to import Google Maps leads.";
+      setError(message);
+      onError(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(15, 23, 42, 0.45)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 1200,
+      padding: isMobile ? 12 : 20,
+    }}>
+      <div style={{
+        width: isMobile ? "100%" : "min(1100px, calc(100vw - 48px))",
+        maxHeight: "90vh",
+        overflow: "auto",
+        background: "#fff",
+        borderRadius: 16,
+        border: "1px solid #d5d9e2",
+        boxShadow: "0 18px 40px rgba(15, 23, 42, 0.18)",
+      }}>
+        <div style={{
+          padding: isMobile ? "16px" : "18px 22px",
+          borderBottom: "1px solid #e5e7eb",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+        }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Google Maps Lead Finder</div>
+            <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>
+              Search by ZIP code + radius, then type any Google Maps style search text if you want to narrow the results.
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+            <X size={20} color="#94a3b8" />
+          </button>
+        </div>
+
+        <div style={{ padding: isMobile ? "16px" : "18px 22px" }}>
+          {error && (
+            <div style={{
+              marginBottom: 16,
+              padding: "10px 14px",
+              background: "#fef2f2",
+              color: "#991b1b",
+              borderRadius: 8,
+              fontSize: 12,
+              border: "1px solid #fecaca",
+            }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "1fr 1fr 1fr auto auto",
+            gap: 12,
+            alignItems: "end",
+            marginBottom: 18,
+          }}>
+            <div>
+              <label style={labelStyle}>ZIP Code</label>
+              <input style={inputStyle} value={zipcode} onChange={(e) => setZipcode(e.target.value)} placeholder="e.g., 10001" />
+            </div>
+            <div>
+              <label style={labelStyle}>Radius (miles)</label>
+              <input style={inputStyle} value={radiusMiles} onChange={(e) => setRadiusMiles(e.target.value)} placeholder="e.g., 25" />
+            </div>
+            <div>
+              <label style={labelStyle}>Search Text</label>
+              <input style={inputStyle} value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g., hospital, gym, warehouse, dental clinic" />
+            </div>
+            <button
+              onClick={() => searchGoogleMaps("category")}
+              disabled={searching}
+              style={{
+                padding: "10px 14px",
+                background: "#16a34a",
+                color: "#fff",
+                border: "none",
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: searching ? "not-allowed" : "pointer",
+                opacity: searching ? 0.7 : 1,
+              }}
+            >
+              {searching ? "Searching..." : "Search"}
+            </button>
+            <button
+              onClick={() => searchGoogleMaps("all")}
+              disabled={searching}
+              style={{
+                padding: "10px 14px",
+                background: "#fff",
+                color: "#374151",
+                border: "1px solid #d5d9e2",
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: searching ? "not-allowed" : "pointer",
+                opacity: searching ? 0.7 : 1,
+              }}
+            >
+              Search All
+            </button>
+          </div>
+
+          {searchMeta && (
+            <div style={{
+              marginBottom: 14,
+              padding: "10px 12px",
+              borderRadius: 8,
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+              fontSize: 12,
+              color: "#475569",
+            }}>
+              Search center: <strong>{searchMeta.formattedAddress || zipcode}</strong> · Mode:{" "}
+              <strong>{searchMeta.mode === "category" ? `Search (${category || "custom"})` : "All nearby businesses"}</strong> · Results:{" "}
+              <strong>{results.length}</strong>
+            </div>
+          )}
+
+              {results.length > 0 && (
+            <>
+              <div style={{
+                marginBottom: 12,
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <button onClick={selectAllEligible} type="button" style={secondaryMiniButtonStyle}>Select All Importable</button>
+                  <button onClick={clearSelection} type="button" style={secondaryMiniButtonStyle}>Clear</button>
+                  <span style={{ fontSize: 12, color: "#64748b" }}>
+                    {selectedIds.length} selected · {eligibleCandidates.length} importable
+                  </span>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button onClick={() => importCandidates("selected", false)} disabled={saving} type="button" style={secondaryActionButtonStyle}>
+                    Add Selected
+                  </button>
+                  <button onClick={() => importCandidates("all", false)} disabled={saving} type="button" style={secondaryActionButtonStyle}>
+                    Add All
+                  </button>
+                  <button onClick={() => importCandidates("selected", true)} disabled={saving} type="button" style={primaryActionButtonStyle}>
+                    Add + Call Selected
+                  </button>
+                  <button onClick={() => importCandidates("all", true)} disabled={saving} type="button" style={primaryActionButtonStyle}>
+                    Add + Call All
+                  </button>
+                </div>
+              </div>
+
+              {isMobile ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 420, overflow: "auto" }}>
+                  {results.map((candidate) => {
+                    const alreadyExists = candidateMatchesExistingLead(candidate, existingLeads);
+                    const disabled = !candidate.importable || alreadyExists;
+                    const checked = selectedIds.includes(candidate.placeId);
+
+                    return (
+                      <div key={candidate.placeId} style={{
+                        border: "1px solid #d5d9e2",
+                        borderRadius: 12,
+                        padding: 12,
+                        background: checked ? "#f0fdf4" : "#fff",
+                      }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={disabled}
+                            onChange={() => toggleSelection(candidate.placeId)}
+                            style={{ marginTop: 3 }}
+                          />
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{candidate.business}</div>
+                            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+                              {candidate.businessType} · {candidate.distance}
+                            </div>
+                            <div style={{ fontSize: 12, color: "#334155", marginTop: 8 }}>
+                              {candidate.phone || "No phone"}
+                            </div>
+                            <div style={{ fontSize: 12, color: "#475569", marginTop: 6, lineHeight: 1.5 }}>
+                              {candidate.address}
+                            </div>
+                            <div style={{ marginTop: 8 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  padding: "4px 8px",
+                                  borderRadius: 999,
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  color: alreadyExists ? "#92400e" : candidate.importable ? "#166534" : "#991b1b",
+                                  background: alreadyExists ? "#fef3c7" : candidate.importable ? "#dcfce7" : "#fef2f2",
+                                  border: `1px solid ${alreadyExists ? "#fde68a" : candidate.importable ? "#a7f3d0" : "#fecaca"}`,
+                                }}>
+                                  {alreadyExists ? "Already in Pipeline" : candidate.importable ? "Ready" : "Missing phone"}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => removeCandidate(candidate.placeId)}
+                                  style={{
+                                    padding: "6px 10px",
+                                    borderRadius: 8,
+                                    border: "1px solid #fecaca",
+                                    background: "#fff1f2",
+                                    color: "#be123c",
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                              {candidate.reason && !alreadyExists && (
+                                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, lineHeight: 1.4 }}>
+                                  {candidate.reason}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{
+                  border: "1px solid #d5d9e2",
+                  borderRadius: 12,
+                  overflow: "hidden",
+                }}>
+                  <div style={{
+                    display: "grid",
+                    gridTemplateColumns: "42px 1.5fr 1fr 1fr 100px 110px 90px",
+                    gap: 0,
+                    background: "#f8fafc",
+                    borderBottom: "1px solid #e5e7eb",
+                  }}>
+                    {["", "Business", "Phone", "Address", "Distance", "Status", "Action"].map((label) => (
+                      <div key={label || "select"} style={{ padding: "12px 14px", fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        {label}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ maxHeight: 420, overflow: "auto" }}>
+                    {results.map((candidate) => {
+                      const alreadyExists = candidateMatchesExistingLead(candidate, existingLeads);
+                      const disabled = !candidate.importable || alreadyExists;
+                      const checked = selectedIds.includes(candidate.placeId);
+
+                      return (
+                        <div key={candidate.placeId} style={{
+                          display: "grid",
+                          gridTemplateColumns: "42px 1.5fr 1fr 1fr 100px 110px 90px",
+                          borderBottom: "1px solid #f1f5f9",
+                          alignItems: "start",
+                          background: checked ? "#f0fdf4" : "#fff",
+                        }}>
+                          <div style={{ padding: "14px 12px" }}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={() => toggleSelection(candidate.placeId)}
+                            />
+                          </div>
+                          <div style={{ padding: "14px" }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{candidate.business}</div>
+                            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+                              {candidate.businessType} · Contact: {candidate.contact}
+                            </div>
+                          </div>
+                          <div style={{ padding: "14px", fontSize: 12, color: candidate.phone ? "#334155" : "#94a3b8" }}>
+                            {candidate.phone || "No phone"}
+                          </div>
+                          <div style={{ padding: "14px", fontSize: 12, color: "#475569", lineHeight: 1.5 }}>
+                            {candidate.address}
+                          </div>
+                          <div style={{ padding: "14px", fontSize: 12, color: "#475569" }}>
+                            {candidate.distance}
+                          </div>
+                          <div style={{ padding: "14px" }}>
+                            <span style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              padding: "4px 8px",
+                              borderRadius: 999,
+                              fontSize: 11,
+                              fontWeight: 600,
+                              color: alreadyExists ? "#92400e" : candidate.importable ? "#166534" : "#991b1b",
+                              background: alreadyExists ? "#fef3c7" : candidate.importable ? "#dcfce7" : "#fef2f2",
+                              border: `1px solid ${alreadyExists ? "#fde68a" : candidate.importable ? "#a7f3d0" : "#fecaca"}`,
+                            }}>
+                              {alreadyExists ? "Already in Pipeline" : candidate.importable ? "Ready" : "Missing phone"}
+                            </span>
+                            {candidate.reason && !alreadyExists && (
+                              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, lineHeight: 1.4 }}>
+                                {candidate.reason}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ padding: "14px" }}>
+                            <button
+                              type="button"
+                              onClick={() => removeCandidate(candidate.placeId)}
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 8,
+                                border: "1px solid #fecaca",
+                                background: "#fff1f2",
+                                color: "#be123c",
+                                fontSize: 12,
+                                fontWeight: 600,
+                                cursor: "pointer",
+                              }}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Kanban Card                                                        */
 /* ------------------------------------------------------------------ */
 
-function KanbanCard({ lead, expanded, onToggle, onTriggerCall, isCalling }: {
+function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalling }: {
   lead: Lead; expanded: boolean; onToggle: () => void;
-  onTriggerCall: () => void; isCalling: boolean;
+  onTriggerCall: () => void; onDelete: () => void; isCalling: boolean;
 }) {
   const lastCall = lead.callLogs[lead.callLogs.length - 1];
   const lastEmail = lead.emailLogs[lead.emailLogs.length - 1];
@@ -732,6 +3020,21 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, isCalling }: {
         <Phone size={10} /> {lead.phone}
       </div>
 
+      {/* Saved email */}
+      {lead.email && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, color: "#64748b", marginBottom: 4, minWidth: 0 }}>
+          <Mail size={10} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span style={{
+            minWidth: 0,
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+            lineHeight: 1.45,
+          }}>
+            {lead.email}
+          </span>
+        </div>
+      )}
+
       {/* Call info */}
       {lead.callLogs.length > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b", marginBottom: 4 }}>
@@ -742,7 +3045,7 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, isCalling }: {
       {/* Email info */}
       {lead.emailLogs.length > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-          <Mail size={10} /> Email: {lastEmail?.status}
+          <Mail size={10} /> Email activity: {lastEmail?.status}
         </div>
       )}
 
@@ -783,6 +3086,27 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, isCalling }: {
         </div>
       )}
 
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        style={{
+          width: "100%",
+          marginTop: 8,
+          padding: "7px 12px",
+          background: "#fff1f2",
+          color: "#be123c",
+          border: "1px solid #fecdd3",
+          borderRadius: 8,
+          fontSize: 11,
+          fontWeight: 600,
+          cursor: "pointer",
+        }}
+      >
+        Delete Lead
+      </button>
+
       {/* Footer */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
         <span style={{ fontSize: 10, color: "#94a3b8" }}>
@@ -818,6 +3142,301 @@ function StatBox({ icon, iconBg, label, value, sub }: {
         <div style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", lineHeight: 1.2 }}>{value}</div>
         <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>{sub}</div>
       </div>
+    </div>
+  );
+}
+
+function LeadInsightsPanel({
+  lead,
+  captured,
+  compact = false,
+}: {
+  lead: Lead;
+  captured?: CapturedLeadData | null;
+  compact?: boolean;
+}) {
+  const sections = [
+    {
+      title: "Contact",
+      fields: [
+        { label: "Contact Name", value: captured?.contactName },
+        { label: "Contact Title", value: captured?.contactTitle },
+        { label: "Phone", value: captured?.phone },
+        { label: "Email", value: captured?.email },
+        { label: "Address", value: captured?.address },
+      ],
+    },
+    {
+      title: "Business",
+      fields: [
+        { label: "Business Name", value: captured?.businessName },
+        { label: "Business Type", value: captured?.businessType },
+        { label: "Employee Count", value: captured?.employeeCount },
+        { label: "Product Preference", value: captured?.productPreferences },
+      ],
+    },
+    {
+      title: "Vendor",
+      fields: [
+        { label: "Vending Status", value: captured?.currentVendingStatus },
+        { label: "Current Vendor", value: captured?.currentVendorName },
+        { label: "Interest Level", value: captured?.interestLevel },
+      ],
+    },
+    {
+      title: "Decision Maker",
+      fields: [
+        { label: "Decision Maker", value: captured?.decisionMakerName },
+        { label: "Decision Maker Phone", value: captured?.decisionMakerPhone },
+        { label: "Decision Maker Email", value: captured?.decisionMakerEmail },
+      ],
+    },
+    {
+      title: "Scheduling",
+      fields: [
+        { label: "Site Visit", value: formatEasternDateTime(captured?.siteVisit) || captured?.siteVisit },
+        { label: "Callback", value: formatEasternDateTime(captured?.callback) || captured?.callback },
+        { label: "Email Follow-up", value: lead.emailSent ? "Primary email sent" : undefined },
+        { label: "Pipeline Status", value: lead.stage || undefined },
+      ],
+    },
+  ];
+
+  const notCaptured = "Not captured";
+
+  return (
+    <div style={{
+      marginBottom: compact ? 0 : 14,
+      background: compact ? "#f8fafc" : "#fff",
+      border: "1px solid #d5d9e2",
+      borderRadius: 8,
+      padding: compact ? "10px 12px" : "12px 14px",
+    }}>
+      <div style={{
+        fontSize: 12,
+        fontWeight: 600,
+        color: "#374151",
+        marginBottom: 10,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+      }}>
+        <Bot size={13} /> Captured In App
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {sections.map((section) => (
+          <div key={section.title}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase" as const, color: "#94a3b8", marginBottom: 6 }}>
+              {section.title}
+            </div>
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: compact ? "1fr" : "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 8,
+            }}>
+              {section.fields.map((detail) => {
+                const isCaptured = Boolean(detail.value);
+                return (
+                  <div key={detail.label} style={{
+                    background: compact ? "#fff" : "#f8fafc",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                  }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase" as const, color: "#94a3b8", marginBottom: 4 }}>
+                      {detail.label}
+                    </div>
+                    <div style={{
+                      fontSize: 12,
+                      color: isCaptured ? "#334155" : "#94a3b8",
+                      fontStyle: isCaptured ? "normal" : "italic",
+                      lineHeight: 1.5,
+                    }}>
+                      {detail.value || notCaptured}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase" as const, color: "#94a3b8", marginBottom: 6 }}>
+            Pain Points
+          </div>
+          {captured?.notes ? (
+            <div style={{
+              background: compact ? "#fff" : "#f8fafc",
+              border: "1px solid #e2e8f0",
+              borderRadius: 8,
+              padding: "8px 10px",
+              fontSize: 12,
+              color: "#334155",
+              lineHeight: 1.5,
+            }}>
+              {captured.notes}
+            </div>
+          ) : lead.painPoints && lead.painPoints.length > 0 ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {lead.painPoints.map((point) => (
+                <span key={point} style={{
+                  fontSize: 11,
+                  color: "#0f766e",
+                  background: "#ccfbf1",
+                  border: "1px solid #99f6e4",
+                  borderRadius: 999,
+                  padding: "4px 8px",
+                }}>
+                  {point}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div style={{
+              background: compact ? "#fff" : "#f8fafc",
+              border: "1px solid #e2e8f0",
+              borderRadius: 8,
+              padding: "8px 10px",
+              fontSize: 12,
+              color: "#94a3b8",
+              fontStyle: "italic",
+            }}>
+              {notCaptured}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CalendlyBookingPanel({
+  lead,
+  status,
+  options,
+  isBooking,
+  onBook,
+  onBookAlternative,
+}: {
+  lead: Lead;
+  status: BookingStatusMessage | null;
+  options: SchedulerAvailableSlot[];
+  isBooking: boolean;
+  onBook: () => void;
+  onBookAlternative: (slot: SchedulerAvailableSlot) => void;
+}) {
+  return (
+    <div style={{
+      marginBottom: 14,
+      background: "#fff",
+      border: "1px solid #d5d9e2",
+      borderRadius: 8,
+      padding: "12px 14px",
+    }}>
+      <div style={{
+        fontSize: 12,
+        fontWeight: 600,
+        color: "#374151",
+        marginBottom: 10,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+      }}>
+        <span>Google Calendar Appointment</span>
+        <button
+          onClick={onBook}
+          disabled={isBooking}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "7px 12px",
+            background: "#16a34a",
+            color: "#fff",
+            border: "none",
+            borderRadius: 8,
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: isBooking ? "not-allowed" : "pointer",
+            opacity: isBooking ? 0.7 : 1,
+          }}
+        >
+          {isBooking ? <><Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Booking...</> : "Book In Google Calendar"}
+        </button>
+      </div>
+
+      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
+        Preferred site visit time: {formatEasternDateTime(lead.visitDate) || lead.visitDate || "Not captured"}
+      </div>
+
+      {lead.lastActivity.includes("nearest slot") && (
+        <div style={{
+          marginBottom: 8,
+          padding: "8px 10px",
+          borderRadius: 8,
+          fontSize: 12,
+          color: "#92400e",
+          background: "#fef3c7",
+          border: "1px solid #fde68a",
+        }}>
+          Google Calendar auto-booked the nearest available slot for this visit.
+        </div>
+      )}
+
+      {status && (
+        <div style={{
+          marginBottom: options.length > 0 ? 10 : 0,
+          padding: "10px 12px",
+          borderRadius: 8,
+          fontSize: 12,
+          color: status.type === "success" ? "#166534" : status.type === "error" ? "#991b1b" : "#92400e",
+          background: status.type === "success" ? "#dcfce7" : status.type === "error" ? "#fef2f2" : "#fef3c7",
+          border: `1px solid ${status.type === "success" ? "#a7f3d0" : status.type === "error" ? "#fecaca" : "#fde68a"}`,
+        }}>
+          {status.message}
+          {status.actionUrl && (
+            <div style={{ marginTop: 8 }}>
+              <a
+                href={status.actionUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  color: status.type === "success" ? "#166534" : status.type === "error" ? "#991b1b" : "#92400e",
+                  fontWeight: 600,
+                  textDecoration: "underline",
+                }}
+              >
+                {status.actionLabel || "Open link"}
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+
+      {options.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {options.map((slot) => (
+            <button
+              key={slot.start_time}
+              onClick={() => onBookAlternative(slot)}
+              disabled={isBooking}
+              style={{
+                padding: "8px 10px",
+                borderRadius: 8,
+                border: "1px solid #d5d9e2",
+                background: "#f8fafc",
+                color: "#334155",
+                fontSize: 12,
+                cursor: isBooking ? "not-allowed" : "pointer",
+              }}
+            >
+              {formatEasternDateTime(slot.start_time) || slot.start_time}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

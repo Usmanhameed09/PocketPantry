@@ -1,0 +1,14 @@
+{
+  "primary": {
+    "subject": "Customizable Vending Machines for {{businessName}}",
+    "body": "Hi {{contactFirstName}},\n\nMy name is {{senderName}} and I am emailing you regarding {{businessName}} and its current vending machine solution. If you are looking to fill an empty space within a breakroom or a thoroughfare, our machines are restocked every week and can be filled with any products of your choice, making it a convenient and personalized solution for your employees or customers.\n\nIf you are interested I would be happy to jump on a call with you to discuss how we can make this happen.\n\nThank you,\n{{senderName}}\nPocketPantry\n{{contactPhone}}\n{{replyToEmail}}"
+  },
+  "follow_up_1": {
+    "subject": "Following up on vending for {{businessName}}",
+    "body": "Hi {{contactFirstName}},\n\nI wanted to follow up in case my last email was lost in your inbox. Are you currently looking to fill an empty space at your location with a vending machine?\n\nIf you currently have a vending services solution for {{businessName}} that you are not happy with, our machines are consistently restocked weekly and can be filled with any products that your customers or employees wish. If you are interested, I would love to jump on a call to discuss the details further.\n\nThank you,\n{{senderName}}\nPocketPantry\n{{contactPhone}}\n{{replyToEmail}}"
+  },
+  "follow_up_2": {
+    "subject": "Checking in about vending at {{businessName}}",
+    "body": "Hi {{contactFirstName}},\n\nI wanted to reach out again just in case you missed my last email. If you are currently interested in having a vending machine placed at {{businessName}} or are unhappy with your current vending services provider, I would love to jump on a call to discuss in detail how we can help if you have the time.\n\nThank you,\n{{senderName}}\nPocketPantry\n{{contactPhone}}\n{{replyToEmail}}"
+  }
+}

@@ -4,6 +4,7 @@
  */
 
 import { createServerClient } from "./supabase";
+import { isSystemLeadId } from "./system-records";
 
 // ----------------------------------------------------------------
 // Types
@@ -62,6 +63,24 @@ export interface EmailLog {
   date: string;
   status: "Sent" | "Opened" | "Replied" | "Bounced";
   subject: string;
+}
+
+function stageForOutcome(outcome: string): Lead["stage"] {
+  switch (outcome) {
+    case "interested": return "Interested";
+    case "not_interested": return "Not Interested";
+    case "callback": return "Callback";
+    case "site_visit": return "Site Visit Requested";
+    case "proposal": return "Proposal Requested";
+    case "voicemail":
+    case "gatekeeper":
+    case "no_answer":
+      return "Contacted";
+    case "wrong_number":
+      return "Not Interested";
+    default:
+      return "Contacted";
+  }
 }
 
 // ----------------------------------------------------------------
@@ -127,8 +146,67 @@ function dbToEmailLog(row: Record<string, unknown>): EmailLog {
 
 async function generateLeadId(): Promise<string> {
   const supabase = createServerClient();
-  const { count } = await supabase.from("leads").select("*", { count: "exact", head: true });
-  return `L-${String((count || 0) + 1).padStart(3, "0")}`;
+  const { data, error } = await supabase
+    .from("leads")
+    .select("id")
+    .like("id", "L-%");
+
+  if (error) {
+    throw error;
+  }
+
+  const nextNumber =
+    (data || []).reduce((max, row) => {
+      const id = row.id as string | undefined;
+      const match = id?.match(/^L-(\d+)$/i);
+      const value = match ? Number(match[1]) : 0;
+      return Math.max(max, Number.isFinite(value) ? value : 0);
+    }, 0) + 1;
+  return `L-${String(nextNumber).padStart(3, "0")}`;
+}
+
+function buildLeadInsertPayload(
+  id: string,
+  data: {
+    business: string;
+    contact: string;
+    phone: string;
+    email?: string;
+    address?: string;
+    distance?: string;
+    businessType?: string;
+    source?: Lead["source"];
+    contactMethod?: Lead["contactMethod"];
+    contactTitle?: string;
+    decisionMakerName?: string;
+    decisionMakerPhone?: string;
+    decisionMakerEmail?: string;
+  },
+  dateStr: string
+) {
+  const payload: Record<string, unknown> = {
+    id,
+    business: data.business,
+    contact: data.contact,
+    phone: data.phone,
+    email: data.email || "",
+    address: data.address || "",
+    distance: data.distance || "â€”",
+    business_type: data.businessType || "",
+    source: data.source || "Manual",
+    stage: "New Lead",
+    contact_method: data.contactMethod || "Call",
+    call_attempts: 0,
+    added_date: dateStr,
+    last_activity: `Added ${dateStr}`,
+  };
+
+  if (data.contactTitle?.trim()) payload.contact_title = data.contactTitle.trim();
+  if (data.decisionMakerName?.trim()) payload.decision_maker_name = data.decisionMakerName.trim();
+  if (data.decisionMakerPhone?.trim()) payload.decision_maker_phone = data.decisionMakerPhone.trim();
+  if (data.decisionMakerEmail?.trim()) payload.decision_maker_email = data.decisionMakerEmail.trim();
+
+  return payload;
 }
 
 // ----------------------------------------------------------------
@@ -142,7 +220,8 @@ export async function getAllLeads(): Promise<Lead[]> {
 
   if (error || !leadRows) { console.error("[Leads] Fetch error:", error); return []; }
 
-  const leadIds = leadRows.map((r) => r.id);
+  const visibleLeadRows = leadRows.filter((row) => !isSystemLeadId(row.id as string));
+  const leadIds = visibleLeadRows.map((r) => r.id);
   if (leadIds.length === 0) return [];
 
   const [callResult, emailResult] = await Promise.all([
@@ -165,12 +244,13 @@ export async function getAllLeads(): Promise<Lead[]> {
     emailsByLead.get(id)!.push(dbToEmailLog(row));
   });
 
-  return leadRows.map((row) =>
+  return visibleLeadRows.map((row) =>
     dbToLead(row, callsByLead.get(row.id) || [], emailsByLead.get(row.id) || [])
   );
 }
 
 export async function getLead(id: string): Promise<Lead | null> {
+  if (isSystemLeadId(id)) return null;
   const supabase = createServerClient();
   const { data: row, error } = await supabase.from("leads").select("*").eq("id", id).single();
   if (error || !row) return null;
@@ -187,6 +267,10 @@ export async function addLead(data: {
   business: string; contact: string; phone: string;
   email?: string; address?: string; distance?: string;
   businessType?: string; source?: Lead["source"]; contactMethod?: Lead["contactMethod"];
+  contactTitle?: string;
+  decisionMakerName?: string;
+  decisionMakerPhone?: string;
+  decisionMakerEmail?: string;
 }): Promise<Lead | null> {
   const supabase = createServerClient();
   const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -194,22 +278,24 @@ export async function addLead(data: {
   let id: string;
   try { id = await generateLeadId(); } catch { id = `L-${Date.now().toString().slice(-6)}`; }
 
-  const { data: row, error } = await supabase.from("leads").insert({
-    id, business: data.business, contact: data.contact, phone: data.phone,
-    email: data.email || "", address: data.address || "", distance: data.distance || "—",
-    business_type: data.businessType || "", source: data.source || "Manual",
-    stage: "New Lead", contact_method: data.contactMethod || "Call",
-    call_attempts: 0, added_date: dateStr, last_activity: `Added ${dateStr}`,
-  }).select().single();
+  const { data: row, error } = await supabase
+    .from("leads")
+    .insert(buildLeadInsertPayload(id, data, dateStr))
+    .select()
+    .single();
 
-  if (error) { console.error("[Leads] Add error:", error); return null; }
+  if (error || !row) {
+    console.error("[Leads] Add error:", error);
+    return null;
+  }
+
   return dbToLead(row, [], []);
 }
 
 export async function updateLead(
   id: string,
   updates: Partial<{
-    business: string; contact: string; phone: string; email: string; address: string;
+    business: string; businessType: string; contact: string; phone: string; email: string; address: string;
     stage: Lead["stage"]; lastActivity: string; vapiCallId: string; callAttempts: number;
     callbackDate: string; callbackTime: string; contactTitle: string;
     employeeCount: string; currentVendingStatus: string; currentVendorName: string;
@@ -224,7 +310,7 @@ export async function updateLead(
 
   // Map camelCase → snake_case
   const map: Record<string, string> = {
-    business: "business", contact: "contact", phone: "phone", email: "email",
+    business: "business", businessType: "business_type", contact: "contact", phone: "phone", email: "email",
     address: "address", stage: "stage", vapiCallId: "vapi_call_id",
     callAttempts: "call_attempts", callbackDate: "callback_date", callbackTime: "callback_time",
     lastActivity: "last_activity", contactTitle: "contact_title",
@@ -259,17 +345,7 @@ export async function addCallLogAndUpdateStage(
   });
   if (callError) { console.error("[Leads] Call log error:", callError); return false; }
 
-  let stage: Lead["stage"];
-  switch (outcome) {
-    case "interested": stage = "Interested"; break;
-    case "not_interested": stage = "Not Interested"; break;
-    case "callback": stage = "Callback"; break;
-    case "site_visit": stage = "Site Visit Requested"; break;
-    case "proposal": stage = "Proposal Requested"; break;
-    case "voicemail": case "gatekeeper": case "no_answer": stage = "Contacted"; break;
-    case "wrong_number": stage = "Not Interested"; break;
-    default: stage = "Contacted";
-  }
+  const stage = stageForOutcome(outcome);
 
   const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
   await supabase.from("leads").update({
@@ -281,6 +357,56 @@ export async function addCallLogAndUpdateStage(
     lead_id: leadId, action_type: "call",
     action_data: { outcome, summary: callLog.summary, duration: callLog.duration },
   });
+
+  return true;
+}
+
+export async function updateCallLogByConversationId(params: {
+  leadId: string;
+  vapiCallId: string;
+  duration?: string;
+  summary?: string;
+  outcome?: string;
+}): Promise<boolean> {
+  const supabase = createServerClient();
+  const updates: Record<string, unknown> = {};
+
+  if (params.duration !== undefined) updates.duration = params.duration;
+  if (params.summary !== undefined) updates.summary = params.summary;
+  if (params.outcome !== undefined) updates.outcome = params.outcome;
+
+  if (Object.keys(updates).length === 0) {
+    return true;
+  }
+
+  const { error } = await supabase
+    .from("call_logs")
+    .update(updates)
+    .eq("lead_id", params.leadId)
+    .eq("vapi_call_id", params.vapiCallId);
+
+  if (error) {
+    console.error("[Leads] Call log update error:", error);
+    return false;
+  }
+
+  if (params.outcome !== undefined) {
+    const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    await supabase
+      .from("leads")
+      .update({
+        stage: stageForOutcome(params.outcome),
+        last_activity: `Call ${params.outcome} â€” ${dateStr}`,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", params.leadId);
+
+    await supabase.from("outreach_log").insert({
+      lead_id: params.leadId,
+      action_type: "call",
+      action_data: { outcome: params.outcome, summary: params.summary, duration: params.duration },
+    });
+  }
 
   return true;
 }
@@ -318,6 +444,9 @@ export async function logOutreachAction(
 }
 
 export async function deleteLead(id: string): Promise<boolean> {
+  if (isSystemLeadId(id)) {
+    return false;
+  }
   const supabase = createServerClient();
   const { error } = await supabase.from("leads").delete().eq("id", id);
   return !error;

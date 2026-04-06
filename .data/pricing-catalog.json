@@ -1,0 +1,329 @@
+{
+  "manualProducts": [],
+  "priceOverrides": {
+    "machine-water-pure-life": 1.09
+  },
+  "costOverrides": {
+    "machine-water-pure-life": 0.5,
+    "machine-coca-cola-12fl-oz-can": 1,
+    "machine-miss-vickie-s-sea-salt-vinegar": 0.25,
+    "machine-mrs-freshley-s-honey-bun-glazed": 1,
+    "machine-ruffles-cheddar-sour-cream": 0.4,
+    "machine-mtn-dew-regular": 1.29,
+    "machine-arizona-watermelon": 0.7,
+    "machine-hot-cheetos-1-oz": 0.18,
+    "machine-diet-coke-12-oz": 0.43,
+    "machine-cherry-dr-pepper": 1.19
+  },
+  "savedAnalyses": {
+    "machine-water-pure-life": {
+      "productId": "machine-water-pure-life",
+      "supplier": "Not scraped yet",
+      "cost": 0.5,
+      "prevCost": 0.5,
+      "suggestedPrice": 1.09,
+      "margin": 54,
+      "status": "Cost Margin",
+      "trigger": "Healthy margin",
+      "packPrice": null,
+      "packSize": null,
+      "scraped": false,
+      "scrapedProduct": null,
+      "error": "Sam's Club: no matching supplier result found; HEB: request failed with status 500",
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": []
+    },
+    "machine-coca-cola-12fl-oz-can": {
+      "productId": "machine-coca-cola-12fl-oz-can",
+      "supplier": "Sam's Club",
+      "cost": 20.33,
+      "prevCost": 1,
+      "suggestedPrice": 40.75,
+      "margin": 50,
+      "status": "Pending Approval",
+      "trigger": "Supplier cost up $19.33",
+      "sourceUrl": "",
+      "packPrice": 20.33,
+      "packSize": null,
+      "scraped": true,
+      "scrapedProduct": "Coca-Cola Coke Diet",
+      "error": null,
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": [
+        {
+          "supplier": "Sam's Club",
+          "packPrice": 20.33,
+          "packSize": null,
+          "unitPrice": 20.33,
+          "name": "Coca-Cola Coke Diet",
+          "url": ""
+        }
+      ]
+    },
+    "machine-miss-vickie-s-sea-salt-vinegar": {
+      "productId": "machine-miss-vickie-s-sea-salt-vinegar",
+      "supplier": "Sam's Club",
+      "cost": 20.33,
+      "prevCost": 0.25,
+      "suggestedPrice": 37,
+      "margin": 45,
+      "status": "Pending Approval",
+      "trigger": "Supplier cost up $20.08",
+      "sourceUrl": "",
+      "packPrice": 20.33,
+      "packSize": null,
+      "scraped": true,
+      "scrapedProduct": "Miss Vickie's Kettle Cooked Potato Chips Variety Pack",
+      "error": null,
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": [
+        {
+          "supplier": "Sam's Club",
+          "packPrice": 20.33,
+          "packSize": null,
+          "unitPrice": 20.33,
+          "name": "Miss Vickie's Kettle Cooked Potato Chips Variety Pack",
+          "url": ""
+        }
+      ]
+    },
+    "machine-mrs-freshley-s-honey-bun-glazed": {
+      "productId": "machine-mrs-freshley-s-honey-bun-glazed",
+      "supplier": "Not scraped yet",
+      "cost": 1,
+      "prevCost": 1,
+      "suggestedPrice": 2,
+      "margin": 50,
+      "status": "Cost Margin",
+      "trigger": "Healthy margin",
+      "packPrice": null,
+      "packSize": null,
+      "scraped": false,
+      "scrapedProduct": null,
+      "error": "Sam's Club: no matching supplier result found; Walmart: ; HEB: request failed with status 500",
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": []
+    },
+    "machine-cherry-dr-pepper": {
+      "productId": "machine-cherry-dr-pepper",
+      "supplier": "Walmart",
+      "cost": 0.58,
+      "prevCost": 1.19,
+      "suggestedPrice": 1.5,
+      "margin": 61,
+      "status": "Pending Approval",
+      "trigger": "Supplier cost down $0.61",
+      "sourceUrl": "https://www.walmart.com/ip/Dr-Pepper-Cherry-Soda-Pop-12-fl-oz-12-Pack-Cans/16504543?classType=REGULAR&athbdg=L1300",
+      "packPrice": 6.97,
+      "packSize": 12,
+      "scraped": true,
+      "scrapedProduct": "Dr Pepper Cherry Soda Pop, 12 fl oz, 12 Pack Cans",
+      "error": null,
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": [
+        {
+          "supplier": "Walmart",
+          "packPrice": 6.97,
+          "packSize": 12,
+          "unitPrice": 0.58,
+          "name": "Dr Pepper Cherry Soda Pop, 12 fl oz, 12 Pack Cans",
+          "url": "https://www.walmart.com/ip/Dr-Pepper-Cherry-Soda-Pop-12-fl-oz-12-Pack-Cans/16504543?classType=REGULAR&athbdg=L1300"
+        }
+      ]
+    },
+    "machine-diet-coke-12-oz": {
+      "productId": "machine-diet-coke-12-oz",
+      "supplier": "Walmart",
+      "cost": 0.8,
+      "prevCost": 0.43,
+      "suggestedPrice": 1.5,
+      "margin": 47,
+      "status": "Pending Approval",
+      "trigger": "Supplier cost up $0.37",
+      "sourceUrl": "https://www.walmart.com/ip/Diet-Coke-Diet-Cola-Soda-Pop-12-fl-oz-Bottles-8-Pack/10291580?classType=REGULAR&athbdg=L1600",
+      "packPrice": 6.42,
+      "packSize": 8,
+      "scraped": true,
+      "scrapedProduct": "Diet Coke Diet Cola Soda Pop, 12 fl oz Bottles, 8 Pack",
+      "error": null,
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": [
+        {
+          "supplier": "Walmart",
+          "packPrice": 6.42,
+          "packSize": 8,
+          "unitPrice": 0.8,
+          "name": "Diet Coke Diet Cola Soda Pop, 12 fl oz Bottles, 8 Pack",
+          "url": "https://www.walmart.com/ip/Diet-Coke-Diet-Cola-Soda-Pop-12-fl-oz-Bottles-8-Pack/10291580?classType=REGULAR&athbdg=L1600"
+        }
+      ]
+    },
+    "machine-funyuns-onion-flavored-rings-1-25oz": {
+      "productId": "machine-funyuns-onion-flavored-rings-1-25oz",
+      "supplier": "Walmart",
+      "cost": 1.48,
+      "prevCost": 0,
+      "suggestedPrice": 3,
+      "margin": 51,
+      "status": "Pending Approval",
+      "trigger": "Supplier cost up $1.48",
+      "sourceUrl": "https://www.walmart.com/ip/Funyuns-Minis-Regular-Single-Serve-Cannister-1-125oz/15167402760?classType=REGULAR",
+      "packPrice": 1.48,
+      "packSize": null,
+      "scraped": true,
+      "scrapedProduct": "Funyuns Minis Onion Flavored Rings Original Single Serve Cannister 1.125oz",
+      "error": null,
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": [
+        {
+          "supplier": "Walmart",
+          "packPrice": 1.48,
+          "packSize": null,
+          "unitPrice": 1.48,
+          "name": "Funyuns Minis Onion Flavored Rings Original Single Serve Cannister 1.125oz",
+          "url": "https://www.walmart.com/ip/Funyuns-Minis-Regular-Single-Serve-Cannister-1-125oz/15167402760?classType=REGULAR"
+        }
+      ]
+    },
+    "machine-hot-cheetos-1-oz": {
+      "productId": "machine-hot-cheetos-1-oz",
+      "supplier": "Sam's Club",
+      "cost": 20.88,
+      "prevCost": 0.18,
+      "suggestedPrice": 41.75,
+      "margin": 50,
+      "status": "Pending Approval",
+      "trigger": "Supplier cost up $20.70",
+      "sourceUrl": "",
+      "packPrice": 20.88,
+      "packSize": null,
+      "scraped": true,
+      "scrapedProduct": "Cheetos Flamin Hot Crunchy Snacks",
+      "error": null,
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": [
+        {
+          "supplier": "Sam's Club",
+          "packPrice": 20.88,
+          "packSize": null,
+          "unitPrice": 20.88,
+          "name": "Cheetos Flamin Hot Crunchy Snacks",
+          "url": ""
+        }
+      ]
+    },
+    "machine-arizona-watermelon": {
+      "productId": "machine-arizona-watermelon",
+      "supplier": "Not scraped yet",
+      "cost": 0.7,
+      "prevCost": 0.7,
+      "suggestedPrice": 2,
+      "margin": 65,
+      "status": "Cost Margin",
+      "trigger": "Healthy margin",
+      "packPrice": null,
+      "packSize": null,
+      "scraped": false,
+      "scrapedProduct": null,
+      "error": "Sam's Club: rate limited; Walmart: rate limited; HEB: request failed with status 500",
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": []
+    },
+    "machine-mtn-dew-regular": {
+      "productId": "machine-mtn-dew-regular",
+      "supplier": "Not scraped yet",
+      "cost": 1.29,
+      "prevCost": 1.29,
+      "suggestedPrice": 2.5,
+      "margin": 48,
+      "status": "Cost Margin",
+      "trigger": "Healthy margin",
+      "packPrice": null,
+      "packSize": null,
+      "scraped": false,
+      "scrapedProduct": null,
+      "error": "Sam's Club: no matching supplier result found; Walmart: rate limited; HEB: rate limited",
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": []
+    },
+    "machine-ruffles-cheddar-sour-cream": {
+      "productId": "machine-ruffles-cheddar-sour-cream",
+      "supplier": "Walmart",
+      "cost": 5.94,
+      "prevCost": 0.4,
+      "suggestedPrice": 10.75,
+      "margin": 45,
+      "status": "Pending Approval",
+      "trigger": "Supplier cost up $5.54",
+      "sourceUrl": "https://www.walmart.com/ip/Ruffles-Cheddar-Sour-Cream-Potato-Snack-Chips-Party-Size-12-5-oz-Bag/411914231?classType=VARIANT&athbdg=L1200",
+      "packPrice": 5.94,
+      "packSize": null,
+      "scraped": true,
+      "scrapedProduct": "Ruffles Cheddar & Sour Cream Potato Snack Chips, Party Size, 12.5 oz Bag",
+      "error": null,
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": [
+        {
+          "supplier": "Walmart",
+          "packPrice": 5.94,
+          "packSize": null,
+          "unitPrice": 5.94,
+          "name": "Ruffles Cheddar & Sour Cream Potato Snack Chips, Party Size, 12.5 oz Bag",
+          "url": "https://www.walmart.com/ip/Ruffles-Cheddar-Sour-Cream-Potato-Snack-Chips-Party-Size-12-5-oz-Bag/411914231?classType=VARIANT&athbdg=L1200"
+        }
+      ]
+    },
+    "machine-white-monster": {
+      "productId": "machine-white-monster",
+      "supplier": "Not scraped yet",
+      "cost": 0,
+      "prevCost": 0,
+      "suggestedPrice": 0,
+      "margin": 0,
+      "status": "Pending Approval",
+      "trigger": "Margin below target",
+      "packPrice": null,
+      "packSize": null,
+      "scraped": false,
+      "scrapedProduct": null,
+      "error": "Sam's Club: rate limited; Walmart: rate limited; HEB: rate limited",
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": []
+    },
+    "machine-starbucks-mocha-frappuccino-bottle": {
+      "productId": "machine-starbucks-mocha-frappuccino-bottle",
+      "supplier": "Walmart",
+      "cost": 1.95,
+      "prevCost": 0,
+      "suggestedPrice": 4,
+      "margin": 51,
+      "status": "Pending Approval",
+      "trigger": "Supplier cost up $1.95",
+      "sourceUrl": "https://www.walmart.com/ip/Starbucks-Frappuccino-Mocha-Iced-Coffee-9-5-oz-4-Pack-Bottles/11964578?classType=VARIANT",
+      "packPrice": 7.78,
+      "packSize": 4,
+      "scraped": true,
+      "scrapedProduct": "Starbucks Frappuccino Mocha Iced Coffee, 9.5 oz, 4 pack Bottles",
+      "error": null,
+      "updatedAt": "2026-04-03T16:23:45.830Z",
+      "allPrices": [
+        {
+          "supplier": "Sam's Club",
+          "packPrice": 24.18,
+          "packSize": null,
+          "unitPrice": 24.18,
+          "name": "Starbucks Frappuccino Mocha Coffee",
+          "url": ""
+        },
+        {
+          "supplier": "Walmart",
+          "packPrice": 7.78,
+          "packSize": 4,
+          "unitPrice": 1.95,
+          "name": "Starbucks Frappuccino Mocha Iced Coffee, 9.5 oz, 4 pack Bottles",
+          "url": "https://www.walmart.com/ip/Starbucks-Frappuccino-Mocha-Iced-Coffee-9-5-oz-4-Pack-Bottles/11964578?classType=VARIANT"
+        }
+      ]
+    }
+  }
+}

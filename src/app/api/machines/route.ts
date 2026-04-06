@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
+import { readEnv } from "@/lib/runtime-env";
 
-const scraperUrl = () => process.env.SCRAPER_API_URL || "http://localhost:8000";
-const apiKey = () => process.env.SCRAPER_BACKEND_KEY || "";
+const scraperUrl = () => readEnv("SCRAPER_API_URL") || "http://localhost:8000";
+const apiKey = () => readEnv("SCRAPER_BACKEND_KEY");
 
 export async function GET() {
   try {

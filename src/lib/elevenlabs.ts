@@ -1,9 +1,19 @@
 import crypto from "crypto";
+import { readEnv } from "./runtime-env";
 
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY!;
-const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID!;
-const ELEVENLABS_PHONE_NUMBER_ID = process.env.ELEVENLABS_PHONE_NUMBER_ID!;
 const ELEVENLABS_BASE_URL = "https://api.elevenlabs.io/v1";
+
+function getElevenLabsApiKey() {
+  return readEnv("ELEVENLABS_API_KEY");
+}
+
+function getElevenLabsAgentId() {
+  return readEnv("ELEVENLABS_AGENT_ID");
+}
+
+export function getElevenLabsPhoneNumberId() {
+  return readEnv("ELEVENLABS_PHONE_NUMBER_ID", ["NEXT_PUBLIC_ELEVENLABS_PHONE_NUMBER_ID"]);
+}
 
 interface TriggerCallParams {
   phoneNumber: string;
@@ -28,19 +38,23 @@ interface ElevenLabsConversationResponse {
 }
 
 export async function triggerOutboundCall(params: TriggerCallParams): Promise<ElevenLabsOutboundResponse> {
-  if (!ELEVENLABS_PHONE_NUMBER_ID) {
+  const apiKey = getElevenLabsApiKey();
+  const agentId = getElevenLabsAgentId();
+  const phoneNumberId = getElevenLabsPhoneNumberId();
+
+  if (!phoneNumberId) {
     throw new Error("No ElevenLabs phone number configured. Add ELEVENLABS_PHONE_NUMBER_ID to env vars.");
   }
 
   const response = await fetch(`${ELEVENLABS_BASE_URL}/convai/twilio/outbound-call`, {
     method: "POST",
     headers: {
-      "xi-api-key": ELEVENLABS_API_KEY,
+      "xi-api-key": apiKey,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      agent_id: ELEVENLABS_AGENT_ID,
-      agent_phone_number_id: ELEVENLABS_PHONE_NUMBER_ID,
+      agent_id: agentId,
+      agent_phone_number_id: phoneNumberId,
       to_number: params.phoneNumber,
       conversation_initiation_client_data: {
         dynamic_variables: {
@@ -62,7 +76,7 @@ export async function triggerOutboundCall(params: TriggerCallParams): Promise<El
 export async function getConversationDetails(conversationId: string): Promise<ElevenLabsConversationResponse> {
   const response = await fetch(`${ELEVENLABS_BASE_URL}/convai/conversations/${conversationId}`, {
     headers: {
-      "xi-api-key": ELEVENLABS_API_KEY,
+      "xi-api-key": getElevenLabsApiKey(),
     },
   });
 

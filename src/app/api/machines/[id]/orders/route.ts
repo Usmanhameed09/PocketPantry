@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getStoredMachineOrderSnapshot, saveMachineOrderSnapshot, type StoredMachineOrder } from "@/lib/machine-order-store";
+import { readEnv } from "@/lib/runtime-env";
 
-const scraperUrl = () => process.env.SCRAPER_API_URL || "http://localhost:8000";
-const apiKey = () => process.env.SCRAPER_BACKEND_KEY || "";
+const scraperUrl = () => readEnv("SCRAPER_API_URL") || "http://localhost:8000";
+const apiKey = () => readEnv("SCRAPER_BACKEND_KEY");
 
 async function fetchMachineOrders(machineId: string, limit = 100) {
   const response = await fetch(

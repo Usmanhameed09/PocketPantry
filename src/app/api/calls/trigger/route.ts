@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLead, updateLead } from "@/lib/leads-store";
-import { triggerOutboundCall, formatPhoneE164 } from "@/lib/elevenlabs";
+import { triggerOutboundCall, formatPhoneE164, getElevenLabsPhoneNumberId } from "@/lib/elevenlabs";
 
 /**
  * POST /api/calls/trigger — Trigger an outbound ElevenLabs call to a lead
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Lead has no phone number" }, { status: 400 });
     }
 
-    if (!process.env.ELEVENLABS_PHONE_NUMBER_ID) {
+    if (!getElevenLabsPhoneNumberId()) {
       return NextResponse.json(
         { error: "ElevenLabs phone number not configured. Add ELEVENLABS_PHONE_NUMBER_ID to env vars." },
         { status: 500 }

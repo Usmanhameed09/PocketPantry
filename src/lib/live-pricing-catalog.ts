@@ -1,6 +1,7 @@
 import { createServerClient } from "./supabase";
 import { promises as fs } from "fs";
 import path from "path";
+import { readEnv } from "./runtime-env";
 
 export type ProductCategory = "beverage" | "snack";
 
@@ -99,8 +100,8 @@ type LocalPricingStore = {
   savedAnalyses: Record<string, SavedPricingAnalysis>;
 };
 
-const scraperUrl = () => process.env.SCRAPER_API_URL || "http://localhost:8000";
-const apiKey = () => process.env.SCRAPER_BACKEND_KEY || "";
+const scraperUrl = () => readEnv("SCRAPER_API_URL") || "http://localhost:8000";
+const apiKey = () => readEnv("SCRAPER_BACKEND_KEY");
 const localStorePath = path.join(process.cwd(), ".data", "pricing-catalog.json");
 
 function buildHeaders() {

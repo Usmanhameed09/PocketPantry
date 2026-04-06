@@ -104,7 +104,12 @@ const apiKey = () => process.env.SCRAPER_BACKEND_KEY || "";
 const localStorePath = path.join(process.cwd(), ".data", "pricing-catalog.json");
 
 function buildHeaders() {
-  return apiKey() ? { "x-api-key": apiKey() } : {};
+  const key = apiKey();
+  const headers: Record<string, string> = {};
+  if (key) {
+    headers["x-api-key"] = key;
+  }
+  return headers;
 }
 
 export function normalizeSku(name: string) {

@@ -4,6 +4,21 @@ import { getConversationDetails } from "@/lib/elevenlabs";
 import { processElevenLabsEvent, sendPrimaryEmail } from "@/lib/elevenlabs-webhook";
 import { processOutreachFollowUps } from "@/lib/outreach-follow-up";
 
+function toWebhookTranscript(transcript: unknown) {
+  if (typeof transcript === "string") {
+    return transcript;
+  }
+
+  if (Array.isArray(transcript)) {
+    return transcript
+      .map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry)))
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return null;
+}
+
 function buildNoAnswerFallback(conversation: Record<string, unknown>, fallbackConversationId: string) {
   const metadata = (conversation.metadata as Record<string, unknown> | undefined) || {};
   return {
@@ -28,7 +43,7 @@ function buildNoAnswerFallback(conversation: Record<string, unknown>, fallbackCo
     },
     conversation_initiation_client_data:
       (conversation.conversation_initiation_client_data as Record<string, unknown> | undefined) || {},
-    transcript: conversation.transcript || null,
+    transcript: toWebhookTranscript(conversation.transcript),
   };
 }
 
@@ -115,6 +130,7 @@ export async function POST() {
                 type: "post_call_transcription",
                 ...conversation,
                 conversation_id: conversation.conversation_id || lead.vapiCallId,
+                transcript: toWebhookTranscript(conversation.transcript),
               }
         );
 

@@ -47,6 +47,10 @@ export async function POST(request: NextRequest) {
       "office",
       "office manager",
       "manager",
+      "the manager",
+      "manager on duty",
+      "store manager",
+      "general manager",
       "admin",
       "administrator",
     ]);
@@ -56,7 +60,7 @@ export async function POST(request: NextRequest) {
       (normalizedContact && !genericContactNames.has(normalizedContact) ? lead.contact.trim() : "");
     const bestKnownContactTitle = (lead.contactTitle || "").trim();
     const bestKnownFirstName = (bestKnownContactName.split(/\s+/)[0] || "").trim();
-    const openingTargetName = bestKnownContactName || "the person who handles vending or breakroom services";
+    const openingTargetName = bestKnownContactName || "the manager";
     const knownEmail = (lead.decisionMakerEmail || lead.email || "").trim();
     const knownPhoneNumber = (lead.decisionMakerPhone || lead.phone || "").trim();
     const knownAddress = (lead.address || "").trim();
@@ -76,6 +80,7 @@ export async function POST(request: NextRequest) {
         namedContact: bestKnownContactName,
         knownLeadFirstName: bestKnownFirstName,
         hasNamedLead: bestKnownContactName ? "true" : "false",
+        hasSpecificLeadName: bestKnownContactName ? "true" : "false",
         openingTargetName,
         contactTitle: bestKnownContactTitle,
         businessName: knownBusinessName,

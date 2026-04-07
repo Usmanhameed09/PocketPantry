@@ -2,6 +2,7 @@
 
 import Header from "@/components/Header";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useRouter } from "next/navigation";
 import {
   Truck,
   PackageX,
@@ -13,7 +14,6 @@ import {
   ArrowUpRight,
   Clock,
   CheckCircle2,
-  ChevronRight,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -120,6 +120,7 @@ const machineAlerts = [
 export default function Dashboard() {
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(1024);
+  const router = useRouter();
   return (
     <div style={{ minHeight: "100vh" }}>
       <Header title="Today" subtitle="Tuesday, April 30" />
@@ -174,7 +175,7 @@ export default function Dashboard() {
                 ))}
               </div>
             </div>
-            <div style={cardFooter}><button style={greenBtn}>Start Route</button></div>
+            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/machines")}>Start Route</button></div>
           </div>
 
           {/* --- Card 2: Low Inventory --- */}
@@ -200,7 +201,7 @@ export default function Dashboard() {
                 <InfoRow label="Estimated Restock Cost" value="$689.00" />
               </div>
             </div>
-            <div style={cardFooter}><button style={greenBtn}>View Order</button></div>
+            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/inventory")}>View Order</button></div>
           </div>
 
           {/* --- Card 3: Price Change --- */}
@@ -228,7 +229,7 @@ export default function Dashboard() {
                 ))}
               </div>
             </div>
-            <div style={cardFooter}><button style={blueBtn}>Review Prices</button></div>
+            <div style={cardFooter}><button style={blueBtn} onClick={() => router.push("/pricing")}>Review Prices</button></div>
           </div>
 
           {/* --- Card 4: New Location Reply --- */}
@@ -269,7 +270,7 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
-            <div style={cardFooter}><button style={greenBtn}>View Reply</button></div>
+            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/pipeline")}>View Reply</button></div>
           </div>
 
           {/* --- Card 5: Machine Alert --- */}
@@ -309,7 +310,7 @@ export default function Dashboard() {
                 ))}
               </div>
             </div>
-            <div style={cardFooter}><button style={redBtn}>Check Status</button></div>
+            <div style={cardFooter}><button style={redBtn} onClick={() => router.push("/machines")}>Check Status</button></div>
           </div>
 
           {/* --- Card 6: Sales Summary --- */}
@@ -338,7 +339,7 @@ export default function Dashboard() {
                 <MiniStat label="Cash" value="$32.10" sub="-5%" positive={false} />
               </div>
             </div>
-            <div style={cardFooter}><button style={greenBtn}>View Report</button></div>
+            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/reports")}>View Report</button></div>
           </div>
 
         </div>

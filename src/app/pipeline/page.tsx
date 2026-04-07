@@ -25,6 +25,10 @@ import {
   Settings2,
   ChevronLeft,
   ChevronRight,
+  Pencil,
+  CheckSquare,
+  Square,
+  RotateCcw,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -89,6 +93,8 @@ interface Lead {
   visitDate?: string;
   visitTime?: string;
   emailSent?: boolean;
+  followUp1Sent?: boolean;
+  followUp2Sent?: boolean;
 }
 
 interface CapturedLeadData {
@@ -367,6 +373,27 @@ function hasLeadInsights(lead: Lead) {
   );
 }
 
+function formatLeadSchedule(date?: string, time?: string) {
+  if (!date && !time) return undefined;
+  if (date && !time) {
+    return formatEasternDateTime(date) || date;
+  }
+  if (!date && time) {
+    return time;
+  }
+
+  const combined = `${date} ${time}`.trim();
+  return formatEasternDateTime(combined) || combined;
+}
+
+function getEmailTrackingLabel(lead: Lead) {
+  if (lead.followUp2Sent) return "Follow-up 2 sent";
+  if (lead.followUp1Sent) return "Follow-up 1 sent";
+  if (lead.emailSent) return "Primary email sent";
+  if (lead.emailLogs.length > 0) return `${lead.emailLogs.length} email touchpoint${lead.emailLogs.length === 1 ? "" : "s"}`;
+  return undefined;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
@@ -392,6 +419,9 @@ export default function PipelinePage() {
   const [googleCalendarBusy, setGoogleCalendarBusy] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [listPage, setListPage] = useState(1);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+  const [bulkCalling, setBulkCalling] = useState(false);
+  const [editingLead, setEditingLead] = useState<Lead | null>(null);
 
   const syncPendingCalls = useCallback(async () => {
     try {
@@ -560,6 +590,70 @@ export default function PipelinePage() {
     }
   };
 
+  const toggleLeadSelection = (leadId: string) => {
+    setSelectedLeadIds((current) =>
+      current.includes(leadId)
+        ? current.filter((item) => item !== leadId)
+        : [...current, leadId]
+    );
+  };
+
+  const clearLeadSelection = () => {
+    setSelectedLeadIds([]);
+  };
+
+  const launchBulkCalls = async () => {
+    const selectedLeads = leads.filter((lead) => selectedLeadIds.includes(lead.id));
+    const callableLeads = selectedLeads
+      .filter((lead) => lead.callLogs.length < 3 && lead.phone)
+      .slice(0, 20);
+
+    if (callableLeads.length === 0) {
+      setCallStatus({
+        leadId: "bulk-calls",
+        message: "Select at least one callable lead first.",
+        type: "error",
+      });
+      return;
+    }
+
+    setBulkCalling(true);
+    setCallStatus(null);
+
+    const results = await Promise.allSettled(
+      callableLeads.map(async (lead) => {
+        const result = await fetch("/api/calls/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leadId: lead.id }),
+        });
+        const data = await result.json();
+        return {
+          ok: result.ok,
+          message: (data.message || data.error || "").trim(),
+        };
+      })
+    );
+
+    const successCount = results.filter(
+      (result) => result.status === "fulfilled" && result.value.ok
+    ).length;
+    const failedCount = results.length - successCount;
+
+    setBulkCalling(false);
+    setSelectedLeadIds([]);
+    fetchLeads();
+
+    setCallStatus({
+      leadId: "bulk-calls",
+      message:
+        failedCount > 0
+          ? `Started ${successCount} calls and skipped ${failedCount}.`
+          : `Started ${successCount} calls successfully.`,
+      type: successCount > 0 ? "success" : "error",
+    });
+  };
+
   const removeLead = async (leadId: string) => {
     try {
       const res = await fetch(`/api/leads?id=${encodeURIComponent(leadId)}`, {
@@ -710,10 +804,25 @@ export default function PipelinePage() {
     }
   }, [listPage, totalListPages]);
 
+  useEffect(() => {
+    const visibleLeadIds = new Set(filteredLeads.map((lead) => lead.id));
+    setSelectedLeadIds((current) => current.filter((leadId) => visibleLeadIds.has(leadId)));
+  }, [filteredLeads]);
+
   const paginatedLeads = useMemo(() => {
     const startIndex = (listPage - 1) * LIST_PAGE_SIZE;
     return filteredLeads.slice(startIndex, startIndex + LIST_PAGE_SIZE);
   }, [filteredLeads, listPage]);
+
+  const selectedVisibleLeads = useMemo(
+    () => leads.filter((lead) => selectedLeadIds.includes(lead.id)),
+    [leads, selectedLeadIds]
+  );
+
+  const callableSelectedLeads = useMemo(
+    () => selectedVisibleLeads.filter((lead) => lead.callLogs.length < 3 && Boolean(lead.phone)),
+    [selectedVisibleLeads]
+  );
 
   const totalCalls = leads.reduce((s, l) => s + l.callLogs.length, 0);
   const totalEmails = leads.reduce((s, l) => s + l.emailLogs.length, 0);
@@ -757,7 +866,7 @@ export default function PipelinePage() {
             label="Interested" value={`${interested}`} sub={`${leads.filter(l => l.stage === "Proposal Requested").length} want proposals`} />
           <StatBox icon={<Phone size={20} color="#d97706" />} iconBg="#fef3c7"
             label="Callbacks Pending" value={`${leads.filter(l => l.stage === "Callback").length}`}
-            sub="AI will retry automatically" />
+            sub="Scheduled callbacks are tracked in pipeline" />
         </div>
 
         {/* Toolbar */}
@@ -813,6 +922,28 @@ export default function PipelinePage() {
           </div>
 
           <div className="pipeline-actions" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              onClick={launchBulkCalls}
+              disabled={bulkCalling || callableSelectedLeads.length === 0}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
+                background: callableSelectedLeads.length === 0 ? "#f8fafc" : "#7c3aed",
+                color: callableSelectedLeads.length === 0 ? "#94a3b8" : "#fff",
+                border: callableSelectedLeads.length === 0 ? "1px solid #d5d9e2" : "none",
+                borderRadius: 8, fontSize: 13, fontWeight: 600,
+                cursor: callableSelectedLeads.length === 0 || bulkCalling ? "not-allowed" : "pointer",
+                opacity: bulkCalling ? 0.7 : 1,
+              }}
+            >
+              {bulkCalling ? <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Calling...</> : <><CheckSquare size={14} /> Call Selected</>}
+            </button>
+            {selectedLeadIds.length > 0 && (
+              <button onClick={clearLeadSelection} style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
+                background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
+                fontSize: 13, fontWeight: 500, cursor: "pointer",
+              }}><RotateCcw size={14} /> Clear Selection</button>
+            )}
             <button onClick={() => setShowExcelImportModal(true)} style={{
               display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
               background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
@@ -1027,6 +1158,9 @@ export default function PipelinePage() {
                         onTriggerCall={() => triggerCall(lead.id)}
                         onDelete={() => removeLead(lead.id)}
                         isCalling={callingLeadId === lead.id}
+                        selected={selectedLeadIds.includes(lead.id)}
+                        onSelect={() => toggleLeadSelection(lead.id)}
+                        onEdit={() => setEditingLead(lead)}
                       />
                     ))}
                     {stageLeads.length === 0 && (
@@ -1100,6 +1234,11 @@ export default function PipelinePage() {
                       <div style={{ fontSize: 11, color: "#94a3b8" }}>
                         {l.email || "No saved email"}
                       </div>
+                      {getEmailTrackingLabel(l) && (
+                        <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+                          {getEmailTrackingLabel(l)}
+                        </div>
+                      )}
                     </div>
                     <div>
                       <span style={{
@@ -1107,8 +1246,37 @@ export default function PipelinePage() {
                         padding: "4px 10px", borderRadius: 10, border: `1px solid ${sc.border}`,
                       }}>{l.stage}</span>
                     </div>
-                    <div style={{ fontSize: 12, color: "#94a3b8" }}>{l.lastActivity}</div>
-                    <div>
+                    <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                      {l.lastActivity}
+                      {formatLeadSchedule(l.callbackDate, l.callbackTime) && (
+                        <div style={{ color: "#b45309", marginTop: 4 }}>
+                          Callback: {formatLeadSchedule(l.callbackDate, l.callbackTime)}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleLeadSelection(l.id);
+                        }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "6px 10px",
+                          background: selectedLeadIds.includes(l.id) ? "#f0fdf4" : "#fff",
+                          color: selectedLeadIds.includes(l.id) ? "#166534" : "#475569",
+                          border: `1px solid ${selectedLeadIds.includes(l.id) ? "#a7f3d0" : "#d5d9e2"}`,
+                          borderRadius: 6,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {selectedLeadIds.includes(l.id) ? <CheckSquare size={12} /> : <Square size={12} />}
+                        {selectedLeadIds.includes(l.id) ? "Selected" : "Select"}
+                      </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); triggerCall(l.id); }}
                         disabled={callingLeadId === l.id || l.callLogs.length >= 3}
@@ -1128,6 +1296,19 @@ export default function PipelinePage() {
                         ) : (
                           <><PhoneCall size={12} /> Call</>
                         )}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingLead(l);
+                        }}
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 4, padding: "6px 10px",
+                          background: "#fff", color: "#475569", border: "1px solid #d5d9e2",
+                          borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                        }}
+                      >
+                        <Pencil size={12} /> Edit
                       </button>
                     </div>
                   </div>
@@ -1237,6 +1418,23 @@ export default function PipelinePage() {
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <button
+                  onClick={() => setListPage(1)}
+                  disabled={listPage === 1}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: "1px solid #d5d9e2",
+                    background: "#fff",
+                    color: listPage === 1 ? "#94a3b8" : "#374151",
+                    cursor: listPage === 1 ? "not-allowed" : "pointer",
+                  }}
+                >
+                  First
+                </button>
+                <button
                   onClick={() => setListPage((current) => Math.max(1, current - 1))}
                   disabled={listPage === 1}
                   style={{
@@ -1275,6 +1473,23 @@ export default function PipelinePage() {
                   Next
                   <ChevronRight size={14} />
                 </button>
+                <button
+                  onClick={() => setListPage(totalListPages)}
+                  disabled={listPage === totalListPages}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: "1px solid #d5d9e2",
+                    background: "#fff",
+                    color: listPage === totalListPages ? "#94a3b8" : "#374151",
+                    cursor: listPage === totalListPages ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Last
+                </button>
               </div>
             </div>
           </div>
@@ -1304,12 +1519,22 @@ export default function PipelinePage() {
         />
       )}
 
+      {editingLead && (
+        <AddLeadModal
+          lead={editingLead}
+          onClose={() => setEditingLead(null)}
+          onAdded={() => {
+            setEditingLead(null);
+            fetchLeads();
+          }}
+        />
+      )}
+
       {showGoogleMapsModal && (
         <GoogleMapsModal
           existingLeads={leads}
           onClose={() => setShowGoogleMapsModal(false)}
           onImported={(message) => {
-            setShowGoogleMapsModal(false);
             setCallStatus({ leadId: "google-maps", message, type: "success" });
             fetchLeads();
           }}
@@ -1357,18 +1582,26 @@ export default function PipelinePage() {
 /*  Add Lead Modal                                                     */
 /* ------------------------------------------------------------------ */
 
-function AddLeadModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+function AddLeadModal({
+  lead,
+  onClose,
+  onAdded,
+}: {
+  lead?: Lead;
+  onClose: () => void;
+  onAdded: () => void;
+}) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [form, setForm] = useState({
-    business: "",
-    contact: "",
-    phone: "",
-    email: "",
-    address: "",
-    distance: "",
-    businessType: "",
-    contactMethod: "Call" as ContactMethod,
+    business: lead?.business || "",
+    contact: lead?.contact || "",
+    phone: lead?.phone || "",
+    email: lead?.email || "",
+    address: lead?.address || "",
+    distance: lead?.distance || "",
+    businessType: lead?.businessType || "",
+    contactMethod: (lead?.contactMethod || "Call") as ContactMethod,
   });
 
   const update = (field: string, value: string) => {
@@ -1385,15 +1618,19 @@ function AddLeadModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
     setError("");
     try {
       const res = await fetch("/api/leads", {
-        method: "POST",
+        method: lead ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, source: "Manual" }),
+        body: JSON.stringify({
+          ...(lead ? { id: lead.id } : {}),
+          ...form,
+          source: lead?.source || "Manual",
+        }),
       });
       if (res.ok) {
         onAdded();
       } else {
         const data = await res.json();
-        setError(data.error || "Failed to add lead");
+        setError(data.error || `Failed to ${lead ? "update" : "add"} lead`);
       }
     } catch {
       setError("Network error");
@@ -1437,8 +1674,12 @@ function AddLeadModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
               <Plus size={18} color="#16a34a" />
             </div>
             <div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Add New Lead</div>
-              <div style={{ fontSize: 12, color: "#94a3b8" }}>Enter lead details to add to pipeline</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>
+                {lead ? "Edit Lead" : "Add New Lead"}
+              </div>
+              <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                {lead ? "Update the lead details used for calling, email, and follow-up." : "Enter lead details to add to pipeline"}
+              </div>
             </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
@@ -1528,7 +1769,13 @@ function AddLeadModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
                 display: "flex", alignItems: "center", gap: 6,
               }}
             >
-              {saving ? <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Saving...</> : <><Plus size={14} /> Add Lead</>}
+              {saving ? (
+                <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Saving...</>
+              ) : lead ? (
+                <><Pencil size={14} /> Save Changes</>
+              ) : (
+                <><Plus size={14} /> Add Lead</>
+              )}
             </button>
           </div>
         </form>
@@ -2356,6 +2603,7 @@ function GoogleMapsModal({
   const [searching, setSearching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
   const [results, setResults] = useState<GoogleMapsLeadCandidate[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [searchMeta, setSearchMeta] = useState<{ formattedAddress?: string; mode?: "category" | "all" } | null>(null);
@@ -2438,6 +2686,7 @@ function GoogleMapsModal({
 
     setSearching(true);
     setError("");
+    setSuccessMessage("");
 
     try {
       const res = await fetch("/api/google-maps/search", {
@@ -2498,6 +2747,16 @@ function GoogleMapsModal({
     setSelectedIds([]);
   };
 
+  const resetSearchState = () => {
+    setZipcode("");
+    setRadiusMiles("25");
+    setCategory("");
+    setResults([]);
+    setSelectedIds([]);
+    setSearchMeta(null);
+    setError("");
+  };
+
   const importCandidates = async (mode: "selected" | "all", triggerCalls: boolean) => {
     const importList =
       mode === "all"
@@ -2511,6 +2770,7 @@ function GoogleMapsModal({
 
     setSaving(true);
     setError("");
+    setSuccessMessage("");
 
     let importedCount = 0;
     let calledCount = 0;
@@ -2623,10 +2883,13 @@ function GoogleMapsModal({
         ? `Imported ${importedCount} Google Maps lead${importedCount === 1 ? "" : "s"} and started ${calledCount} call${calledCount === 1 ? "" : "s"}${skippedCount ? `, skipped ${skippedCount}` : ""}.`
         : `Imported ${importedCount} Google Maps lead${importedCount === 1 ? "" : "s"}${skippedCount ? `, skipped ${skippedCount}` : ""}.`;
 
+      setSuccessMessage(summary);
+      resetSearchState();
       onImported(summary);
     } catch (importError) {
       const message = importError instanceof Error ? importError.message : "Failed to import Google Maps leads.";
       setError(message);
+      setSuccessMessage("");
       onError(message);
     } finally {
       setSaving(false);
@@ -2684,6 +2947,20 @@ function GoogleMapsModal({
               border: "1px solid #fecaca",
             }}>
               {error}
+            </div>
+          )}
+
+          {successMessage && (
+            <div style={{
+              marginBottom: 16,
+              padding: "10px 14px",
+              background: "#f0fdf4",
+              color: "#166534",
+              borderRadius: 8,
+              fontSize: 12,
+              border: "1px solid #a7f3d0",
+            }}>
+              {successMessage}
             </div>
           )}
 
@@ -2984,12 +3261,16 @@ function GoogleMapsModal({
 /*  Kanban Card                                                        */
 /* ------------------------------------------------------------------ */
 
-function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalling }: {
+function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalling, selected = false, onSelect, onEdit }: {
   lead: Lead; expanded: boolean; onToggle: () => void;
   onTriggerCall: () => void; onDelete: () => void; isCalling: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
+  onEdit?: () => void;
 }) {
   const lastCall = lead.callLogs[lead.callLogs.length - 1];
-  const lastEmail = lead.emailLogs[lead.emailLogs.length - 1];
+  const emailTrackingLabel = getEmailTrackingLabel(lead);
+  const callbackLabel = formatLeadSchedule(lead.callbackDate, lead.callbackTime);
 
   return (
     <div
@@ -3003,8 +3284,54 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalli
       onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.08)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.04)"; }}
     >
-      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", marginBottom: 2 }}>
-        {lead.business}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 2 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, minWidth: 0, flex: 1 }}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect?.();
+            }}
+            style={{
+              marginTop: 1,
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              color: selected ? "#16a34a" : "#94a3b8",
+              flexShrink: 0,
+            }}
+            aria-label={selected ? "Deselect lead" : "Select lead"}
+          >
+            {selected ? <CheckSquare size={15} /> : <Square size={15} />}
+          </button>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", minWidth: 0, overflowWrap: "anywhere" }}>
+            {lead.business}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit?.();
+          }}
+          style={{
+            background: "#fff",
+            border: "1px solid #d5d9e2",
+            borderRadius: 8,
+            width: 28,
+            height: 28,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            color: "#475569",
+            flexShrink: 0,
+          }}
+          aria-label="Edit lead"
+        >
+          <Pencil size={12} />
+        </button>
       </div>
       <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6 }}>
         {lead.businessType} · {lead.distance}
@@ -3043,9 +3370,15 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalli
       )}
 
       {/* Email info */}
-      {lead.emailLogs.length > 0 && (
+      {emailTrackingLabel && (
         <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-          <Mail size={10} /> Email activity: {lastEmail?.status}
+          <Mail size={10} /> Email activity: {emailTrackingLabel}
+        </div>
+      )}
+
+      {callbackLabel && (
+        <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#b45309", marginBottom: 4 }}>
+          <Phone size={10} /> Callback set for {callbackLabel}
         </div>
       )}
 

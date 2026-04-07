@@ -46,6 +46,7 @@ type Stage =
 
 type ContactMethod = "Call" | "Email" | "Call + Email";
 type LeadSource = "Manual" | "Excel Import" | "Google Maps";
+type PipelineQuickFilter = "all" | "new" | "called" | "interested" | "callback";
 
 interface CallLog {
   attempt: number;
@@ -422,6 +423,7 @@ export default function PipelinePage() {
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
   const [bulkCalling, setBulkCalling] = useState(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
+  const [activeQuickFilter, setActiveQuickFilter] = useState<PipelineQuickFilter>("all");
 
   const syncPendingCalls = useCallback(async () => {
     try {
@@ -770,11 +772,28 @@ export default function PipelinePage() {
     }
   };
 
+  const quickFilteredLeads = useMemo(() => {
+    switch (activeQuickFilter) {
+      case "new":
+        return leads.filter((lead) => lead.stage === "New Lead");
+      case "called":
+        return leads.filter((lead) => lead.callLogs.length > 0);
+      case "interested":
+        return leads.filter((lead) =>
+          ["Interested", "Site Visit Requested", "Proposal Requested"].includes(lead.stage)
+        );
+      case "callback":
+        return leads.filter((lead) => lead.stage === "Callback");
+      default:
+        return leads;
+    }
+  }, [activeQuickFilter, leads]);
+
   const filteredLeads = useMemo(() => {
     const query = normalizeText(searchQuery);
-    if (!query) return leads;
+    if (!query) return quickFilteredLeads;
 
-    return leads.filter((lead) => {
+    return quickFilteredLeads.filter((lead) => {
       const haystack = [
         lead.business,
         lead.contact,
@@ -790,7 +809,7 @@ export default function PipelinePage() {
 
       return haystack.includes(query);
     });
-  }, [leads, searchQuery]);
+  }, [quickFilteredLeads, searchQuery]);
 
   const totalListPages = Math.max(1, Math.ceil(filteredLeads.length / LIST_PAGE_SIZE));
 
@@ -858,15 +877,42 @@ export default function PipelinePage() {
 
         {/* Stat Cards */}
         <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
-          <StatBox icon={<Users size={20} color="#16a34a" />} iconBg="#dcfce7"
-            label="Total Leads" value={`${leads.length}`} sub={`${leads.filter(l => l.stage === "New Lead").length} pending first contact`} />
-          <StatBox icon={<PhoneCall size={20} color="#7c3aed" />} iconBg="#ede9fe"
-            label="AI Calls Made" value={`${totalCalls}`} sub={`${totalEmails} emails sent`} />
-          <StatBox icon={<TrendingUp size={20} color="#059669" />} iconBg="#d1fae5"
-            label="Interested" value={`${interested}`} sub={`${leads.filter(l => l.stage === "Proposal Requested").length} want proposals`} />
-          <StatBox icon={<Phone size={20} color="#d97706" />} iconBg="#fef3c7"
-            label="Callbacks Pending" value={`${leads.filter(l => l.stage === "Callback").length}`}
-            sub="Scheduled callbacks are tracked in pipeline" />
+          <StatBox
+            icon={<Users size={20} color="#16a34a" />}
+            iconBg="#dcfce7"
+            label="Total Leads"
+            value={`${leads.length}`}
+            sub={`${leads.filter(l => l.stage === "New Lead").length} pending first contact`}
+            active={activeQuickFilter === "all" || activeQuickFilter === "new"}
+            onClick={() => setActiveQuickFilter((current) => current === "new" ? "all" : "new")}
+          />
+          <StatBox
+            icon={<PhoneCall size={20} color="#7c3aed" />}
+            iconBg="#ede9fe"
+            label="AI Calls Made"
+            value={`${totalCalls}`}
+            sub={`${totalEmails} emails sent`}
+            active={activeQuickFilter === "called"}
+            onClick={() => setActiveQuickFilter((current) => current === "called" ? "all" : "called")}
+          />
+          <StatBox
+            icon={<TrendingUp size={20} color="#059669" />}
+            iconBg="#d1fae5"
+            label="Interested"
+            value={`${interested}`}
+            sub={`${leads.filter(l => l.stage === "Proposal Requested").length} want proposals`}
+            active={activeQuickFilter === "interested"}
+            onClick={() => setActiveQuickFilter((current) => current === "interested" ? "all" : "interested")}
+          />
+          <StatBox
+            icon={<Phone size={20} color="#d97706" />}
+            iconBg="#fef3c7"
+            label="Callbacks Pending"
+            value={`${leads.filter(l => l.stage === "Callback").length}`}
+            sub="Scheduled callbacks are tracked in pipeline"
+            active={activeQuickFilter === "callback"}
+            onClick={() => setActiveQuickFilter((current) => current === "callback" ? "all" : "callback")}
+          />
         </div>
 
         {/* Toolbar */}
@@ -3457,15 +3503,33 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalli
 /*  Small Components                                                   */
 /* ------------------------------------------------------------------ */
 
-function StatBox({ icon, iconBg, label, value, sub }: {
-  icon: React.ReactNode; iconBg: string; label: string; value: string; sub: string;
+function StatBox({ icon, iconBg, label, value, sub, onClick, active = false }: {
+  icon: React.ReactNode;
+  iconBg: string;
+  label: string;
+  value: string;
+  sub: string;
+  onClick?: () => void;
+  active?: boolean;
 }) {
   return (
-    <div style={{
-      background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
-      padding: "18px 20px", display: "flex", alignItems: "center", gap: 14,
-      boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
-    }}>
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        width: "100%",
+        background: active ? "#f8fffb" : "#fff",
+        borderRadius: 14,
+        border: active ? "1px solid #86efac" : "1px solid #d5d9e2",
+        padding: "18px 20px",
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        boxShadow: active ? "0 4px 10px rgba(22, 163, 74, 0.08)" : "0 2px 4px rgba(0,0,0,0.06)",
+        cursor: onClick ? "pointer" : "default",
+        textAlign: "left",
+      }}
+    >
       <div style={{
         width: 44, height: 44, borderRadius: 12, background: iconBg,
         display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
@@ -3475,7 +3539,7 @@ function StatBox({ icon, iconBg, label, value, sub }: {
         <div style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", lineHeight: 1.2 }}>{value}</div>
         <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>{sub}</div>
       </div>
-    </div>
+    </button>
   );
 }
 

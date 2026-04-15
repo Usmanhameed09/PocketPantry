@@ -37,10 +37,11 @@ export async function GET(
   try {
     const live = await fetchMachineOrders(machineId, Number.isFinite(limit) ? limit : 100);
     const orders = Array.isArray(live.orders) ? live.orders : [];
+    const platform = /^\d+$/.test(machineId) ? "Nayax" : "HAHA";
     const snapshot = {
       machineId,
       machineName,
-      platform: "HAHA",
+      platform,
       total: typeof live.total === "number" ? live.total : orders.length,
       orders,
       syncedAt: new Date().toISOString(),

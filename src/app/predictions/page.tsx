@@ -1,36 +1,42 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import Header from "@/components/Header";
 import {
   Brain,
   TrendingUp,
   TrendingDown,
-  BarChart3,
   ArrowUpRight,
   ArrowDownRight,
   RefreshCw,
-  Calendar,
   Zap,
   Target,
-  AlertTriangle,
-  CheckCircle2,
   XCircle,
-  ArrowRight,
   Truck,
-  ThermometerSun,
-  Snowflake,
   Sun,
+  Snowflake,
   Leaf,
+  Loader2,
+  AlertCircle,
+  DollarSign,
   Package,
+  Clock,
+  ChevronRight,
+  Star,
+  ThumbsDown,
+  Plus,
+  Minus,
+  Trash2,
+  BarChart3,
+  Info,
+  Calendar,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
-type TimeRange = "7 Days" | "30 Days" | "90 Days";
 type RecAction = "Add" | "Remove" | "Increase" | "Decrease";
 type Season = "Spring" | "Summer" | "Fall" | "Winter";
 
@@ -39,33 +45,36 @@ interface MachineForecast {
   location: string;
   currentWeekly: number;
   predictedWeekly: number;
-  change: number;          // percentage
-  confidence: number;      // model confidence %
+  change: number;
+  confidence: number;
   topProduct: string;
   weakProduct: string;
   predictedRefillDate: string;
   daysUntilRefill: number;
+  totalTransactions: number;
+  monthsOfData: number;
 }
 
 interface ProductPerformance {
   product: string;
-  machine: string;
   avgDailySales: number;
   predictedDailySales: number;
   trend: "up" | "down" | "stable";
   trendPct: number;
-  revenueShare: number;     // % of machine's total revenue
+  revenueShare: number;
   recommendation: RecAction | null;
   reason: string;
+  totalRevenue: number;
 }
 
 interface SeasonalTrend {
   product: string;
   currentSeason: Season;
-  seasonalChange: number;   // % change expected this season vs last
+  seasonalChange: number;
   peakMonth: string;
   lowMonth: string;
   insight: string;
+  totalRevenue: number;
 }
 
 interface ProductMixRec {
@@ -73,102 +82,39 @@ interface ProductMixRec {
   action: RecAction;
   product: string;
   reason: string;
-  estimatedImpact: string;  // e.g. "+$12/week"
+  estimatedImpact: string;
   confidence: number;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Test Data                                                          */
-/*  Based on 1.5 years of Nayax transaction history                    */
-/*  All predictions are what a time-series model would output          */
-/* ------------------------------------------------------------------ */
-
-const machineForecast: MachineForecast[] = [
-  {
-    machine: "Baker Nissan Sales", location: "12090 Katy Fwy",
-    currentWeekly: 473.50, predictedWeekly: 512.00, change: 8.1, confidence: 89,
-    topProduct: "Red Bull 12 oz", weakProduct: "Cheese Crackers",
-    predictedRefillDate: "Mar 17", daysUntilRefill: 2,
-  },
-  {
-    machine: "B4 Lumber", location: "6815 Airline Dr",
-    currentWeekly: 318.95, predictedWeekly: 342.00, change: 7.2, confidence: 91,
-    topProduct: "Monster Energy", weakProduct: "Baked Lays",
-    predictedRefillDate: "Mar 19", daysUntilRefill: 4,
-  },
-  {
-    machine: "Reynolds Nationwide", location: "3411 Richmond Ave",
-    currentWeekly: 236.10, predictedWeekly: 228.00, change: -3.4, confidence: 85,
-    topProduct: "Celsius Arctic Vibe", weakProduct: "Oatmeal Cookie",
-    predictedRefillDate: "Mar 20", daysUntilRefill: 5,
-  },
-  {
-    machine: "Hartman 16300", location: "16300 Hartman Rd",
-    currentWeekly: 124.60, predictedWeekly: 118.00, change: -5.3, confidence: 82,
-    topProduct: "Celsius Tropical Vibe", weakProduct: "Rice Krispies Treat",
-    predictedRefillDate: "Mar 22", daysUntilRefill: 7,
-  },
-  {
-    machine: "Hartman 1400-1", location: "1400 Hartman Ln",
-    currentWeekly: 221.35, predictedWeekly: 245.00, change: 10.7, confidence: 88,
-    topProduct: "Sour Cream Ruffles", weakProduct: "Trail Mix",
-    predictedRefillDate: "Mar 18", daysUntilRefill: 3,
-  },
-  {
-    machine: "American Fire", location: "9200 Westpark Dr",
-    currentWeekly: 125.95, predictedWeekly: 130.00, change: 3.2, confidence: 79,
-    topProduct: "CSF Peanut Butter", weakProduct: "Granola Bar",
-    predictedRefillDate: "Mar 21", daysUntilRefill: 6,
-  },
-];
-
-const productPerformance: ProductPerformance[] = [
-  { product: "Red Bull 12 oz", machine: "Baker Nissan Sales", avgDailySales: 4.2, predictedDailySales: 4.8, trend: "up", trendPct: 14, revenueShare: 28, recommendation: null, reason: "Strong performer" },
-  { product: "Monster Energy", machine: "B4 Lumber", avgDailySales: 3.8, predictedDailySales: 4.1, trend: "up", trendPct: 8, revenueShare: 24, recommendation: "Increase", reason: "Consistently high demand — consider adding a 2nd facing" },
-  { product: "Celsius Tropical Vibe", machine: "Hartman 16300", avgDailySales: 2.1, predictedDailySales: 2.8, trend: "up", trendPct: 33, revenueShare: 22, recommendation: "Increase", reason: "Rising demand — trending product in this location" },
-  { product: "Snickers", machine: "Baker Nissan Sales", avgDailySales: 2.5, predictedDailySales: 2.4, trend: "stable", trendPct: -2, revenueShare: 12, recommendation: null, reason: "Stable baseline performer" },
-  { product: "Sour Cream Ruffles", machine: "Hartman 1400-1", avgDailySales: 2.0, predictedDailySales: 2.3, trend: "up", trendPct: 15, revenueShare: 18, recommendation: null, reason: "Trending up at this location" },
-  { product: "Oatmeal Cookie", machine: "Reynolds Nationwide", avgDailySales: 0.3, predictedDailySales: 0.2, trend: "down", trendPct: -33, revenueShare: 2, recommendation: "Remove", reason: "Consistently low sales — 0.2 units/day predicted. Replace with a drink." },
-  { product: "Rice Krispies Treat", machine: "Hartman 16300", avgDailySales: 0.4, predictedDailySales: 0.3, trend: "down", trendPct: -25, revenueShare: 3, recommendation: "Remove", reason: "Dead stock — only 2 sold last month. Swap for Cheetos Flamin' Hot." },
-  { product: "Trail Mix", machine: "Hartman 1400-1", avgDailySales: 0.5, predictedDailySales: 0.3, trend: "down", trendPct: -40, revenueShare: 3, recommendation: "Remove", reason: "Declining steadily for 3 months. Workers prefer salty snacks here." },
-  { product: "Baked Lays", machine: "B4 Lumber", avgDailySales: 0.6, predictedDailySales: 0.4, trend: "down", trendPct: -33, revenueShare: 3, recommendation: "Decrease", reason: "Low demand — reduce from 2 facings to 1, add Doritos Nacho instead." },
-  { product: "Cheese Crackers", machine: "Baker Nissan Sales", avgDailySales: 0.3, predictedDailySales: 0.2, trend: "down", trendPct: -33, revenueShare: 1, recommendation: "Remove", reason: "Worst performer across all machines. 0 sales some weeks." },
-];
-
-const seasonalTrends: SeasonalTrend[] = [
-  { product: "Celsius Tropical Vibe", currentSeason: "Spring", seasonalChange: 22, peakMonth: "July", lowMonth: "December", insight: "Energy drinks spike in summer. Stock up by June — predicted +22% demand vs current." },
-  { product: "Monster Energy", currentSeason: "Spring", seasonalChange: 18, peakMonth: "August", lowMonth: "January", insight: "Follows summer heat pattern. Peak demand August. Plan extra inventory." },
-  { product: "Red Bull 12 oz", currentSeason: "Spring", seasonalChange: 15, peakMonth: "July", lowMonth: "November", insight: "Consistent year-round but +15% summer bump. Top revenue driver across fleet." },
-  { product: "Snickers", currentSeason: "Spring", seasonalChange: -8, peakMonth: "October", lowMonth: "July", insight: "Chocolate melting risk in summer reduces sales. Peaks around Halloween." },
-  { product: "Doritos Nacho", currentSeason: "Spring", seasonalChange: 5, peakMonth: "February", lowMonth: "June", insight: "Slight Super Bowl / sports season bump. Relatively stable year-round." },
-  { product: "Granola Bar", currentSeason: "Spring", seasonalChange: -15, peakMonth: "January", lowMonth: "August", insight: "New Year health trend drives Jan sales. Drops significantly by summer." },
-];
-
-const productMixRecs: ProductMixRec[] = [
-  { machine: "Hartman 16300", action: "Remove", product: "Rice Krispies Treat", reason: "Only 2 sold in last 30 days. Predicted to sell 0.3/day.", estimatedImpact: "Free up 1 slot", confidence: 92 },
-  { machine: "Hartman 16300", action: "Add", product: "Cheetos Flamin' Hot", reason: "Top seller at nearby Hartman 1400-1 (1.4/day). Similar worker demographic.", estimatedImpact: "+$8.40/week", confidence: 78 },
-  { machine: "Reynolds Nationwide", action: "Remove", product: "Oatmeal Cookie", reason: "0.2 units/day. Lowest performer across all machines.", estimatedImpact: "Free up 1 slot", confidence: 94 },
-  { machine: "Reynolds Nationwide", action: "Add", product: "Celsius Arctic Vibe", reason: "Already top seller here. Add 2nd facing to reduce stockouts.", estimatedImpact: "+$11.20/week", confidence: 85 },
-  { machine: "B4 Lumber", action: "Decrease", product: "Baked Lays", reason: "0.4/day from 2 facings. Reduce to 1 facing.", estimatedImpact: "Free up 1 slot", confidence: 88 },
-  { machine: "B4 Lumber", action: "Add", product: "Doritos Nacho", reason: "Sells well at 4 other machines (1.0/day avg). Not stocked here yet.", estimatedImpact: "+$6.50/week", confidence: 74 },
-  { machine: "Baker Nissan Sales", action: "Remove", product: "Cheese Crackers", reason: "Worst product in fleet. 0 sales some weeks.", estimatedImpact: "Free up 1 slot", confidence: 96 },
-  { machine: "Baker Nissan Sales", action: "Add", product: "Celsius Tropical Vibe", reason: "Rising trend across fleet (+33%). Dealership staff skew young.", estimatedImpact: "+$14.00/week", confidence: 81 },
-];
+interface PredictionData {
+  generatedAt: string;
+  dataRange: { start: string; end: string; months: number };
+  summary: {
+    totalDataPoints: number;
+    totalMachines: number;
+    totalProducts: number;
+    avgConfidence: number;
+  };
+  machineForecast: MachineForecast[];
+  productPerformance: ProductPerformance[];
+  seasonalTrends: SeasonalTrend[];
+  productMixRecs: ProductMixRec[];
+}
 
 /* ------------------------------------------------------------------ */
-/*  Config                                                             */
+/*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-const actionStyle: Record<RecAction, { color: string; bg: string; icon: typeof ArrowUpRight }> = {
-  Add:      { color: "#059669", bg: "#d1fae5", icon: ArrowUpRight },
-  Remove:   { color: "#dc2626", bg: "#fee2e2", icon: XCircle },
-  Increase: { color: "#16a34a", bg: "#dcfce7", icon: TrendingUp },
-  Decrease: { color: "#d97706", bg: "#fef3c7", icon: TrendingDown },
+const actionConfig: Record<RecAction, { color: string; bg: string; border: string; icon: typeof Plus; label: string }> = {
+  Add:      { color: "#059669", bg: "#ecfdf5", border: "#a7f3d0", icon: Plus,   label: "Add to Machine" },
+  Remove:   { color: "#dc2626", bg: "#fef2f2", border: "#fecaca", icon: Trash2, label: "Remove Product" },
+  Increase: { color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0", icon: ArrowUpRight, label: "Add More Stock" },
+  Decrease: { color: "#d97706", bg: "#fffbeb", border: "#fde68a", icon: Minus,  label: "Reduce Stock" },
 };
 
-const seasonIcon: Record<Season, typeof Sun> = {
-  Spring: Leaf, Summer: Sun, Fall: Leaf, Winter: Snowflake,
-};
+function formatCurrency(n: number) {
+  return "$" + n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
@@ -178,351 +124,646 @@ export default function PredictionsPage() {
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(1024);
   const [tab, setTab] = useState<"overview" | "products" | "seasonal" | "mix">("overview");
-  const [timeRange, setTimeRange] = useState<TimeRange>("7 Days");
+  const [data, setData] = useState<PredictionData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [retraining, setRetraining] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchPredictions = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const res = await fetch("/api/predictions");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Failed to load predictions" }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const json = await res.json();
+      setData(json);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load predictions");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchPredictions(); }, [fetchPredictions]);
+
+  const handleRetrain = async () => {
+    try {
+      setRetraining(true);
+      const res = await fetch("/api/predictions", { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Retrain failed" }));
+        throw new Error(err.error);
+      }
+      await fetchPredictions();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Retrain failed");
+    } finally {
+      setRetraining(false);
+    }
+  };
+
+  /* Loading */
+  if (loading) {
+    return (
+      <div style={{ minHeight: "100vh" }}>
+        <Header title="Predictions" />
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 100, gap: 16 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: "#ecfdf5", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Loader2 size={28} color="#16a34a" style={{ animation: "spin 1s linear infinite" }} />
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: "#374151" }}>Crunching your sales data...</div>
+          <div style={{ fontSize: 13, color: "#94a3b8" }}>Analyzing transactions across all machines</div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </div>
+    );
+  }
+
+  /* Error */
+  if (error || !data) {
+    return (
+      <div style={{ minHeight: "100vh" }}>
+        <Header title="Predictions" />
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 80, gap: 16 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: "#fef2f2", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <AlertCircle size={28} color="#dc2626" />
+          </div>
+          <div style={{ fontSize: 16, color: "#dc2626", fontWeight: 600 }}>{error || "No prediction data available"}</div>
+          <div style={{ fontSize: 13, color: "#94a3b8", textAlign: "center", maxWidth: 420, lineHeight: 1.6 }}>
+            Start the prediction server first:
+          </div>
+          <code style={{ background: "#f1f5f9", padding: "10px 16px", borderRadius: 8, fontSize: 13, color: "#334155" }}>
+            cd prediction-api &amp;&amp; python server.py
+          </code>
+          <button onClick={fetchPredictions} style={{
+            marginTop: 8, padding: "10px 24px", background: "#16a34a", color: "#fff",
+            border: "none", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer",
+          }}>Try Again</button>
+        </div>
+      </div>
+    );
+  }
+
+  const { machineForecast, productPerformance, seasonalTrends, productMixRecs, summary } = data;
 
   const totalPredictedWeekly = machineForecast.reduce((s, m) => s + m.predictedWeekly, 0);
   const totalCurrentWeekly = machineForecast.reduce((s, m) => s + m.currentWeekly, 0);
-  const overallChange = ((totalPredictedWeekly - totalCurrentWeekly) / totalCurrentWeekly * 100).toFixed(1);
-  const avgConfidence = Math.round(machineForecast.reduce((s, m) => s + m.confidence, 0) / machineForecast.length);
-  const recsCount = productMixRecs.length;
+  const overallChangePct = ((totalPredictedWeekly - totalCurrentWeekly) / totalCurrentWeekly * 100);
   const deadProducts = productPerformance.filter(p => p.recommendation === "Remove").length;
+  const generatedDate = new Date(data.generatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const maxWeekly = Math.max(...machineForecast.map(m => Math.max(m.currentWeekly, m.predictedWeekly)));
+
+  const tabItems: { key: typeof tab; label: string; icon: typeof BarChart3; count?: number }[] = [
+    { key: "overview",  label: "Machine Forecast",  icon: BarChart3 },
+    { key: "products",  label: "Product Health",     icon: Package,    count: deadProducts > 0 ? deadProducts : undefined },
+    { key: "seasonal",  label: "Seasonal Trends",    icon: Sun },
+    { key: "mix",       label: "Smart Actions",      icon: Zap,        count: productMixRecs.length },
+  ];
 
   return (
-    <div style={{ minHeight: "100vh" }}>
+    <div style={{ minHeight: "100vh", background: "#f8fafc" }}>
       <Header title="Predictions" />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
-      <div className="page-padding" style={{ padding: isMobile ? 16 : "24px 32px" }}>
-        {/* Model Info Banner */}
+      <div style={{ padding: isMobile ? 16 : "24px 32px", maxWidth: 1400, margin: "0 auto" }}>
+
+        {/* ============ MODEL BANNER ============ */}
         <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          background: "linear-gradient(135deg, #1e3a5f 0%, #16a34a 100%)",
-          borderRadius: 14, padding: "18px 24px", marginBottom: 24, color: "#fff",
+          background: "linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #059669 100%)",
+          borderRadius: 16, padding: isMobile ? "20px" : "22px 28px", marginBottom: 24, color: "#fff",
+          display: "flex", flexDirection: isMobile ? "column" : "row",
+          alignItems: isMobile ? "flex-start" : "center", justifyContent: "space-between",
+          gap: isMobile ? 16 : 0,
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <div style={{
-              width: 48, height: 48, borderRadius: 12, background: "rgba(255,255,255,0.15)",
-              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 52, height: 52, borderRadius: 14, background: "rgba(255,255,255,0.12)",
+              display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(8px)",
             }}>
-              <Brain size={24} color="#fff" />
+              <Brain size={26} color="#fff" />
             </div>
             <div>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>Sales Prediction Model</div>
-              <div style={{ fontSize: 13, opacity: 0.8, marginTop: 2 }}>
-                Trained on 1.5 years of Nayax transaction data · {machineForecast.length} machines · Last trained: Mar 14, 2026
+              <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.3 }}>AI Sales Predictions</div>
+              <div style={{ fontSize: 13, opacity: 0.75, marginTop: 3, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <Calendar size={12} /> {data.dataRange.months} months of data
+                </span>
+                <span style={{ opacity: 0.4 }}>|</span>
+                <span>{summary.totalMachines} machines</span>
+                <span style={{ opacity: 0.4 }}>|</span>
+                <span>{(summary.totalDataPoints / 1000).toFixed(1)}K transactions</span>
               </div>
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 11, opacity: 0.7 }}>Accuracy</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{avgConfidence}%</div>
+              <div style={{ fontSize: 10, opacity: 0.6, textTransform: "uppercase", letterSpacing: 1 }}>Confidence</div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginTop: 2 }}>{summary.avgConfidence}%</div>
             </div>
-            <div style={{ width: 1, height: 36, background: "rgba(255,255,255,0.2)" }} />
+            <div style={{ width: 1, height: 40, background: "rgba(255,255,255,0.15)" }} />
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 11, opacity: 0.7 }}>Data Points</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>24.8K</div>
+              <div style={{ fontSize: 10, opacity: 0.6, textTransform: "uppercase", letterSpacing: 1 }}>Updated</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginTop: 4 }}>{generatedDate}</div>
             </div>
-            <button style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "8px 16px",
-              background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)",
-              borderRadius: 8, color: "#fff", fontSize: 13, fontWeight: 500, cursor: "pointer",
-              marginLeft: 8,
+            <button onClick={handleRetrain} disabled={retraining} style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "10px 18px",
+              background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.25)",
+              borderRadius: 10, color: "#fff", fontSize: 13, fontWeight: 600, cursor: retraining ? "not-allowed" : "pointer",
+              opacity: retraining ? 0.5 : 1, transition: "all 0.15s", backdropFilter: "blur(8px)",
             }}>
-              <RefreshCw size={14} /> Retrain Model
+              {retraining
+                ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} />
+                : <RefreshCw size={14} />
+              }
+              {retraining ? "Retraining..." : "Retrain"}
             </button>
           </div>
         </div>
 
-        {/* Stat Cards */}
-        <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
-          <StatBox icon={<TrendingUp size={20} color="#059669" />} iconBg="#d1fae5"
-            label="Predicted Weekly Revenue" value={`$${totalPredictedWeekly.toLocaleString()}`}
-            sub={<span style={{ color: Number(overallChange) >= 0 ? "#059669" : "#dc2626", fontWeight: 600, fontSize: 12 }}>
-              {Number(overallChange) >= 0 ? "↑" : "↓"} {overallChange}% vs current
-            </span>} />
-          <StatBox icon={<Target size={20} color="#16a34a" />} iconBg="#dcfce7"
-            label="Model Confidence" value={`${avgConfidence}%`}
-            sub={<span style={{ fontSize: 12, color: "#94a3b8" }}>Avg across all machines</span>} />
-          <StatBox icon={<Zap size={20} color="#d97706" />} iconBg="#fef3c7"
-            label="Product Mix Actions" value={`${recsCount}`}
-            sub={<span style={{ fontSize: 12, color: "#d97706", fontWeight: 500 }}>{deadProducts} dead products to remove</span>} />
-          <StatBox icon={<Truck size={20} color="#6366f1" />} iconBg="#fef9c3"
-            label="Next Refill" value={machineForecast.sort((a, b) => a.daysUntilRefill - b.daysUntilRefill)[0].machine.split(" ")[0]}
-            sub={<span style={{ fontSize: 12, color: "#dc2626", fontWeight: 500 }}>
-              In {machineForecast.sort((a, b) => a.daysUntilRefill - b.daysUntilRefill)[0].daysUntilRefill} days
-            </span>} />
-        </div>
-
-        {/* Tabs */}
-        <div className="tab-bar" style={{
-          display: "flex", gap: 0, borderBottom: "2px solid #e5e7eb", marginBottom: 24,
+        {/* ============ STAT CARDS ============ */}
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
+          gap: 16, marginBottom: 28,
         }}>
-          {([
-            { key: "overview", label: "Revenue Forecast" },
-            { key: "products", label: "Product Performance" },
-            { key: "seasonal", label: "Seasonal Trends" },
-            { key: "mix", label: "Product Mix Recommendations" },
-          ] as { key: typeof tab; label: string }[]).map((t) => (
-            <button key={t.key} onClick={() => setTab(t.key)} style={{
-              padding: "10px 20px", fontSize: 14, fontWeight: 600, border: "none",
-              cursor: "pointer", background: "transparent",
-              color: tab === t.key ? "#16a34a" : "#9ca3af",
-              borderBottom: tab === t.key ? "2px solid #16a34a" : "2px solid transparent",
-              marginBottom: -2, transition: "all 0.15s",
-            }}>{t.label}</button>
-          ))}
+          <SummaryCard
+            icon={<DollarSign size={20} />} iconColor="#059669" iconBg="#ecfdf5"
+            title="Predicted Weekly Revenue"
+            value={formatCurrency(totalPredictedWeekly)}
+            subtitle={`Currently ${formatCurrency(totalCurrentWeekly)}/week`}
+            badge={`${overallChangePct >= 0 ? "+" : ""}${overallChangePct.toFixed(1)}%`}
+            badgeColor={overallChangePct >= 0 ? "#059669" : "#dc2626"}
+          />
+          <SummaryCard
+            icon={<Target size={20} />} iconColor="#6366f1" iconBg="#eef2ff"
+            title="Model Confidence"
+            value={`${summary.avgConfidence}%`}
+            subtitle={`Based on ${summary.totalMachines} machines`}
+            badge={summary.avgConfidence >= 80 ? "High" : summary.avgConfidence >= 60 ? "Medium" : "Low"}
+            badgeColor={summary.avgConfidence >= 80 ? "#059669" : summary.avgConfidence >= 60 ? "#d97706" : "#dc2626"}
+          />
+          <SummaryCard
+            icon={<Zap size={20} />} iconColor="#d97706" iconBg="#fffbeb"
+            title="Suggested Actions"
+            value={`${productMixRecs.length}`}
+            subtitle={`${deadProducts} products to remove`}
+            badge={deadProducts > 0 ? `${deadProducts} dead` : "All good"}
+            badgeColor={deadProducts > 0 ? "#dc2626" : "#059669"}
+          />
+          <SummaryCard
+            icon={<Truck size={20} />} iconColor="#0ea5e9" iconBg="#f0f9ff"
+            title="Soonest Refill Needed"
+            value={[...machineForecast].sort((a, b) => a.daysUntilRefill - b.daysUntilRefill)[0]?.machine || "N/A"}
+            subtitle={`Estimated ${[...machineForecast].sort((a, b) => a.daysUntilRefill - b.daysUntilRefill)[0]?.predictedRefillDate || ""}`}
+            badge={`${[...machineForecast].sort((a, b) => a.daysUntilRefill - b.daysUntilRefill)[0]?.daysUntilRefill || 0} days`}
+            badgeColor="#dc2626"
+          />
         </div>
 
-        {/* ============ TAB: Revenue Forecast ============ */}
-        {tab === "overview" && (
-          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-          <div style={{
-            background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
-            boxShadow: "0 2px 6px rgba(0,0,0,0.06)", overflow: "hidden", minWidth: 700,
-          }}>
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "1.5fr 120px 130px 80px 1.8fr 90px 100px",
-              padding: "14px 22px", borderBottom: "1px solid #e5e7eb", background: "#f1f5f9",
-            }}>
-              <TH>Machine</TH>
-              <TH>Current / Week</TH>
-              <TH>Predicted / Week</TH>
-              <TH>Change</TH>
-              <TH>Top → Weak Product</TH>
-              <TH>Refill In</TH>
-              <TH>Confidence</TH>
-            </div>
-            {machineForecast.map((m) => (
-              <div key={m.machine} style={{
-                display: "grid",
-                gridTemplateColumns: "1.5fr 120px 130px 80px 1.8fr 90px 100px",
-                padding: "16px 22px", borderBottom: "1px solid #f3f4f6", alignItems: "center",
-                transition: "background 0.1s",
-              }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "#f9fafb"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-              >
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{m.machine}</div>
-                  <div style={{ fontSize: 11, color: "#94a3b8" }}>{m.location}</div>
-                </div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>${m.currentWeekly.toFixed(0)}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>${m.predictedWeekly.toFixed(0)}</div>
-                <div>
+        {/* ============ TABS ============ */}
+        <div style={{
+          display: "flex", gap: 6, marginBottom: 24,
+          overflowX: "auto", paddingBottom: 2,
+        }}>
+          {tabItems.map((t) => {
+            const active = tab === t.key;
+            const Icon = t.icon;
+            return (
+              <button key={t.key} onClick={() => setTab(t.key)} style={{
+                display: "flex", alignItems: "center", gap: 7,
+                padding: "10px 18px", fontSize: 13, fontWeight: 600,
+                border: active ? "1px solid #059669" : "1px solid #e2e8f0",
+                borderRadius: 10, cursor: "pointer", whiteSpace: "nowrap",
+                background: active ? "#ecfdf5" : "#fff",
+                color: active ? "#059669" : "#64748b",
+                transition: "all 0.15s",
+              }}>
+                <Icon size={15} />
+                {t.label}
+                {t.count !== undefined && (
                   <span style={{
-                    display: "inline-flex", alignItems: "center", gap: 3,
-                    fontSize: 12, fontWeight: 600,
-                    color: m.change >= 0 ? "#059669" : "#dc2626",
-                  }}>
-                    {m.change >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-                    {m.change >= 0 ? "+" : ""}{m.change}%
-                  </span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 5, overflow: "hidden", minWidth: 0 }}>
-                  <span style={{ fontSize: 11, fontWeight: 500, color: "#059669", background: "#d1fae5", padding: "2px 8px", borderRadius: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "42%" }}>
-                    {m.topProduct}
-                  </span>
-                  <ArrowRight size={11} color="#d1d5db" style={{ flexShrink: 0 }} />
-                  <span style={{ fontSize: 11, fontWeight: 500, color: "#dc2626", background: "#fee2e2", padding: "2px 8px", borderRadius: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "42%" }}>
-                    {m.weakProduct}
-                  </span>
-                </div>
-                <div>
-                  <span style={{
-                    fontSize: 13, fontWeight: 600,
-                    color: m.daysUntilRefill <= 2 ? "#dc2626" : m.daysUntilRefill <= 4 ? "#d97706" : "#059669",
-                  }}>
-                    {m.daysUntilRefill} days
-                  </span>
-                  <div style={{ fontSize: 11, color: "#94a3b8" }}>{m.predictedRefillDate}</div>
-                </div>
-                <div>
-                  <ConfidenceBar value={m.confidence} />
-                </div>
-              </div>
-            ))}
-          </div>
-          </div>
-        )}
+                    background: active ? "#059669" : "#e2e8f0",
+                    color: active ? "#fff" : "#64748b",
+                    fontSize: 11, fontWeight: 700, padding: "2px 7px",
+                    borderRadius: 6, minWidth: 20, textAlign: "center",
+                  }}>{t.count}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
-        {/* ============ TAB: Product Performance ============ */}
-        {tab === "products" && (
-          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-          <div style={{
-            background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
-            boxShadow: "0 2px 6px rgba(0,0,0,0.06)", overflow: "hidden", minWidth: 700,
-          }}>
+        {/* ============ TAB: MACHINE FORECAST ============ */}
+        {tab === "overview" && (
+          <div>
+            {/* Explanation */}
+            <div style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "12px 16px", background: "#f0f9ff", border: "1px solid #bae6fd",
+              borderRadius: 10, marginBottom: 20, fontSize: 13, color: "#0369a1",
+            }}>
+              <Info size={16} style={{ flexShrink: 0 }} />
+              <span>
+                <strong>How to read this:</strong> &quot;Now&quot; shows the average weekly revenue over the last 2 months.
+                &quot;Forecast&quot; is what our model predicts for next month (weekly).
+                The bar shows the comparison visually.
+              </span>
+            </div>
+
             <div style={{
               display: "grid",
-              gridTemplateColumns: "1.3fr 1fr 100px 110px 80px 80px 1.5fr",
-              padding: "14px 22px", borderBottom: "1px solid #e5e7eb", background: "#f1f5f9",
+              gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr" : "repeat(2, 1fr)",
+              gap: 16,
             }}>
-              <TH>Product</TH>
-              <TH>Machine</TH>
-              <TH>Avg / Day</TH>
-              <TH>Predicted / Day</TH>
-              <TH>Trend</TH>
-              <TH>Rev %</TH>
-              <TH>Recommendation</TH>
-            </div>
-            {productPerformance.map((p, i) => {
-              const recStyle = p.recommendation ? actionStyle[p.recommendation] : null;
-              return (
-                <div key={i} style={{
-                  display: "grid",
-                  gridTemplateColumns: "1.3fr 1fr 100px 110px 80px 80px 1.5fr",
-                  padding: "14px 22px", borderBottom: "1px solid #f3f4f6", alignItems: "center",
-                  background: p.recommendation === "Remove" ? "#fffbfb" : "transparent",
-                  transition: "background 0.1s",
-                }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = p.recommendation === "Remove" ? "#fee2e2" : "#f9fafb"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = p.recommendation === "Remove" ? "#fffbfb" : "transparent"; }}
-                >
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{p.product}</div>
-                  <div style={{ fontSize: 12, color: "#64748b" }}>{p.machine}</div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{p.avgDailySales.toFixed(1)}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{p.predictedDailySales.toFixed(1)}</div>
-                  <div>
-                    <span style={{
-                      display: "inline-flex", alignItems: "center", gap: 2,
-                      fontSize: 12, fontWeight: 600,
-                      color: p.trend === "up" ? "#059669" : p.trend === "down" ? "#dc2626" : "#6b7280",
-                    }}>
-                      {p.trend === "up" ? <ArrowUpRight size={12} /> : p.trend === "down" ? <ArrowDownRight size={12} /> : null}
-                      {p.trendPct > 0 ? "+" : ""}{p.trendPct}%
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 13, color: "#374151" }}>{p.revenueShare}%</div>
-                  <div>
-                    {recStyle ? (
+              {machineForecast.map((m) => {
+                const isUp = m.change >= 0;
+                const currentPct = (m.currentWeekly / maxWeekly) * 100;
+                const predictedPct = (m.predictedWeekly / maxWeekly) * 100;
+                return (
+                  <div key={m.machine} style={{
+                    background: "#fff", borderRadius: 14, border: "1px solid #e2e8f0",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.04)", overflow: "hidden",
+                    transition: "box-shadow 0.15s",
+                  }}>
+                    {/* Card Header */}
+                    <div style={{ padding: "18px 20px 14px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                       <div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>{m.machine}</div>
+                        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>{m.location}</div>
+                      </div>
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 4,
+                        padding: "5px 10px", borderRadius: 8,
+                        background: isUp ? "#ecfdf5" : "#fef2f2",
+                        color: isUp ? "#059669" : "#dc2626",
+                        fontSize: 13, fontWeight: 700,
+                      }}>
+                        {isUp ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                        {isUp ? "+" : ""}{m.change}%
+                      </div>
+                    </div>
+
+                    {/* Revenue Comparison */}
+                    <div style={{ padding: "0 20px 16px" }}>
+                      {/* Now */}
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                          <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 500 }}>Now</span>
+                          <span style={{ fontSize: 15, fontWeight: 700, color: "#374151" }}>{formatCurrency(m.currentWeekly)}<span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>/wk</span></span>
+                        </div>
+                        <div style={{ height: 10, background: "#f1f5f9", borderRadius: 6, overflow: "hidden" }}>
+                          <div style={{
+                            height: "100%", borderRadius: 6, width: `${currentPct}%`,
+                            background: "#94a3b8", transition: "width 0.5s ease",
+                          }} />
+                        </div>
+                      </div>
+                      {/* Forecast */}
+                      <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                          <span style={{ fontSize: 12, color: isUp ? "#059669" : "#dc2626", fontWeight: 600 }}>Forecast</span>
+                          <span style={{ fontSize: 15, fontWeight: 700, color: isUp ? "#059669" : "#dc2626" }}>{formatCurrency(m.predictedWeekly)}<span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7 }}>/wk</span></span>
+                        </div>
+                        <div style={{ height: 10, background: "#f1f5f9", borderRadius: 6, overflow: "hidden" }}>
+                          <div style={{
+                            height: "100%", borderRadius: 6, width: `${predictedPct}%`,
+                            background: isUp
+                              ? "linear-gradient(90deg, #059669, #34d399)"
+                              : "linear-gradient(90deg, #dc2626, #f87171)",
+                            transition: "width 0.5s ease",
+                          }} />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Footer: Top/Weak + Refill */}
+                    <div style={{
+                      padding: "14px 20px", borderTop: "1px solid #f1f5f9",
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      background: "#fafbfc",
+                    }}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", flex: 1 }}>
                         <span style={{
                           display: "inline-flex", alignItems: "center", gap: 4,
-                          fontSize: 11, fontWeight: 600, color: recStyle.color, background: recStyle.bg,
-                          padding: "3px 10px", borderRadius: 10,
+                          fontSize: 11, fontWeight: 600, color: "#059669", background: "#ecfdf5",
+                          padding: "3px 10px", borderRadius: 6, border: "1px solid #a7f3d0",
                         }}>
-                          {p.recommendation}
+                          <Star size={10} /> {m.topProduct}
                         </span>
-                        <div style={{ fontSize: 11, color: "#64748b", marginTop: 3, lineHeight: 1.3 }}>{p.reason}</div>
+                        <span style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          fontSize: 11, fontWeight: 600, color: "#dc2626", background: "#fef2f2",
+                          padding: "3px 10px", borderRadius: 6, border: "1px solid #fecaca",
+                        }}>
+                          <ThumbsDown size={10} /> {m.weakProduct}
+                        </span>
                       </div>
-                    ) : (
-                      <span style={{ fontSize: 12, color: "#94a3b8" }}>{p.reason}</span>
-                    )}
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 5,
+                        fontSize: 12, fontWeight: 600,
+                        color: m.daysUntilRefill <= 3 ? "#dc2626" : m.daysUntilRefill <= 5 ? "#d97706" : "#059669",
+                      }}>
+                        <Clock size={13} />
+                        Refill in {m.daysUntilRefill}d
+                      </div>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
-        {/* ============ TAB: Seasonal Trends ============ */}
-        {tab === "seasonal" && (
-          <div className="cards-grid-2" style={{ display: "grid", gridTemplateColumns: isTablet ? "1fr" : "repeat(2, 1fr)", gap: 16 }}>
-            {seasonalTrends.map((s, i) => {
-              const SeasonIcon = seasonIcon[s.currentSeason];
-              return (
-                <div key={i} style={{
-                  background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
-                  padding: "20px", boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>{s.product}</div>
-                    <span style={{
-                      display: "inline-flex", alignItems: "center", gap: 4,
-                      fontSize: 12, fontWeight: 600,
-                      color: s.seasonalChange >= 0 ? "#059669" : "#dc2626",
-                      background: s.seasonalChange >= 0 ? "#d1fae5" : "#fee2e2",
-                      padding: "4px 10px", borderRadius: 10,
-                    }}>
-                      {s.seasonalChange >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-                      {s.seasonalChange >= 0 ? "+" : ""}{s.seasonalChange}% this season
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", gap: 20, marginBottom: 12 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#059669" }}>
-                      <Sun size={13} /> Peak: {s.peakMonth}
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#16a34a" }}>
-                      <Snowflake size={13} /> Low: {s.lowMonth}
-                    </div>
-                  </div>
-                  <div style={{
-                    fontSize: 12, color: "#64748b", lineHeight: 1.5,
-                    background: "#f1f5f9", padding: "10px 14px", borderRadius: 8,
+        {/* ============ TAB: PRODUCT HEALTH ============ */}
+        {tab === "products" && (
+          <div>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "12px 16px", background: "#fef2f2", border: "1px solid #fecaca",
+              borderRadius: 10, marginBottom: 20, fontSize: 13, color: "#991b1b",
+            }}>
+              <AlertCircle size={16} style={{ flexShrink: 0 }} />
+              <span>
+                <strong>{deadProducts} products flagged for removal</strong> &mdash; these are consistently underperforming
+                and taking up valuable machine slots.
+              </span>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {productPerformance.map((p, i) => {
+                const rec = p.recommendation ? actionConfig[p.recommendation] : null;
+                const RecIcon = rec?.icon || Package;
+                const maxRev = Math.max(...productPerformance.map(pp => pp.totalRevenue));
+                const revBarPct = (p.totalRevenue / maxRev) * 100;
+                return (
+                  <div key={i} style={{
+                    background: "#fff", borderRadius: 12, overflow: "hidden",
+                    border: rec ? `1px solid ${rec.border}` : "1px solid #e2e8f0",
+                    transition: "all 0.15s",
                   }}>
-                    {s.insight}
+                    <div style={{
+                      padding: "14px 20px",
+                      display: "flex", alignItems: "center", gap: 16,
+                      background: rec ? rec.bg : "transparent",
+                      flexWrap: isMobile ? "wrap" : "nowrap",
+                    }}>
+                      {/* Product Name + Total Rev */}
+                      <div style={{ flex: "1 1 200px", minWidth: 150 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{p.product}</div>
+                        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+                          Lifetime: {formatCurrency(p.totalRevenue)}
+                        </div>
+                      </div>
+
+                      {/* Revenue Bar */}
+                      <div style={{ flex: "1 1 160px", minWidth: 120 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                          <span style={{ fontSize: 11, color: "#94a3b8" }}>Daily Revenue</span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>${p.avgDailySales.toFixed(1)}/day</span>
+                        </div>
+                        <div style={{ height: 6, background: "#f1f5f9", borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{
+                            height: "100%", borderRadius: 4,
+                            width: `${Math.max(3, revBarPct)}%`,
+                            background: p.trend === "up" ? "#34d399" : p.trend === "down" ? "#fca5a5" : "#cbd5e1",
+                          }} />
+                        </div>
+                      </div>
+
+                      {/* Trend */}
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 4,
+                        padding: "5px 12px", borderRadius: 8,
+                        background: p.trend === "up" ? "#ecfdf5" : p.trend === "down" ? "#fef2f2" : "#f8fafc",
+                        color: p.trend === "up" ? "#059669" : p.trend === "down" ? "#dc2626" : "#64748b",
+                        fontSize: 12, fontWeight: 700, whiteSpace: "nowrap",
+                        border: `1px solid ${p.trend === "up" ? "#a7f3d0" : p.trend === "down" ? "#fecaca" : "#e2e8f0"}`,
+                      }}>
+                        {p.trend === "up" ? <TrendingUp size={13} /> : p.trend === "down" ? <TrendingDown size={13} /> : null}
+                        {p.trendPct > 0 ? "+" : ""}{p.trendPct}%
+                      </div>
+
+                      {/* Recommendation */}
+                      <div style={{ flex: "1 1 220px", minWidth: 160 }}>
+                        {rec ? (
+                          <div style={{
+                            display: "flex", alignItems: "center", gap: 8,
+                            padding: "6px 12px", borderRadius: 8,
+                            background: "#fff", border: `1px solid ${rec.border}`,
+                          }}>
+                            <div style={{
+                              width: 28, height: 28, borderRadius: 7, background: rec.bg,
+                              display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                            }}>
+                              <RecIcon size={14} color={rec.color} />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: rec.color }}>{rec.label}</div>
+                              <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.3, marginTop: 1 }}>{p.reason}</div>
+                            </div>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: 12, color: "#94a3b8" }}>{p.reason}</span>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         )}
 
-        {/* ============ TAB: Product Mix Recommendations ============ */}
-        {tab === "mix" && (
-          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-          <div style={{
-            background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
-            boxShadow: "0 2px 6px rgba(0,0,0,0.06)", overflow: "hidden", minWidth: 700,
-          }}>
+        {/* ============ TAB: SEASONAL TRENDS ============ */}
+        {tab === "seasonal" && (
+          <div>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "12px 16px", background: "#fffbeb", border: "1px solid #fde68a",
+              borderRadius: 10, marginBottom: 20, fontSize: 13, color: "#92400e",
+            }}>
+              <Sun size={16} style={{ flexShrink: 0 }} />
+              <span>
+                <strong>Seasonal patterns</strong> help you stock the right products at the right time.
+                Products below show the biggest seasonal swings based on historical data.
+              </span>
+            </div>
+
             <div style={{
               display: "grid",
-              gridTemplateColumns: "1.2fr 90px 1fr 1.8fr 110px 90px",
-              padding: "14px 22px", borderBottom: "1px solid #e5e7eb", background: "#f1f5f9",
+              gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr" : "repeat(2, 1fr)",
+              gap: 16,
             }}>
-              <TH>Machine</TH>
-              <TH>Action</TH>
-              <TH>Product</TH>
-              <TH>Reason</TH>
-              <TH>Est. Impact</TH>
-              <TH>Confidence</TH>
+              {seasonalTrends.map((s, i) => {
+                const isUp = s.seasonalChange >= 0;
+                const SeasonIcon = s.currentSeason === "Summer" ? Sun : s.currentSeason === "Winter" ? Snowflake : Leaf;
+                return (
+                  <div key={i} style={{
+                    background: "#fff", borderRadius: 14, border: "1px solid #e2e8f0",
+                    overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+                  }}>
+                    {/* Header with season badge */}
+                    <div style={{
+                      padding: "18px 20px 14px",
+                      display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+                    }}>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>{s.product}</div>
+                        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 3 }}>
+                          Lifetime revenue: {formatCurrency(s.totalRevenue)}
+                        </div>
+                      </div>
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 5,
+                        padding: "5px 12px", borderRadius: 8,
+                        background: isUp ? "#ecfdf5" : "#fef2f2",
+                        border: `1px solid ${isUp ? "#a7f3d0" : "#fecaca"}`,
+                        color: isUp ? "#059669" : "#dc2626",
+                        fontSize: 13, fontWeight: 700,
+                      }}>
+                        {isUp ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                        {isUp ? "+" : ""}{s.seasonalChange}%
+                      </div>
+                    </div>
+
+                    {/* Peak / Low visual */}
+                    <div style={{ padding: "0 20px 14px", display: "flex", gap: 12 }}>
+                      <div style={{
+                        flex: 1, padding: "10px 14px", borderRadius: 10,
+                        background: "#ecfdf5", border: "1px solid #a7f3d0",
+                        textAlign: "center",
+                      }}>
+                        <div style={{ fontSize: 10, color: "#059669", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8 }}>Peak Month</div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: "#059669", marginTop: 4 }}>{s.peakMonth}</div>
+                      </div>
+                      <div style={{
+                        flex: 1, padding: "10px 14px", borderRadius: 10,
+                        background: "#f0f9ff", border: "1px solid #bae6fd",
+                        textAlign: "center",
+                      }}>
+                        <div style={{ fontSize: 10, color: "#0369a1", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8 }}>Slowest Month</div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: "#0369a1", marginTop: 4 }}>{s.lowMonth}</div>
+                      </div>
+                    </div>
+
+                    {/* Insight */}
+                    <div style={{
+                      padding: "12px 20px", borderTop: "1px solid #f1f5f9",
+                      background: "#fafbfc", fontSize: 12, color: "#64748b", lineHeight: 1.5,
+                    }}>
+                      {s.insight}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            {productMixRecs.map((r, i) => {
-              const as = actionStyle[r.action];
-              return (
-                <div key={i} style={{
-                  display: "grid",
-                  gridTemplateColumns: "1.2fr 90px 1fr 1.8fr 110px 90px",
-                  padding: "14px 22px", borderBottom: "1px solid #f3f4f6", alignItems: "center",
-                  transition: "background 0.1s",
-                }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = "#f9fafb"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                >
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{r.machine}</div>
-                  <div>
-                    <span style={{
-                      display: "inline-flex", alignItems: "center", gap: 4,
-                      fontSize: 11, fontWeight: 600, color: as.color, background: as.bg,
-                      padding: "4px 10px", borderRadius: 10,
-                    }}>{r.action}</span>
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "#374151" }}>{r.product}</div>
-                  <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.4 }}>{r.reason}</div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: r.action === "Remove" || r.action === "Decrease" ? "#6b7280" : "#059669" }}>
-                    {r.estimatedImpact}
-                  </div>
-                  <div><ConfidenceBar value={r.confidence} /></div>
-                </div>
-              );
-            })}
-          </div>
           </div>
         )}
 
-        {/* How it works */}
+        {/* ============ TAB: SMART ACTIONS ============ */}
+        {tab === "mix" && (
+          <div>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "12px 16px", background: "#ecfdf5", border: "1px solid #a7f3d0",
+              borderRadius: 10, marginBottom: 20, fontSize: 13, color: "#065f46",
+            }}>
+              <Zap size={16} style={{ flexShrink: 0 }} />
+              <span>
+                <strong>AI-recommended actions</strong> to optimize your product mix.
+                Each suggestion is based on sales trends across all machines.
+              </span>
+            </div>
+
+            {/* Group by machine */}
+            {(() => {
+              const grouped: Record<string, ProductMixRec[]> = {};
+              productMixRecs.forEach(r => {
+                if (!grouped[r.machine]) grouped[r.machine] = [];
+                grouped[r.machine].push(r);
+              });
+              return Object.entries(grouped).map(([machine, recs]) => (
+                <div key={machine} style={{ marginBottom: 20 }}>
+                  <div style={{
+                    fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 10,
+                    display: "flex", alignItems: "center", gap: 8,
+                  }}>
+                    <Package size={16} color="#64748b" />
+                    {machine}
+                    <span style={{
+                      fontSize: 11, fontWeight: 600, color: "#64748b", background: "#f1f5f9",
+                      padding: "2px 8px", borderRadius: 6,
+                    }}>{recs.length} actions</span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {recs.map((r, i) => {
+                      const ac = actionConfig[r.action];
+                      const AcIcon = ac.icon;
+                      return (
+                        <div key={i} style={{
+                          display: "flex", alignItems: "center", gap: 14,
+                          padding: "14px 18px", background: "#fff",
+                          borderRadius: 12, border: `1px solid ${ac.border}`,
+                          transition: "all 0.15s",
+                          flexWrap: isMobile ? "wrap" : "nowrap",
+                        }}>
+                          {/* Action Icon */}
+                          <div style={{
+                            width: 38, height: 38, borderRadius: 10, background: ac.bg,
+                            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                            border: `1px solid ${ac.border}`,
+                          }}>
+                            <AcIcon size={18} color={ac.color} />
+                          </div>
+
+                          {/* Info */}
+                          <div style={{ flex: 1, minWidth: 150 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{
+                                fontSize: 11, fontWeight: 700, color: ac.color, background: ac.bg,
+                                padding: "2px 8px", borderRadius: 6, textTransform: "uppercase", letterSpacing: 0.5,
+                              }}>{r.action}</span>
+                              <span style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{r.product}</span>
+                            </div>
+                            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4, lineHeight: 1.4 }}>{r.reason}</div>
+                          </div>
+
+                          {/* Impact */}
+                          <div style={{ textAlign: "right", flexShrink: 0 }}>
+                            <div style={{
+                              fontSize: 14, fontWeight: 800,
+                              color: r.action === "Add" || r.action === "Increase" ? "#059669" : "#64748b",
+                            }}>{r.estimatedImpact}</div>
+                            <div style={{ marginTop: 4 }}>
+                              <ConfidenceBar value={r.confidence} />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+        )}
+
+        {/* Footer Note */}
         <div style={{
-          marginTop: 20, padding: "14px 18px", background: "#dcfce7",
-          border: "1px solid #bfdbfe", borderRadius: 10, fontSize: 12, color: "#15803d",
-          lineHeight: 1.6,
+          marginTop: 28, padding: "16px 20px", background: "#f8fafc",
+          border: "1px solid #e2e8f0", borderRadius: 12, fontSize: 12, color: "#94a3b8",
+          lineHeight: 1.6, display: "flex", alignItems: "flex-start", gap: 10,
         }}>
-          <strong>How predictions work:</strong> The model is trained on 1.5 years of Nayax transaction
-          data (24.8K+ transactions across {machineForecast.length} machines). It uses time-series
-          forecasting to predict sales velocity per product per machine, identifies seasonal patterns,
-          and recommends product mix changes based on cross-machine performance comparisons.
-          Confidence scores reflect how much historical data supports each prediction.
+          <Info size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>
+            Predictions are generated using {data.dataRange.months} months of Nayax transaction data
+            ({data.dataRange.start} to {data.dataRange.end}). The model uses linear trend analysis with seasonal
+            adjustments. Confidence reflects how consistent the historical pattern is. Click &quot;Retrain&quot; after adding new
+            sales data to update predictions.
+          </span>
         </div>
       </div>
     </div>
@@ -530,51 +771,52 @@ export default function PredictionsPage() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Small Components                                                   */
+/*  Reusable Components                                                */
 /* ------------------------------------------------------------------ */
+
+function SummaryCard({ icon, iconColor, iconBg, title, value, subtitle, badge, badgeColor }: {
+  icon: React.ReactNode; iconColor: string; iconBg: string;
+  title: string; value: string; subtitle: string;
+  badge: string; badgeColor: string;
+}) {
+  return (
+    <div style={{
+      background: "#fff", borderRadius: 14, border: "1px solid #e2e8f0",
+      padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+      display: "flex", flexDirection: "column", gap: 12,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: 10, background: iconBg,
+          display: "flex", alignItems: "center", justifyContent: "center", color: iconColor,
+        }}>{icon}</div>
+        <span style={{
+          fontSize: 11, fontWeight: 700, color: badgeColor,
+          background: badgeColor === "#059669" ? "#ecfdf5" : badgeColor === "#dc2626" ? "#fef2f2" : "#fffbeb",
+          padding: "3px 10px", borderRadius: 6,
+          border: `1px solid ${badgeColor}22`,
+        }}>{badge}</span>
+      </div>
+      <div>
+        <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 500, textTransform: "uppercase", letterSpacing: 0.5 }}>{title}</div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", marginTop: 4, lineHeight: 1 }}>{value}</div>
+        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>{subtitle}</div>
+      </div>
+    </div>
+  );
+}
 
 function ConfidenceBar({ value }: { value: number }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <div style={{ flex: 1, height: 6, background: "#e2e8f0", borderRadius: 3, overflow: "hidden", minWidth: 40 }}>
+      <div style={{ width: 50, height: 5, background: "#e2e8f0", borderRadius: 3, overflow: "hidden" }}>
         <div style={{
           height: "100%", borderRadius: 3,
           width: `${value}%`,
-          background: value >= 85 ? "#059669" : value >= 70 ? "#d97706" : "#dc2626",
+          background: value >= 85 ? "#059669" : value >= 70 ? "#d97706" : "#94a3b8",
         }} />
       </div>
-      <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", minWidth: 30 }}>{value}%</span>
+      <span style={{ fontSize: 11, fontWeight: 600, color: "#94a3b8" }}>{value}%</span>
     </div>
-  );
-}
-
-function StatBox({ icon, iconBg, label, value, sub }: {
-  icon: React.ReactNode; iconBg: string; label: string; value: string; sub: React.ReactNode;
-}) {
-  return (
-    <div style={{
-      background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
-      padding: "18px 20px", display: "flex", alignItems: "center", gap: 14,
-      boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
-    }}>
-      <div style={{
-        width: 44, height: 44, borderRadius: 12, background: iconBg,
-        display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-      }}>{icon}</div>
-      <div>
-        <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 500, marginBottom: 2 }}>{label}</div>
-        <div style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", lineHeight: 1.2 }}>{value}</div>
-        <div style={{ marginTop: 2 }}>{sub}</div>
-      </div>
-    </div>
-  );
-}
-
-function TH({ children }: { children?: React.ReactNode }) {
-  return (
-    <div style={{
-      fontSize: 11, fontWeight: 600, color: "#4b5563",
-      textTransform: "uppercase" as const, letterSpacing: 0.5,
-    }}>{children}</div>
   );
 }

@@ -523,7 +523,7 @@ export default function MachinesPage() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: isMobile ? 24 : 30, fontWeight: 800, color: "#0f172a", lineHeight: 1.05 }}>{selectedMachine.name}</div>
                 <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-                  Machine ID: {selectedMachine.id} · Platform: HAHA
+                  Machine ID: {selectedMachine.id} · Platform: {selectedMachine.type === "nayax" ? "Nayax" : "HAHA"}
                 </div>
                 {ordersSyncedAt && (
                   <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
@@ -620,7 +620,7 @@ export default function MachinesPage() {
                     <div>
                       <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Recent machine orders</div>
                       <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-                        Clean snapshot of payment, timestamp, and sold-item details for this HAHA machine.
+                        Clean snapshot of payment, timestamp, and sold-item details for this {selectedMachine.type === "nayax" ? "Nayax" : "HAHA"} machine.
                       </div>
                     </div>
                     <div style={{

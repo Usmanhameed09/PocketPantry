@@ -9,6 +9,7 @@ import {
   Package,
   DollarSign,
   GitBranch,
+  Mail,
   Megaphone,
   BarChart3,
   UserCircle,
@@ -23,6 +24,7 @@ const navItems = [
   { name: "Pricing", href: "/pricing", icon: DollarSign },
   { name: "Predictions", href: "/predictions", icon: Brain },
   { name: "Pipeline", href: "/pipeline", icon: GitBranch },
+  { name: "Email Pipeline", href: "/email-pipeline", icon: Mail },
   { name: "Advertising", href: "/advertising", icon: Megaphone },
   { name: "Reports", href: "/reports", icon: BarChart3 },
 ];

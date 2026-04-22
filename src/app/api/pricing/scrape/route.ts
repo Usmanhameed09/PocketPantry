@@ -74,6 +74,19 @@ export async function POST() {
       signal: AbortSignal.timeout(600000),
     });
 
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      const text = await res.text();
+      console.error("[pricing/scrape] Non-JSON response from scraper:", res.status, text.slice(0, 300));
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Scraper API returned ${res.status} (not JSON). Make sure the scraper backend is running and reachable at ${scraperUrl}`,
+        },
+        { status: 502 }
+      );
+    }
+
     const data: ScraperResponsePayload = await res.json();
 
     if (!res.ok) {

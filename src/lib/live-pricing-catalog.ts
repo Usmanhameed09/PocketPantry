@@ -124,7 +124,15 @@ function parsePackSize(value: string | null | undefined): number | null {
 }
 
 function isMissingTableError(error: unknown) {
-  return !!error && typeof error === "object" && "code" in error && error.code === "PGRST205";
+  if (!error || typeof error !== "object") return false;
+  const e = error as any;
+  const code = e.code || "";
+  const message = (e.message || e.hint || e.details || "").toLowerCase();
+  // PGRST205 = PostgREST "table not found", 42P01 = PostgreSQL "undefined_table"
+  // Also check message for relation/table not found patterns
+  return code === "PGRST205" || code === "42P01"
+    || message.includes("relation") && message.includes("does not exist")
+    || message.includes("table") && message.includes("not found");
 }
 
 async function readLocalStore(): Promise<LocalPricingStore> {
@@ -195,7 +203,7 @@ export async function syncLiveProductsToSupabase(products: LiveMachineProduct[])
     company_id: companyId,
     name: product.name,
     sku: product.sku || normalizeSku(product.name),
-    category: product.category,
+    category: product.category || "snack",
     unit_size: product.expected_pack_size ? String(product.expected_pack_size) : null,
   }));
 
@@ -204,7 +212,8 @@ export async function syncLiveProductsToSupabase(products: LiveMachineProduct[])
     .upsert(rows, { onConflict: "company_id,sku", ignoreDuplicates: false });
 
   if (error) {
-    throw error;
+    console.error("[pricing] syncLiveProducts error:", error.code, error.message, error.details, error.hint);
+    return { synced: 0 };
   }
 
   return { synced: rows.length };
@@ -225,7 +234,10 @@ async function getSupabaseProducts(companyId: string) {
   ]);
 
   if (productsError) throw productsError;
-  if (pricesError) throw pricesError;
+  // product_prices table may not exist — gracefully return empty prices
+  if (pricesError && !isMissingTableError(pricesError)) {
+    console.warn("[pricing] product_prices error:", pricesError.code, pricesError.message);
+  }
 
   return {
     products: (products || []) as SupabaseProductRow[],
@@ -263,8 +275,9 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
 
   for (const liveProduct of liveProducts) {
     const sku = liveProduct.sku || normalizeSku(liveProduct.name);
+    const productId = liveProduct.id || `live-${normalizeSku(liveProduct.name)}`;
     const supabaseProduct = productBySku.get(sku);
-    const fallbackProductId = supabaseProduct?.id || liveProduct.id;
+    const fallbackProductId = supabaseProduct?.id || productId;
     const localOverride = localOverrideById.get(fallbackProductId);
     const currentPrice =
       localOverride !== undefined
@@ -274,12 +287,12 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
         : (liveProduct.observed_price ?? liveProduct.vending_price ?? 0));
 
     catalog.push({
-      id: liveProduct.id,
+      id: productId,
       productRefId: fallbackProductId,
       name: liveProduct.name,
       sku,
       searchTerm: liveProduct.search_term || liveProduct.name,
-      category: liveProduct.category,
+      category: liveProduct.category || "snack",
       currentPrice,
       lastKnownCost: localCostById.get(fallbackProductId) !== undefined
         ? Number(localCostById.get(fallbackProductId))
@@ -291,7 +304,7 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
       machineCount: liveProduct.machine_count ?? 0,
       machines: liveProduct.machines || [],
       lastSoldAt: liveProduct.last_sold_at ?? null,
-      platform: liveProduct.platform,
+      platform: liveProduct.platform || "unknown",
       isManualOnly: false,
     });
   }

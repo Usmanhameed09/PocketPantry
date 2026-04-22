@@ -16,6 +16,7 @@ import {
   ShoppingCart,
   Package,
   X,
+  AlertTriangle,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -97,6 +98,9 @@ export default function MachinesPage() {
   const [ordersWarning, setOrdersWarning] = useState<string | null>(null);
   const [ordersSyncedAt, setOrdersSyncedAt] = useState<string | null>(null);
 
+  // Low-stock machine IDs from inventory data
+  const [lowStockMachineIds, setLowStockMachineIds] = useState<Set<string>>(new Set());
+
   const fetchMachines = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     else setLoading(true);
@@ -111,6 +115,28 @@ export default function MachinesPage() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  }, []);
+
+  const fetchLowStock = useCallback(async () => {
+    try {
+      const res = await fetch("/api/inventory");
+      const data = await res.json();
+      if (data.success && data.products) {
+        const lowIds = new Set<string>();
+        for (const product of data.products) {
+          if (product.restockStatus === "Low" || product.restockStatus === "Critical" || product.restockStatus === "Out") {
+            for (const m of product.machines || []) {
+              if (m.estimatedRemaining <= 3 || (m.lastLoadedQty > 0 && m.estimatedRemaining === 0)) {
+                lowIds.add(m.machineId);
+              }
+            }
+          }
+        }
+        setLowStockMachineIds(lowIds);
+      }
+    } catch {
+      // inventory tables may not exist yet — silently skip
     }
   }, []);
 
@@ -132,7 +158,8 @@ export default function MachinesPage() {
   useEffect(() => {
     fetchMachines();
     fetchStatus();
-  }, [fetchMachines, fetchStatus]);
+    fetchLowStock();
+  }, [fetchMachines, fetchStatus, fetchLowStock]);
 
   const viewMachineOrders = useCallback(async (machine: Machine) => {
     setSelectedMachine(machine);
@@ -379,15 +406,27 @@ export default function MachinesPage() {
                     onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
                   >
                     {/* Status */}
-                    <div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <span style={{
                         display: "inline-flex", alignItems: "center", gap: 5,
                         fontSize: 12, fontWeight: 600, color: sc.color,
                         background: sc.bg, padding: "4px 10px", borderRadius: 20,
+                        width: "fit-content",
                       }}>
                         <StatusIcon size={13} />
                         {m.status}
                       </span>
+                      {lowStockMachineIds.has(m.id) && (
+                        <span style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          fontSize: 11, fontWeight: 600, color: "#d97706",
+                          background: "#fef3c7", padding: "3px 8px", borderRadius: 20,
+                          width: "fit-content",
+                        }}>
+                          <AlertTriangle size={11} />
+                          Low Stock
+                        </span>
+                      )}
                     </div>
 
                     {/* Machine Name + ID */}

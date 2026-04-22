@@ -57,10 +57,15 @@ export async function GET() {
       meta: { total: products.length },
     });
   } catch (error) {
+    const e = error as any;
+    const msg = e?.message || (typeof error === "string" ? error : JSON.stringify(error));
+    const code = e?.code;
+    console.error("[pricing/catalog] GET error:", { code, msg, details: e?.details, hint: e?.hint });
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to fetch pricing catalog",
+        error: msg || "Failed to fetch pricing catalog",
+        errorCode: code,
         data: [],
         meta: { total: 0 },
       },

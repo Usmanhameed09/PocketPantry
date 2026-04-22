@@ -12,17 +12,13 @@ import {
   RefreshCw,
   Zap,
   Target,
-  XCircle,
   Truck,
   Sun,
-  Snowflake,
-  Leaf,
   Loader2,
   AlertCircle,
   DollarSign,
   Package,
   Clock,
-  ChevronRight,
   Star,
   ThumbsDown,
   Plus,
@@ -75,6 +71,8 @@ interface SeasonalTrend {
   lowMonth: string;
   insight: string;
   totalRevenue: number;
+  monthlyRevenue?: Record<string, number>;
+  monthlyIndex?: Record<string, number>;
 }
 
 interface ProductMixRec {
@@ -592,74 +590,7 @@ export default function PredictionsPage() {
               </span>
             </div>
 
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr" : "repeat(2, 1fr)",
-              gap: 16,
-            }}>
-              {seasonalTrends.map((s, i) => {
-                const isUp = s.seasonalChange >= 0;
-                const SeasonIcon = s.currentSeason === "Summer" ? Sun : s.currentSeason === "Winter" ? Snowflake : Leaf;
-                return (
-                  <div key={i} style={{
-                    background: "#fff", borderRadius: 14, border: "1px solid #e2e8f0",
-                    overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-                  }}>
-                    {/* Header with season badge */}
-                    <div style={{
-                      padding: "18px 20px 14px",
-                      display: "flex", justifyContent: "space-between", alignItems: "flex-start",
-                    }}>
-                      <div>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>{s.product}</div>
-                        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 3 }}>
-                          Lifetime revenue: {formatCurrency(s.totalRevenue)}
-                        </div>
-                      </div>
-                      <div style={{
-                        display: "flex", alignItems: "center", gap: 5,
-                        padding: "5px 12px", borderRadius: 8,
-                        background: isUp ? "#ecfdf5" : "#fef2f2",
-                        border: `1px solid ${isUp ? "#a7f3d0" : "#fecaca"}`,
-                        color: isUp ? "#059669" : "#dc2626",
-                        fontSize: 13, fontWeight: 700,
-                      }}>
-                        {isUp ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                        {isUp ? "+" : ""}{s.seasonalChange}%
-                      </div>
-                    </div>
-
-                    {/* Peak / Low visual */}
-                    <div style={{ padding: "0 20px 14px", display: "flex", gap: 12 }}>
-                      <div style={{
-                        flex: 1, padding: "10px 14px", borderRadius: 10,
-                        background: "#ecfdf5", border: "1px solid #a7f3d0",
-                        textAlign: "center",
-                      }}>
-                        <div style={{ fontSize: 10, color: "#059669", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8 }}>Peak Month</div>
-                        <div style={{ fontSize: 15, fontWeight: 800, color: "#059669", marginTop: 4 }}>{s.peakMonth}</div>
-                      </div>
-                      <div style={{
-                        flex: 1, padding: "10px 14px", borderRadius: 10,
-                        background: "#f0f9ff", border: "1px solid #bae6fd",
-                        textAlign: "center",
-                      }}>
-                        <div style={{ fontSize: 10, color: "#0369a1", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8 }}>Slowest Month</div>
-                        <div style={{ fontSize: 15, fontWeight: 800, color: "#0369a1", marginTop: 4 }}>{s.lowMonth}</div>
-                      </div>
-                    </div>
-
-                    {/* Insight */}
-                    <div style={{
-                      padding: "12px 20px", borderTop: "1px solid #f1f5f9",
-                      background: "#fafbfc", fontSize: 12, color: "#64748b", lineHeight: 1.5,
-                    }}>
-                      {s.insight}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <SeasonalCalendar trends={seasonalTrends} isMobile={isMobile} />
           </div>
         )}
 
@@ -818,5 +749,154 @@ function ConfidenceBar({ value }: { value: number }) {
       </div>
       <span style={{ fontSize: 11, fontWeight: 600, color: "#94a3b8" }}>{value}%</span>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Seasonal Calendar Heatmap                                          */
+/* ------------------------------------------------------------------ */
+
+const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function heatColor(index: number): { bg: string; text: string } {
+  // index: 1.0 = average. >1 hot (green), <1 cold (blue), 0 = no data (gray)
+  if (!index || index <= 0) return { bg: "#f1f5f9", text: "#94a3b8" };
+  if (index >= 1.3) return { bg: "#059669", text: "#ffffff" };   // peak
+  if (index >= 1.1) return { bg: "#34d399", text: "#064e3b" };   // hot
+  if (index >= 0.95) return { bg: "#ecfdf5", text: "#065f46" };  // avg-hot
+  if (index >= 0.8) return { bg: "#eff6ff", text: "#1e40af" };   // avg-cool
+  if (index >= 0.6) return { bg: "#bfdbfe", text: "#1e3a8a" };   // cool
+  return { bg: "#3b82f6", text: "#ffffff" };                      // cold
+}
+
+function SeasonalCalendar({ trends, isMobile }: { trends: SeasonalTrend[]; isMobile: boolean }) {
+  const currentMonth = new Date().getMonth() + 1;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* Legend */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+        padding: "10px 14px", background: "#fff", borderRadius: 10,
+        border: "1px solid #e2e8f0", fontSize: 11, color: "#64748b",
+      }}>
+        <span style={{ fontWeight: 600, color: "#374151" }}>Legend:</span>
+        <LegendSwatch color="#059669" label="Peak (>30% above avg)" />
+        <LegendSwatch color="#34d399" label="Hot (+10–30%)" />
+        <LegendSwatch color="#ecfdf5" label="Average" textColor="#065f46" />
+        <LegendSwatch color="#bfdbfe" label="Cool (-20–40%)" textColor="#1e3a8a" />
+        <LegendSwatch color="#3b82f6" label="Cold (-40%+)" />
+        <LegendSwatch color="#f1f5f9" label="No data" textColor="#94a3b8" />
+      </div>
+
+      {/* Calendar grid */}
+      <div style={{
+        background: "#fff", borderRadius: 14, border: "1px solid #e2e8f0",
+        overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+      }}>
+        {/* Header row: months */}
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ minWidth: isMobile ? 720 : "100%" }}>
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(180px, 1.4fr) repeat(12, minmax(52px, 1fr))",
+              gap: 4,
+              padding: "12px 14px 8px",
+              background: "#f8fafc",
+              borderBottom: "1px solid #e2e8f0",
+              position: "sticky", top: 0, zIndex: 1,
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.8 }}>
+                Product
+              </div>
+              {MONTH_SHORT.map((m, idx) => (
+                <div key={m} style={{
+                  fontSize: 11, fontWeight: 700,
+                  color: idx + 1 === currentMonth ? "#059669" : "#64748b",
+                  textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center",
+                }}>
+                  {m}
+                  {idx + 1 === currentMonth && (
+                    <div style={{ fontSize: 8, fontWeight: 700, color: "#059669", marginTop: 1 }}>NOW</div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Product rows */}
+            {trends.map((t) => {
+              const monthly = t.monthlyIndex || {};
+              const revenue = t.monthlyRevenue || {};
+              return (
+                <div key={t.product} style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(180px, 1.4fr) repeat(12, minmax(52px, 1fr))",
+                  gap: 4,
+                  padding: "10px 14px",
+                  borderBottom: "1px solid #f1f5f9",
+                  alignItems: "center",
+                }}>
+                  <div style={{ paddingRight: 8 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", lineHeight: 1.25 }}>
+                      {t.product}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>
+                      Peak <strong style={{ color: "#059669" }}>{t.peakMonth}</strong> · Low <strong style={{ color: "#1e40af" }}>{t.lowMonth}</strong>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                      Lifetime: ${Math.round(t.totalRevenue).toLocaleString()} · Swing {Math.round(((t as unknown as { swing?: number }).swing) ?? 0)}%
+                    </div>
+                  </div>
+                  {Array.from({ length: 12 }, (_, i) => {
+                    const mKey = String(i + 1);
+                    const idx = monthly[mKey] ?? 0;
+                    const rev = revenue[mKey] ?? 0;
+                    const c = heatColor(idx);
+                    const isCurrent = i + 1 === currentMonth;
+                    return (
+                      <div
+                        key={mKey}
+                        title={`${MONTH_SHORT[i]}: $${rev.toFixed(2)} (index ${idx.toFixed(2)})`}
+                        style={{
+                          height: 44,
+                          borderRadius: 6,
+                          background: c.bg,
+                          color: c.text,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          flexDirection: "column",
+                          fontSize: 10, fontWeight: 700,
+                          border: isCurrent ? "2px solid #0f172a" : "1px solid rgba(15,23,42,0.04)",
+                        }}
+                      >
+                        <div style={{ fontSize: 11, lineHeight: 1 }}>
+                          {rev > 0 ? `$${rev >= 1000 ? `${(rev/1000).toFixed(1)}k` : Math.round(rev)}` : "—"}
+                        </div>
+                        {idx > 0 && (
+                          <div style={{ fontSize: 9, opacity: 0.75, marginTop: 2 }}>
+                            {idx >= 1 ? "+" : ""}{Math.round((idx - 1) * 100)}%
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LegendSwatch({ color, label, textColor }: { color: string; label: string; textColor?: string }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+      <span style={{
+        width: 14, height: 14, borderRadius: 3, background: color,
+        border: "1px solid rgba(15,23,42,0.08)",
+      }} />
+      <span style={{ color: textColor || "#64748b" }}>{label}</span>
+    </span>
   );
 }

@@ -1,9 +1,17 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { Resend } from "resend";
-import { getOutreachTemplates, type OutreachTemplateStage } from "@/lib/outreach-template-store";
+import {
+  getTemplateStage,
+} from "@/lib/outreach-template-store";
+import { getOutreachTemplates } from "@/lib/outreach-template-store";
+import type {
+  OutreachSignatureSettings,
+  OutreachTemplateMap,
+  OutreachTemplateStage,
+} from "@/lib/outreach-template-model";
 
-type OutreachEmailContext = {
+export type OutreachEmailContext = {
   contactName: string;
   businessName: string;
 };
@@ -20,6 +28,7 @@ type OutreachAttachment = {
 };
 
 const MATERIALS_DIR = path.resolve(process.cwd(), "..", "Email materials");
+const SIGNATURE_TOKEN = "{{signatureBlock}}";
 
 const resendApiKey = process.env.RESEND_API_KEY;
 const resend = resendApiKey ? new Resend(resendApiKey) : null;
@@ -58,18 +67,7 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#39;");
 }
 
-function buildHtmlFromText(text: string) {
-  return `
-    <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #334155; line-height: 1.6;">
-      ${escapeHtml(text)
-        .split(/\n{2,}/)
-        .map((paragraph) => `<p>${paragraph.replace(/\n/g, "<br />")}</p>`)
-        .join("")}
-    </div>
-  `;
-}
-
-function applyTemplateVariables(template: string, context: OutreachEmailContext) {
+function applyTemplateVariables(template: string, context: OutreachEmailContext, signature?: OutreachSignatureSettings) {
   const replacements: Record<string, string> = {
     "{{contactFirstName}}": getSafeFirstName(context.contactName),
     "{{contactName}}": context.contactName?.trim() || "there",
@@ -77,6 +75,12 @@ function applyTemplateVariables(template: string, context: OutreachEmailContext)
     "{{senderName}}": getSenderName(),
     "{{contactPhone}}": getContactPhone(),
     "{{replyToEmail}}": getReplyToEmail(),
+    "{{signatureName}}": signature?.fullName || getSenderName(),
+    "{{signatureTitle}}": signature?.title || "",
+    "{{signatureCompany}}": signature?.company || "PocketPantry",
+    "{{signaturePhone}}": signature?.phone || getContactPhone(),
+    "{{signatureEmail}}": signature?.email || getReplyToEmail(),
+    "{{signaturePhotoUrl}}": signature?.photoUrl || "",
   };
 
   let output = template;
@@ -86,14 +90,103 @@ function applyTemplateVariables(template: string, context: OutreachEmailContext)
   return output;
 }
 
-async function buildEmailTemplate(stage: OutreachTemplateStage, context: OutreachEmailContext): Promise<OutreachEmailTemplate> {
-  const templates = await getOutreachTemplates();
-  const template = templates[stage];
-  const text = applyTemplateVariables(template.body, context);
+function textToParagraphHtml(text: string) {
+  return escapeHtml(text)
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p style="margin:0 0 16px;">${paragraph.replace(/\n/g, "<br />")}</p>`)
+    .join("");
+}
+
+export function buildSignatureText(signature: OutreachSignatureSettings, context: OutreachEmailContext) {
+  if (signature.mode === "custom_html" && signature.textFallback.trim()) {
+    return applyTemplateVariables(signature.textFallback, context, signature);
+  }
+
+  const resolved = {
+    fullName: applyTemplateVariables(signature.fullName, context),
+    title: applyTemplateVariables(signature.title, context),
+    company: applyTemplateVariables(signature.company, context),
+    phone: applyTemplateVariables(signature.phone, context),
+    email: applyTemplateVariables(signature.email, context),
+  };
+
+  return [resolved.fullName, resolved.title, resolved.company, resolved.phone, resolved.email]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function buildSignatureHtml(signature: OutreachSignatureSettings, context: OutreachEmailContext) {
+  if (signature.mode === "custom_html" && signature.customHtml.trim()) {
+    return applyTemplateVariables(signature.customHtml, context, signature);
+  }
+
+  const resolved = {
+    fullName: applyTemplateVariables(signature.fullName, context),
+    title: applyTemplateVariables(signature.title, context),
+    company: applyTemplateVariables(signature.company, context),
+    phone: applyTemplateVariables(signature.phone, context),
+    email: applyTemplateVariables(signature.email, context),
+    photoUrl: applyTemplateVariables(signature.photoUrl, context),
+  };
+
+  return `
+    <div style="margin-top:24px;padding-top:18px;border-top:1px solid #dbe4ee;display:flex;gap:16px;align-items:flex-start;">
+      ${resolved.photoUrl
+        ? `<img src="${escapeHtml(resolved.photoUrl)}" alt="${escapeHtml(resolved.fullName)}" style="width:64px;height:64px;border-radius:999px;object-fit:cover;border:1px solid #dbe4ee;" />`
+        : ""
+      }
+      <div>
+        <div style="font-size:15px;font-weight:700;color:#0f172a;">${escapeHtml(resolved.fullName)}</div>
+        ${resolved.title ? `<div style="font-size:13px;color:#475569;margin-top:2px;">${escapeHtml(resolved.title)}</div>` : ""}
+        ${resolved.company ? `<div style="font-size:13px;color:#0f766e;margin-top:2px;">${escapeHtml(resolved.company)}</div>` : ""}
+        ${resolved.phone ? `<div style="font-size:13px;color:#475569;margin-top:8px;">${escapeHtml(resolved.phone)}</div>` : ""}
+        ${resolved.email ? `<div style="font-size:13px;color:#475569;margin-top:2px;">${escapeHtml(resolved.email)}</div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderTemplateBody(body: string, templates: OutreachTemplateMap, context: OutreachEmailContext) {
+  const signature = templates.signature;
+  const resolvedBody = applyTemplateVariables(body, context, signature);
+  const signatureText = signature.enabled ? buildSignatureText(signature, context) : "";
+  const signatureHtml = signature.enabled ? buildSignatureHtml(signature, context) : "";
+
+  const textBody = resolvedBody.includes(SIGNATURE_TOKEN)
+    ? resolvedBody.replace(SIGNATURE_TOKEN, signatureText)
+    : signatureText
+      ? `${resolvedBody}\n\n${signatureText}`
+      : resolvedBody;
+
+  const htmlBody = resolvedBody.includes(SIGNATURE_TOKEN)
+    ? resolvedBody.split(SIGNATURE_TOKEN).map((part) => textToParagraphHtml(part)).join(signatureHtml)
+    : `${textToParagraphHtml(resolvedBody)}${signatureHtml}`;
+
   return {
-    subject: applyTemplateVariables(template.subject, context),
-    text,
-    html: buildHtmlFromText(text),
+    text: textBody.trim(),
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #334155; line-height: 1.6;">
+        ${htmlBody}
+      </div>
+    `,
+  };
+}
+
+export async function buildOutreachEmailTemplate(stage: OutreachTemplateStage, context: OutreachEmailContext): Promise<OutreachEmailTemplate> {
+  const templates = await getOutreachTemplates();
+  const template = getTemplateStage(templates, stage);
+
+  if (!template) {
+    throw new Error(`Template "${stage}" not found.`);
+  }
+
+  const rendered = renderTemplateBody(template.body, templates, context);
+
+  return {
+    subject: applyTemplateVariables(template.subject, context, templates.signature),
+    text: rendered.text,
+    html: rendered.html,
   };
 }
 
@@ -128,7 +221,7 @@ export async function sendOutreachEmail(params: {
     throw new Error("RESEND_API_KEY is not configured.");
   }
 
-  const template = await buildEmailTemplate(params.stage, {
+  const template = await buildOutreachEmailTemplate(params.stage, {
     contactName: params.contactName,
     businessName: params.businessName,
   });
@@ -158,13 +251,13 @@ export async function sendOutreachEmail(params: {
 }
 
 export function getPrimaryEmail(context: OutreachEmailContext) {
-  return buildEmailTemplate("primary", context);
+  return buildOutreachEmailTemplate("primary", context);
 }
 
 export function getFollowUp1Email(context: OutreachEmailContext) {
-  return buildEmailTemplate("follow_up_1", context);
+  return buildOutreachEmailTemplate("follow_up_1", context);
 }
 
 export function getFollowUp2Email(context: OutreachEmailContext) {
-  return buildEmailTemplate("follow_up_2", context);
+  return buildOutreachEmailTemplate("follow_up_2", context);
 }

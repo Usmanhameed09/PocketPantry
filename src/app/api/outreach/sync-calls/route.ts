@@ -179,6 +179,7 @@ export async function POST() {
       recoveryPending: recoveryLeads.length,
       followUp1Sent: followUpResults.followUp1Sent,
       followUp2Sent: followUpResults.followUp2Sent,
+      additionalFollowUpsSent: followUpResults.additionalFollowUpsSent,
       closedAsNotInterested: followUpResults.closedAsNotInterested,
       followUpErrors: followUpResults.errors,
     });

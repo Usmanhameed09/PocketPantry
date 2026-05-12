@@ -10,7 +10,7 @@ export async function POST() {
     return NextResponse.json({
       ok: true,
       ...results,
-      message: `Follow-up workflow complete: ${results.followUp1Sent} first follow-up, ${results.followUp2Sent} second follow-up, ${results.closedAsNotInterested} closed.`,
+      message: `Follow-up workflow complete: ${results.followUp1Sent} first follow-up, ${results.followUp2Sent} second follow-up, ${results.additionalFollowUpsSent} additional follow-up${results.additionalFollowUpsSent === 1 ? "" : "s"}, ${results.closedAsNotInterested} closed.`,
     });
   } catch (error) {
     console.error("[Follow-up] Error:", error);

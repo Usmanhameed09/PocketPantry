@@ -44,6 +44,9 @@ function mapCatalogItem(
     isManualOnly: product.isManualOnly,
     error: savedAnalysis?.error ?? null,
     lastScrapedAt: savedAnalysis?.updatedAt ?? null,
+    firstFillCost: savedAnalysis?.firstFillCost ?? null,
+    firstFillSupplier: savedAnalysis?.firstFillSupplier ?? null,
+    firstFillPackSize: savedAnalysis?.firstFillPackSize ?? null,
   };
 }
 
@@ -57,7 +60,7 @@ export async function GET() {
       meta: { total: products.length },
     });
   } catch (error) {
-    const e = error as any;
+    const e = error as Partial<{ message: string; code: string; details: string; hint: string }> | null;
     const msg = e?.message || (typeof error === "string" ? error : JSON.stringify(error));
     const code = e?.code;
     console.error("[pricing/catalog] GET error:", { code, msg, details: e?.details, hint: e?.hint });

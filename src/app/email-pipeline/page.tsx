@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import Header from "@/components/Header";
-import type { OutreachTemplateMap, OutreachTemplateStage } from "@/lib/outreach-template-store";
+import EmailTemplatesModalView from "@/components/pipeline/EmailTemplatesModal";
 import {
   Plus,
   Upload,
@@ -1648,7 +1648,7 @@ export default function EmailPipelinePage() {
       )}
 
       {showTemplateModal && (
-        <EmailTemplatesModal
+        <EmailTemplatesModalView
           onClose={() => setShowTemplateModal(false)}
           onSaved={(message) => {
             setShowTemplateModal(false);
@@ -1872,7 +1872,7 @@ function AddLeadModal({
   );
 }
 
-function EmailTemplatesModal({
+/* function EmailTemplatesModal({
   onClose,
   onSaved,
   onError,
@@ -2155,6 +2155,8 @@ function EmailTemplatesModal({
     </div>
   );
 }
+
+*/
 
 function ExcelImportModal({
   existingLeads,

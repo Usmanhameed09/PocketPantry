@@ -91,6 +91,9 @@ export type SavedPricingAnalysis = {
   error?: string | null;
   updatedAt: string;
   allPrices: SavedSupplierPrice[];
+  firstFillCost?: number | null;
+  firstFillSupplier?: string | null;
+  firstFillPackSize?: number | null;
 };
 
 type LocalPricingStore = {
@@ -125,7 +128,7 @@ function parsePackSize(value: string | null | undefined): number | null {
 
 function isMissingTableError(error: unknown) {
   if (!error || typeof error !== "object") return false;
-  const e = error as any;
+  const e = error as Partial<{ code: string; message: string; hint: string; details: string }>;
   const code = e.code || "";
   const message = (e.message || e.hint || e.details || "").toLowerCase();
   // PGRST205 = PostgREST "table not found", 42P01 = PostgreSQL "undefined_table"
@@ -133,6 +136,20 @@ function isMissingTableError(error: unknown) {
   return code === "PGRST205" || code === "42P01"
     || message.includes("relation") && message.includes("does not exist")
     || message.includes("table") && message.includes("not found");
+}
+
+function shouldUseLocalPricingFallback(error: unknown) {
+  if (isMissingTableError(error)) return true;
+  if (!error || typeof error !== "object") return false;
+  const e = error as Partial<{ code: string; message: string; details: string; hint: string }>;
+  const code = e.code || "";
+  const message = `${e.message || ""} ${e.details || ""} ${e.hint || ""}`.toLowerCase();
+  return code === "23503"
+    || code === "22P02"
+    || message.includes("foreign key")
+    || message.includes("violates foreign key constraint")
+    || message.includes("invalid input syntax")
+    || message.includes("uuid");
 }
 
 async function readLocalStore(): Promise<LocalPricingStore> {
@@ -423,7 +440,7 @@ export async function saveProductCurrentPrice(productId: string, currentPrice: n
     if (insertError) throw insertError;
     return { updated: true };
   } catch (error) {
-    if (!isMissingTableError(error)) {
+    if (!shouldUseLocalPricingFallback(error)) {
       throw error;
     }
 

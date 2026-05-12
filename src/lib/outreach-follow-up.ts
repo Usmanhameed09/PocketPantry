@@ -1,14 +1,10 @@
-import { createServerClient } from "@/lib/supabase";
 import { addEmailLog, logOutreachAction, updateLead, type Lead } from "@/lib/leads-store";
 import { sendOutreachEmail } from "@/lib/outreach-email";
+import { getFollowUpStages, getOutreachTemplates, type OutreachTemplateStage } from "@/lib/outreach-template-store";
 
-const FOLLOW_UP_1_DELAY_DAYS = 5;
-const FOLLOW_UP_2_DELAY_DAYS = 3;
-const CLOSE_AFTER_FOLLOW_UP_2_DAYS = 5;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const FOLLOW_UP_1_DELAY_MS = FOLLOW_UP_1_DELAY_DAYS * ONE_DAY_MS;
-const FOLLOW_UP_2_DELAY_MS = FOLLOW_UP_2_DELAY_DAYS * ONE_DAY_MS;
-const CLOSE_AFTER_FOLLOW_UP_2_MS = CLOSE_AFTER_FOLLOW_UP_2_DAYS * ONE_DAY_MS;
+const CLOSE_AFTER_LAST_FOLLOW_UP_DAYS = 5;
+const CLOSE_AFTER_LAST_FOLLOW_UP_MS = CLOSE_AFTER_LAST_FOLLOW_UP_DAYS * ONE_DAY_MS;
 const CLOSED_STAGES = new Set<Lead["stage"]>([
   "Interested",
   "Site Visit Requested",
@@ -16,22 +12,23 @@ const CLOSED_STAGES = new Set<Lead["stage"]>([
   "Not Interested",
 ]);
 
-type EmailStage = "primary" | "follow_up_1" | "follow_up_2";
-
-function normalizeStage(value: unknown): EmailStage | null {
-  if (value === "primary" || value === "follow_up_1" || value === "follow_up_2") {
-    return value;
-  }
-  return null;
+function normalizeStage(value: unknown): OutreachTemplateStage | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+type LeadTimeline = {
+  sentAtByStage: Map<string, number>;
+  hasReply?: boolean;
+};
+
 async function getLatestEmailTimeline() {
+  const { createServerClient } = await import("@/lib/supabase");
   const supabase = createServerClient();
   const [{ data, error }, { data: emailRows, error: emailError }] = await Promise.all([
     supabase
-    .from("outreach_log")
-    .select("lead_id, performed_at, action_data")
-    .eq("action_type", "email")
+      .from("outreach_log")
+      .select("lead_id, performed_at, action_data")
+      .eq("action_type", "email")
       .order("performed_at", { ascending: false }),
     supabase
       .from("email_logs")
@@ -39,32 +36,19 @@ async function getLatestEmailTimeline() {
       .order("created_at", { ascending: true }),
   ]);
 
-  if (error) {
-    throw error;
-  }
-  if (emailError) {
-    throw emailError;
-  }
+  if (error) throw error;
+  if (emailError) throw emailError;
 
-  const byLead = new Map<
-    string,
-    {
-      primaryAt?: number;
-      followUp1At?: number;
-      followUp2At?: number;
-      hasReply?: boolean;
-    }
-  >();
+  const byLead = new Map<string, LeadTimeline>();
 
   for (const row of data || []) {
     const leadId = row.lead_id as string | undefined;
     if (!leadId) continue;
 
+    const current = byLead.get(leadId) || { sentAtByStage: new Map<string, number>() };
     const actionData = (row.action_data || {}) as { stage?: unknown; subtype?: unknown };
     const performedAt = new Date(String(row.performed_at || "")).getTime();
-    const current = byLead.get(leadId) || {};
 
-    // Track inbound replies — any reply means we stop follow-ups for this lead
     if (actionData.subtype === "reply_received") {
       current.hasReply = true;
       byLead.set(leadId, current);
@@ -72,18 +56,14 @@ async function getLatestEmailTimeline() {
     }
 
     const stage = normalizeStage(actionData.stage);
-    if (!stage) continue;
-    if (!Number.isFinite(performedAt)) continue;
+    if (!stage || !Number.isFinite(performedAt)) continue;
 
-    if (stage === "primary" && current.primaryAt === undefined) current.primaryAt = performedAt;
-    if (stage === "follow_up_1" && current.followUp1At === undefined) current.followUp1At = performedAt;
-    if (stage === "follow_up_2" && current.followUp2At === undefined) current.followUp2At = performedAt;
+    if (!current.sentAtByStage.has(stage)) {
+      current.sentAtByStage.set(stage, performedAt);
+    }
     byLead.set(leadId, current);
   }
 
-  // Fallback: position-based timeline from email_logs.
-  // We only count rows with status === "Sent" so a "Replied" row never gets
-  // mistaken for an outgoing follow-up. Also flag leads that have any "Replied" row.
   const sentRowsByLead = new Map<string, number[]>();
   for (const row of emailRows || []) {
     const leadId = row.lead_id as string | undefined;
@@ -92,7 +72,7 @@ async function getLatestEmailTimeline() {
     if (!leadId || !Number.isFinite(createdAt)) continue;
 
     if (status === "Replied") {
-      const current = byLead.get(leadId) || {};
+      const current = byLead.get(leadId) || { sentAtByStage: new Map<string, number>() };
       current.hasReply = true;
       byLead.set(leadId, current);
       continue;
@@ -103,13 +83,20 @@ async function getLatestEmailTimeline() {
     sentRowsByLead.get(leadId)!.push(createdAt);
   }
 
+  const templates = await getOutreachTemplates();
+  const stageOrder = templates.stages.map((stage) => stage.id);
+
   for (const [leadId, timestamps] of sentRowsByLead.entries()) {
-    const current = byLead.get(leadId) || {};
+    const current = byLead.get(leadId) || { sentAtByStage: new Map<string, number>() };
     const sorted = [...timestamps].sort((a, b) => a - b);
 
-    if (current.primaryAt === undefined && sorted[0] !== undefined) current.primaryAt = sorted[0];
-    if (current.followUp1At === undefined && sorted[1] !== undefined) current.followUp1At = sorted[1];
-    if (current.followUp2At === undefined && sorted[2] !== undefined) current.followUp2At = sorted[2];
+    for (const [index, timestamp] of sorted.entries()) {
+      const stageId = stageOrder[index];
+      if (!stageId) break;
+      if (!current.sentAtByStage.has(stageId)) {
+        current.sentAtByStage.set(stageId, timestamp);
+      }
+    }
 
     byLead.set(leadId, current);
   }
@@ -117,43 +104,46 @@ async function getLatestEmailTimeline() {
   return byLead;
 }
 
-async function sendAndLogEmail(lead: Lead, stage: "follow_up_1" | "follow_up_2") {
+async function sendAndLogEmail(lead: Lead, stageId: OutreachTemplateStage, stageLabel: string) {
   const response = await sendOutreachEmail({
     to: lead.email,
-    stage,
+    stage: stageId,
     contactName: lead.contact || "there",
     businessName: lead.business,
   });
 
   await addEmailLog(lead.id, response.subject, "Sent");
   await logOutreachAction(lead.id, "email", {
-    stage,
+    stage: stageId,
     subject: response.subject,
     resendId: response.id || null,
   });
 
-  if (stage === "follow_up_1") {
-    await updateLead(lead.id, {
-      followUp1Sent: true,
-      lastActivity: `Follow-up email #1 sent - ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`,
-    });
-  } else {
-    await updateLead(lead.id, {
-      followUp2Sent: true,
-      lastActivity: `Follow-up email #2 sent - ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`,
-    });
-  }
+  const updates: Parameters<typeof updateLead>[1] = {
+    lastActivity: `${stageLabel} sent - ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`,
+  };
+  if (stageId === "follow_up_1") updates.followUp1Sent = true;
+  if (stageId === "follow_up_2") updates.followUp2Sent = true;
+  await updateLead(lead.id, updates);
 
   return response.subject;
 }
 
 export async function processOutreachFollowUps(leads: Lead[]) {
+  const templates = await getOutreachTemplates();
+  const followUps = getFollowUpStages(templates);
+
   const results = {
     followUp1Sent: 0,
     followUp2Sent: 0,
+    additionalFollowUpsSent: 0,
     closedAsNotInterested: 0,
     errors: 0,
   };
+
+  if (followUps.length === 0) {
+    return results;
+  }
 
   const timeline = await getLatestEmailTimeline();
   const now = Date.now();
@@ -163,42 +153,52 @@ export async function processOutreachFollowUps(leads: Lead[]) {
       continue;
     }
 
-    const leadTimeline = timeline.get(lead.id) || {};
-    const primaryAt = leadTimeline.primaryAt;
-    const followUp1At = leadTimeline.followUp1At;
-    const followUp2At = leadTimeline.followUp2At;
-
-    // Hard guard: if the lead has ever replied (per outreach_log or email_logs),
-    // never send another follow-up — even if the stage hasn't been updated yet.
+    const leadTimeline = timeline.get(lead.id) || { sentAtByStage: new Map<string, number>() };
     if (leadTimeline.hasReply) {
       continue;
     }
 
+    const primaryAt = leadTimeline.sentAtByStage.get("primary");
+    if (!primaryAt) {
+      continue;
+    }
+
     try {
-      if (!lead.followUp1Sent) {
-        if (primaryAt && now - primaryAt >= FOLLOW_UP_1_DELAY_MS) {
-          await sendAndLogEmail(lead, "follow_up_1");
-          results.followUp1Sent += 1;
+      let sentNewFollowUp = false;
+      let previousSentAt = primaryAt;
+
+      for (const stage of followUps) {
+        const currentSentAt = leadTimeline.sentAtByStage.get(stage.id);
+        if (currentSentAt) {
+          previousSentAt = currentSentAt;
+          continue;
         }
+
+        const delayMs = Math.max(1, stage.delayDays || 1) * ONE_DAY_MS;
+        if (now - previousSentAt >= delayMs) {
+          await sendAndLogEmail(lead, stage.id, stage.label);
+          if (stage.id === "follow_up_1") results.followUp1Sent += 1;
+          else if (stage.id === "follow_up_2") results.followUp2Sent += 1;
+          else results.additionalFollowUpsSent += 1;
+        }
+        sentNewFollowUp = true;
+        break;
+      }
+
+      if (sentNewFollowUp) {
         continue;
       }
 
-      if (!lead.followUp2Sent) {
-        if (followUp1At && now - followUp1At >= FOLLOW_UP_2_DELAY_MS) {
-          await sendAndLogEmail(lead, "follow_up_2");
-          results.followUp2Sent += 1;
-        }
-        continue;
-      }
-
-      if (followUp2At && now - followUp2At >= CLOSE_AFTER_FOLLOW_UP_2_MS) {
+      const lastFollowUp = followUps[followUps.length - 1];
+      const lastFollowUpAt = leadTimeline.sentAtByStage.get(lastFollowUp.id);
+      if (lastFollowUpAt && now - lastFollowUpAt >= CLOSE_AFTER_LAST_FOLLOW_UP_MS) {
         await updateLead(lead.id, {
           stage: "Not Interested",
           lastActivity: `Closed after email follow-ups - ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`,
         });
         await logOutreachAction(lead.id, "email", {
           stage: "closed_after_follow_ups",
-          reason: "No response after primary email and two follow-up emails.",
+          reason: `No response after primary email and ${followUps.length} follow-up email${followUps.length === 1 ? "" : "s"}.`,
         });
         results.closedAsNotInterested += 1;
       }

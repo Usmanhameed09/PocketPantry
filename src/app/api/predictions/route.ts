@@ -25,12 +25,28 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
-    const res = await fetch(`${PREDICTION_API}/api/predictions/retrain`, {
+    const contentType = request.headers.get("content-type") || "";
+    const init: RequestInit = {
       method: "POST",
       cache: "no-store",
-    });
+    };
+
+    if (contentType.includes("multipart/form-data")) {
+      const incomingForm = await request.formData();
+      const outgoingForm = new FormData();
+
+      for (const file of incomingForm.getAll("files")) {
+        if (file instanceof File) {
+          outgoingForm.append("files", file, file.name);
+        }
+      }
+
+      init.body = outgoingForm;
+    }
+
+    const res = await fetch(`${PREDICTION_API}/api/predictions/retrain`, init);
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: "Retrain failed" }));

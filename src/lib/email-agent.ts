@@ -15,6 +15,9 @@ import { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
 import { createServerClient } from "./supabase";
 import { bookLeadInCalendly, getCalendlyAvailabilityDecision } from "./calendly-booking";
+import { getOutreachTemplates } from "./outreach-template-store";
+import { buildSignatureHtml, buildSignatureText } from "./outreach-email";
+import { getEmailAgentSettings } from "./email-agent-settings";
 
 // ----------------------------------------------------------------
 // Types
@@ -42,6 +45,9 @@ export interface ClassifiedReply {
   messageId: string;
   inReplyTo: string | null;
   autoReplySent?: boolean;
+  // If autoReplySent is false, this explains why (e.g. "lifetime cap reached",
+  // "daily cap reached", "intent=not_interested"). Empty string means N/A.
+  skipReason?: string;
 }
 
 export interface InboxCheckResult {
@@ -280,7 +286,7 @@ async function generateAutoReply(params: {
     '- If interested: "Would Tuesday or Thursday work for a quick 15-minute walkthrough?"',
     '- If not interested: "No worries at all! If anything changes, we\'re here."',
     "- Never be pushy.",
-    "- Sign off: " + senderName + "\\nPV Pantry\\n" + contactPhone,
+    "- Do NOT write any sign-off, signature, or contact info — the system appends the configured email signature automatically.",
     "- Plain text only. No markdown or bullet points.",
     bookingInstruction,
     'Return JSON: {"body":"your reply text"}',
@@ -443,8 +449,9 @@ async function loadOutreachData(supabase: ReturnType<typeof createServerClient>)
 // Core: check inbox for new replies
 // ----------------------------------------------------------------
 
-const MAX_AUTO_REPLIES_PER_DAY = 10;
-const MAX_AUTO_REPLIES_PER_LEAD = 5;
+// Auto-reply caps are loaded from Supabase (email-agent-settings) on each
+// scan so they can be changed from the UI without a redeploy. Env vars and
+// hard-coded defaults serve as fallbacks.
 
 export async function checkInboxForReplies(): Promise<InboxCheckResult> {
   const result: InboxCheckResult = {
@@ -467,6 +474,12 @@ export async function checkInboxForReplies(): Promise<InboxCheckResult> {
 
 async function _doInboxScan(result: InboxCheckResult): Promise<InboxCheckResult> {
   const supabase = createServerClient();
+
+  // 0. Load current auto-reply settings (UI-editable, persisted in Supabase)
+  const settings = await getEmailAgentSettings();
+  const MAX_AUTO_REPLIES_PER_DAY = settings.dailyCap;
+  const MAX_AUTO_REPLIES_PER_LEAD = settings.perLeadCap;
+  const autoReplyEnabled = settings.enabled;
 
   // 1. Load leads
   const { data: leads } = await supabase
@@ -656,17 +669,33 @@ async function _doInboxScan(result: InboxCheckResult): Promise<InboxCheckResult>
         };
 
         // ===== AUTO-REPLY (safety gates) =====
+        // Gate 0: master switch (UI-controllable)
+        if (!autoReplyEnabled) {
+          classified.skipReason = "auto-reply globally disabled in settings";
+          console.log("[email-agent] Skip reply for", lead.id, "— auto-reply disabled");
+          result.classified.push(classified);
+          continue;
+        }
+
         // Gate 1: only reply to actionable intents
         const wantsAutoReply =
           classification.intent === "interested" ||
           classification.intent === "needs_info" ||
           classification.intent === "booked";
 
-        if (!wantsAutoReply) { result.classified.push(classified); continue; }
+        if (!wantsAutoReply) {
+          classified.skipReason = `intent=${classification.intent} (auto-reply only on interested/needs_info/booked)`;
+          console.log("[email-agent] Skip reply for", lead.id, "—", classified.skipReason);
+          result.classified.push(classified);
+          continue;
+        }
 
         // Gate 2: global daily cap (prevent runaway sending)
         if (todayAutoReplies + result.autoRepliesSent >= MAX_AUTO_REPLIES_PER_DAY) {
-          console.log("[email-agent] Daily cap reached"); result.classified.push(classified); continue;
+          classified.skipReason = `daily cap reached (${MAX_AUTO_REPLIES_PER_DAY}/day) — raise EMAIL_AUTO_REPLY_DAILY_CAP`;
+          console.log("[email-agent] Skip reply for", lead.id, "—", classified.skipReason);
+          result.classified.push(classified);
+          continue;
         }
 
         // Gate 3: lifetime cap per lead (don't endlessly auto-reply to same lead)
@@ -678,7 +707,10 @@ async function _doInboxScan(result: InboxCheckResult): Promise<InboxCheckResult>
           lifetimeCount = lc?.length ?? 0;
         } catch { lifetimeCount = 999; }
         if (lifetimeCount >= MAX_AUTO_REPLIES_PER_LEAD) {
-          console.log("[email-agent] Lifetime cap for", lead.id); result.classified.push(classified); continue;
+          classified.skipReason = `per-lead cap reached (${lifetimeCount}/${MAX_AUTO_REPLIES_PER_LEAD}) — raise EMAIL_AUTO_REPLY_PER_LEAD_CAP or reset auto_reply log for this lead`;
+          console.log("[email-agent] Skip reply for", lead.id, "—", classified.skipReason);
+          result.classified.push(classified);
+          continue;
         }
 
         // NOTE: No per-scan or 24h cooldown — each NEW reply gets its own auto-reply.
@@ -743,15 +775,44 @@ async function _doInboxScan(result: InboxCheckResult): Promise<InboxCheckResult>
           });
 
           if (autoReply) {
-            const replyHtml = "<div style=\"font-family:Arial,sans-serif;max-width:640px;margin:0 auto;color:#334155;line-height:1.6;\">" +
-              autoReply.body.split("\n\n").map((p: string) => "<p>" + p.replace(/\n/g, "<br />") + "</p>").join("") + "</div>";
+            // Load the configured outreach signature (Wisestamp / structured /
+            // text fallback) so auto-replies match the look of the primary +
+            // follow-up emails. Falls back gracefully if templates can't load.
+            let signatureHtml = "";
+            let signatureText = "";
+            try {
+              const templates = await getOutreachTemplates();
+              if (templates.signature.enabled) {
+                const sigContext = {
+                  contactName: fromName,
+                  businessName: (lead.business as string) || "",
+                };
+                signatureHtml = buildSignatureHtml(templates.signature, sigContext);
+                signatureText = buildSignatureText(templates.signature, sigContext);
+              }
+            } catch (err) {
+              console.warn("[email-agent] Could not load signature for auto-reply:", err);
+            }
+
+            const bodyHtml = autoReply.body
+              .split("\n\n")
+              .map((p: string) => "<p>" + p.replace(/\n/g, "<br />") + "</p>")
+              .join("");
+            const replyHtml =
+              "<div style=\"font-family:Arial,sans-serif;max-width:640px;margin:0 auto;color:#334155;line-height:1.6;\">" +
+              bodyHtml +
+              signatureHtml +
+              "</div>";
+            const replyText = signatureText
+              ? `${autoReply.body}\n\n${signatureText}`
+              : autoReply.body;
 
             const refsChain = matchedThreadId === messageId
               ? messageId : matchedThreadId + " " + messageId;
 
             const sentResult = await sendEmailDirect({
               to: fromAddr, subject: autoReply.subject,
-              html: replyHtml, text: autoReply.body, leadId: lead.id,
+              html: replyHtml, text: replyText, leadId: lead.id,
               replyTo: process.env.EMAIL_USER || "arthur.b@pvpantry.com",
               inReplyTo: messageId, references: refsChain,
             });
@@ -771,9 +832,17 @@ async function _doInboxScan(result: InboxCheckResult): Promise<InboxCheckResult>
             classified.autoReplySent = true;
             result.autoRepliesSent++;
             console.log("[email-agent] Auto-replied to", fromAddr, "on thread", matchedThreadId);
+          } else {
+            // generateAutoReply returned null — OpenAI didn't produce a body
+            classified.skipReason = "auto-reply body generation failed (OpenAI returned empty or no key)";
+            console.warn("[email-agent] Skip reply for", lead.id, "—", classified.skipReason);
           }
         } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          classified.skipReason = `send error: ${msg.substring(0, 200)}`;
           console.error("[email-agent] Auto-reply failed:", err);
+          // Surface to the result errors so the caller (cron/UI) can show it
+          result.errors.push(`Auto-reply to ${fromAddr}: ${msg.substring(0, 200)}`);
         }
 
         result.classified.push(classified);

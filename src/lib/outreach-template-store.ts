@@ -1,82 +1,21 @@
+import "server-only";
+
 import { promises as fs } from "fs";
 import path from "path";
 import { createServerClient } from "@/lib/supabase";
 import { TEMPLATE_SYSTEM_LEAD_ID } from "@/lib/system-records";
-
-export type OutreachTemplateStage = "primary" | "follow_up_1" | "follow_up_2";
-
-export type StoredOutreachTemplate = {
-  subject: string;
-  body: string;
-};
-
-export type OutreachTemplateMap = Record<OutreachTemplateStage, StoredOutreachTemplate>;
+import {
+  DEFAULT_TEMPLATES,
+  getFollowUpStages,
+  getTemplateStage,
+  sanitizeTemplateMap,
+  type OutreachTemplateMap,
+  type OutreachTemplateStage,
+} from "@/lib/outreach-template-model";
 
 const DATA_DIR = path.resolve(process.cwd(), ".data");
 const LEGACY_TEMPLATE_FILE = path.join(DATA_DIR, "outreach-email-templates.json");
 const TEMPLATE_ACTION_TYPE = "email";
-
-const DEFAULT_TEMPLATES: OutreachTemplateMap = {
-  primary: {
-    subject: "Customizable Vending Machines for {{businessName}}",
-    body: `Hi {{contactFirstName}},
-
-My name is {{senderName}} and I am emailing you regarding {{businessName}} and its current vending machine solution. If you are looking to fill an empty space within a breakroom or a thoroughfare, our machines are restocked every week and can be filled with any products of your choice, making it a convenient and personalized solution for your employees or customers.
-
-If you are interested I would be happy to jump on a call with you to discuss how we can make this happen.
-
-Thank you,
-{{senderName}}
-PocketPantry
-{{contactPhone}}
-{{replyToEmail}}`,
-  },
-  follow_up_1: {
-    subject: "Following up on vending for {{businessName}}",
-    body: `Hi {{contactFirstName}},
-
-I wanted to follow up in case my last email was lost in your inbox. Are you currently looking to fill an empty space at your location with a vending machine?
-
-If you currently have a vending services solution for {{businessName}} that you are not happy with, our machines are consistently restocked weekly and can be filled with any products that your customers or employees wish. If you are interested, I would love to jump on a call to discuss the details further.
-
-Thank you,
-{{senderName}}
-PocketPantry
-{{contactPhone}}
-{{replyToEmail}}`,
-  },
-  follow_up_2: {
-    subject: "Checking in about vending at {{businessName}}",
-    body: `Hi {{contactFirstName}},
-
-I wanted to reach out again just in case you missed my last email. If you are currently interested in having a vending machine placed at {{businessName}} or are unhappy with your current vending services provider, I would love to jump on a call to discuss in detail how we can help if you have the time.
-
-Thank you,
-{{senderName}}
-PocketPantry
-{{contactPhone}}
-{{replyToEmail}}`,
-  },
-};
-
-function sanitizeTemplateMap(value: unknown): OutreachTemplateMap {
-  const input = (value || {}) as Partial<OutreachTemplateMap>;
-
-  return {
-    primary: {
-      subject: input.primary?.subject?.trim() || DEFAULT_TEMPLATES.primary.subject,
-      body: input.primary?.body?.trim() || DEFAULT_TEMPLATES.primary.body,
-    },
-    follow_up_1: {
-      subject: input.follow_up_1?.subject?.trim() || DEFAULT_TEMPLATES.follow_up_1.subject,
-      body: input.follow_up_1?.body?.trim() || DEFAULT_TEMPLATES.follow_up_1.body,
-    },
-    follow_up_2: {
-      subject: input.follow_up_2?.subject?.trim() || DEFAULT_TEMPLATES.follow_up_2.subject,
-      body: input.follow_up_2?.body?.trim() || DEFAULT_TEMPLATES.follow_up_2.body,
-    },
-  };
-}
 
 async function loadLegacyTemplates(): Promise<OutreachTemplateMap | null> {
   try {
@@ -111,7 +50,7 @@ async function ensureTemplateSystemLead() {
     phone: "0000000000",
     email: "",
     address: "",
-    distance: "—",
+    distance: "--",
     business_type: "system",
     source: "Manual",
     stage: "New Lead",
@@ -170,7 +109,7 @@ export async function getOutreachTemplates(): Promise<OutreachTemplateMap> {
   }
 
   const legacyTemplates = await loadLegacyTemplates();
-  const initialTemplates = legacyTemplates || DEFAULT_TEMPLATES;
+  const initialTemplates = legacyTemplates || sanitizeTemplateMap(DEFAULT_TEMPLATES);
   await writeTemplateRecord(initialTemplates);
   return sanitizeTemplateMap(initialTemplates);
 }
@@ -181,4 +120,11 @@ export async function saveOutreachTemplates(templates: OutreachTemplateMap): Pro
   return sanitized;
 }
 
-export { DEFAULT_TEMPLATES, TEMPLATE_SYSTEM_LEAD_ID };
+export {
+  DEFAULT_TEMPLATES,
+  getFollowUpStages,
+  getTemplateStage,
+  TEMPLATE_SYSTEM_LEAD_ID,
+  type OutreachTemplateMap,
+  type OutreachTemplateStage,
+};

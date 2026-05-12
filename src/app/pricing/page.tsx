@@ -64,6 +64,9 @@ interface PricingItem {
   isManualOnly?: boolean;
   error?: string | null;
   lastScrapedAt?: string | null;
+  firstFillCost?: number | null;
+  firstFillSupplier?: string | null;
+  firstFillPackSize?: number | null;
 }
 
 type PricingApiResponse = {
@@ -110,6 +113,7 @@ export default function PricingPage() {
   const [items, setItems] = useState<PricingItem[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [scraping, setScraping] = useState(false);
+  const [scrapeProgress, setScrapeProgress] = useState<{ completed: number; total: number } | null>(null);
   const [lastScraped, setLastScraped] = useState<string | null>(null);
   const [scrapeStats, setScrapeStats] = useState<{ scraped: number; failed: number } | null>(null);
   const [margins, setMargins] = useState<Record<string, number>>({ beverage: 50, snack: 45 });
@@ -118,13 +122,14 @@ export default function PricingPage() {
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [scrapeError, setScrapeError] = useState<string | null>(null);
   const [savingPrices, setSavingPrices] = useState<Record<string, boolean>>({});
+  const [savingDecisions, setSavingDecisions] = useState<Record<string, boolean>>({});
   const [costDrafts, setCostDrafts] = useState<Record<string, string>>({});
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   function syncPriceDrafts(nextItems: PricingItem[]) {
     setCostDrafts(
       Object.fromEntries(
-        nextItems.map((item) => [item.productRefId || item.id, item.prevCost.toFixed(2)])
+        nextItems.map((item) => [item.productRefId || item.id, item.cost.toFixed(2)])
       )
     );
   }
@@ -180,6 +185,7 @@ export default function PricingPage() {
   }
 
   async function handleApprove(item: PricingItem) {
+    setSavingDecisions((prev) => ({ ...prev, [item.id]: true }));
     try {
       const res = await fetch("/api/pricing/catalog", {
         method: "PATCH",
@@ -194,10 +200,17 @@ export default function PricingPage() {
       setItems((prev) => prev.map((p) => p.id === item.id
         ? { ...p, status: "Approved" as PriceStatus, currentPrice: p.suggestedPrice, trigger: "Approved price update" } : p
       ));
-    } catch (error) { console.error(error); }
+      setScrapeError(null);
+    } catch (error) {
+      console.error(error);
+      setScrapeError(error instanceof Error ? error.message : "Failed to apply price update");
+    } finally {
+      setSavingDecisions((prev) => ({ ...prev, [item.id]: false }));
+    }
   }
 
   async function handleReject(item: PricingItem) {
+    setSavingDecisions((prev) => ({ ...prev, [item.id]: true }));
     try {
       const res = await fetch("/api/pricing/catalog", {
         method: "PATCH",
@@ -212,7 +225,13 @@ export default function PricingPage() {
       setItems((prev) => prev.map((p) => p.id === item.id
         ? { ...p, status: "Cost Margin" as PriceStatus, suggestedPrice: p.currentPrice, trigger: "Price change rejected" } : p
       ));
-    } catch (error) { console.error(error); }
+      setScrapeError(null);
+    } catch (error) {
+      console.error(error);
+      setScrapeError(error instanceof Error ? error.message : "Failed to dismiss price recommendation");
+    } finally {
+      setSavingDecisions((prev) => ({ ...prev, [item.id]: false }));
+    }
   }
 
   function handleDraftCostChange(key: string, value: string) {
@@ -237,12 +256,12 @@ export default function PricingPage() {
     finally { setSavingPrices((prev) => ({ ...prev, [key]: false })); }
   }
 
-  async function handleScrape() {
+  async function runScrape(endpoint: string) {
     setScraping(true);
     setScrapeStats(null);
     setScrapeError(null);
     try {
-      const res = await fetch("/api/pricing/scrape", { method: "POST" });
+      const res = await fetch(endpoint, { method: "POST" });
       const json: PricingApiResponse = await res.json();
       if (Array.isArray(json.data)) {
         const mapped: PricingItem[] = json.data.map((r) => ({
@@ -255,6 +274,9 @@ export default function PricingPage() {
           machineCount: r.machineCount, unitsSold: r.unitsSold,
           platform: r.platform, lastSoldAt: r.lastSoldAt, category: r.category,
           error: r.error ?? null, lastScrapedAt: r.lastScrapedAt ?? null,
+          firstFillCost: r.firstFillCost ?? null,
+          firstFillSupplier: r.firstFillSupplier ?? null,
+          firstFillPackSize: r.firstFillPackSize ?? null,
         }));
         setItems(mapped);
         syncPriceDrafts(mapped);
@@ -265,6 +287,113 @@ export default function PricingPage() {
       if (json.error) setScrapeError(json.error);
     } catch { setScrapeError("Failed to scrape supplier prices"); }
     finally { setScraping(false); }
+  }
+
+  async function handleScrape() {
+    return runScrape("/api/pricing/scrape");
+  }
+
+  type RowUpdate = {
+    id: string;
+    product: string;
+    scrapedProduct: string | null;
+    supplier: string;
+    cost: number;
+    prevCost: number;
+    currentPrice: number;
+    suggestedPrice: number;
+    margin: number;
+    status: PriceStatus;
+    trigger: string;
+    sourceUrl?: string;
+    packPrice?: number | null;
+    packSize?: number | null;
+    scraped: boolean;
+    error?: string | null;
+    firstFillCost: number | null;
+    firstFillSupplier: string | null;
+    firstFillPackSize: number | null;
+    allPrices?: PricingItem["allPrices"];
+    machineCount: number;
+    unitsSold: number;
+    platform: string;
+    lastSoldAt: string | null;
+    category: string;
+    isManualOnly: boolean;
+  };
+
+  // Selenium scrape uses a polling architecture so the UI gets per-product
+  // updates instead of waiting on a single long fetch (which Node aborts
+  // at ~5 min headers timeout).
+  async function handleSeleniumScrape() {
+    setScraping(true);
+    setScrapeError(null);
+    setScrapeStats(null);
+    setScrapeProgress({ completed: 0, total: 0 });
+
+    try {
+      const startRes = await fetch("/api/pricing/scrape-selenium/start", { method: "POST" });
+      const startJson = await startRes.json();
+      if (!startRes.ok || !startJson.success || !startJson.job_id) {
+        setScrapeError(startJson.error || "Failed to start scrape");
+        setScraping(false);
+        setScrapeProgress(null);
+        return;
+      }
+      const jobId = startJson.job_id as string;
+      setScrapeProgress({ completed: 0, total: startJson.total });
+
+      let since = 0;
+      let done = false;
+      let scrapedCount = 0;
+      let failedCount = 0;
+
+      while (!done) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const sRes = await fetch(`/api/pricing/scrape-selenium/status?job=${jobId}&since=${since}`);
+        const sJson = await sRes.json();
+        if (!sRes.ok || !sJson.success) {
+          setScrapeError(sJson.error || "Poll failed");
+          break;
+        }
+        since = sJson.next_since ?? since;
+        setScrapeProgress({ completed: sJson.completed, total: sJson.total });
+
+        const newRows: RowUpdate[] = sJson.rows || [];
+        if (newRows.length > 0) {
+          for (const r of newRows) {
+            if (r.scraped) scrapedCount++;
+            else failedCount++;
+          }
+          // Patch existing rows in the table by id
+          setItems((prev) => {
+            const byId = new Map(prev.map((p) => [p.id, p]));
+            for (const r of newRows) {
+              byId.set(r.id, {
+                ...byId.get(r.id),
+                ...r,
+                status: r.status as PriceStatus,
+                error: r.error ?? null,
+                lastScrapedAt: new Date().toISOString(),
+              } as PricingItem);
+            }
+            return Array.from(byId.values());
+          });
+        }
+
+        if (sJson.status === "done" || sJson.status === "error") {
+          done = true;
+          if (sJson.error) setScrapeError(sJson.error);
+          setLastScraped(new Date().toLocaleTimeString());
+          setScrapeStats({ scraped: scrapedCount, failed: failedCount });
+        }
+      }
+    } catch (e) {
+      setScrapeError(e instanceof Error ? e.message : "Scrape failed");
+    } finally {
+      setScraping(false);
+      setScrapeProgress(null);
+    }
   }
 
   const filtered = items.filter((p) => {
@@ -280,8 +409,6 @@ export default function PricingPage() {
   const costChanges = items.filter((p) => p.prevCost !== p.cost).length;
   const avgMargin = items.length ? Math.round(items.reduce((s, p) => s + p.margin, 0) / items.length) : 0;
   const pendingCount = items.filter((p) => p.status === "Pending Approval").length;
-  const totalRevPotential = items.reduce((s, p) => s + (p.unitsSold || 0) * (p.suggestedPrice - p.currentPrice), 0);
-
   return (
     <div style={{ minHeight: "100vh", background: "#f8fafc" }}>
       <Header title="Pricing" />
@@ -334,15 +461,37 @@ export default function PricingPage() {
 
           {/* Actions */}
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {lastScraped && (
+            {scrapeProgress && scraping && (
+              <span style={{ fontSize: 12, color: "#2563eb", fontWeight: 600 }}>
+                Scraping: {scrapeProgress.completed} / {scrapeProgress.total}
+              </span>
+            )}
+            {lastScraped && !scraping && (
               <span style={{ fontSize: 12, color: "#94a3b8" }}>
                 Last checked: {lastScraped}
                 {scrapeStats && ` (${scrapeStats.scraped} matched${scrapeStats.failed > 0 ? `, ${scrapeStats.failed} failed` : ""})`}
               </span>
             )}
             <button
+              onClick={handleSeleniumScrape}
+              disabled={scraping}
+              title="Sam's Club only via Selenium — free, slower (~25s/product)"
+              style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "10px 18px",
+                background: scraping ? "#eff6ff" : "#fff", color: "#2563eb",
+                border: "1px solid #bfdbfe", borderRadius: 12,
+                fontSize: 13, fontWeight: 700, cursor: scraping ? "not-allowed" : "pointer",
+                transition: "all 0.2s",
+              }}
+            >
+              {scraping
+                ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Scraping…</>
+                : <><RefreshCw size={15} /> Scrape Sam&apos;s (Free)</>}
+            </button>
+            <button
               onClick={handleScrape}
               disabled={scraping}
+              title="Multi-source via SerpAPI — uses your monthly quota"
               style={{
                 display: "flex", alignItems: "center", gap: 8, padding: "10px 22px",
                 background: scraping ? "#f0fdf4" : "#16a34a", color: scraping ? "#16a34a" : "#fff",
@@ -354,7 +503,7 @@ export default function PricingPage() {
             >
               {scraping
                 ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Checking prices...</>
-                : <><RefreshCw size={15} /> Check Market Prices</>}
+                : <><RefreshCw size={15} /> Check Market (SerpAPI)</>}
             </button>
           </div>
         </div>
@@ -508,6 +657,11 @@ export default function PricingPage() {
                   const isExpanded = expandedRows.has(p.id);
                   const isBeverage = p.category === "beverage";
                   const marginColor = p.margin >= 45 ? "#059669" : p.margin >= 35 ? "#d97706" : "#dc2626";
+                  const visibleSupplierPrices = (p.allPrices || []).filter((sp) => sp.unitPrice != null);
+                  const firstFillLabel = p.firstFillCost != null
+                    ? `$${p.firstFillCost.toFixed(2)}${p.firstFillPackSize ? ` / ${p.firstFillPackSize}pk` : " pack"}`
+                    : null;
+                  const isDecisionSaving = !!savingDecisions[p.id];
 
                   return (
                     <div key={p.id} style={{
@@ -583,12 +737,16 @@ export default function PricingPage() {
                             {p.scraped && (
                               <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>
                                 via {p.supplier}
-                                {p.packPrice != null && p.packSize != null && (
-                                  <span> &middot; ${p.packPrice.toFixed(2)} / {p.packSize}pk</span>
+                                {p.packPrice != null && (
+                                  <span>
+                                    {" "}
+                                    &middot; ${p.packPrice.toFixed(2)}
+                                    {p.packSize ? ` / ${p.packSize}pk` : " pack"}
+                                  </span>
                                 )}
                               </div>
                             )}
-                            {(p.allPrices?.length ?? 0) > 1 && (
+                            {visibleSupplierPrices.length > 1 && (
                               <button onClick={() => toggleRow(p.id)} style={{
                                 display: "flex", alignItems: "center", gap: 3,
                                 fontSize: 11, color: "#3b82f6", fontWeight: 600,
@@ -596,7 +754,7 @@ export default function PricingPage() {
                                 padding: 0, marginTop: 4,
                               }}>
                                 {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                {p.allPrices!.length} suppliers found
+                                {visibleSupplierPrices.length} suppliers found
                               </button>
                             )}
                           </div>
@@ -653,6 +811,12 @@ export default function PricingPage() {
                           {costChanged && (
                             <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4, color: costDiff > 0 ? "#dc2626" : "#059669" }}>
                               {costDiff > 0 ? "\u2191" : "\u2193"} ${Math.abs(costDiff).toFixed(2)} since last save
+                            </div>
+                          )}
+                          {firstFillLabel && (
+                            <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+                              First fill: <strong style={{ color: "#0f172a" }}>{firstFillLabel}</strong>
+                              {p.firstFillSupplier ? ` from ${p.firstFillSupplier}` : ""}
                             </div>
                           )}
                         </div>
@@ -722,18 +886,32 @@ export default function PricingPage() {
                           </span>
                           {p.status === "Pending Approval" && (
                             <div style={{ display: "flex", gap: 6 }}>
-                              <button onClick={() => handleApprove(p)} style={{
-                                display: "flex", alignItems: "center", gap: 5, padding: "7px 14px", borderRadius: 8,
-                                background: "#16a34a", border: "none", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer",
-                                boxShadow: "0 2px 6px rgba(22,163,74,0.25)", transition: "all 0.15s",
-                              }}>
-                                <Check size={13} /> Apply
-                              </button>
-                              <button onClick={() => handleReject(p)} style={{
+                              {priceChanged ? (
+                                <button onClick={() => handleApprove(p)} disabled={isDecisionSaving} style={{
+                                  display: "flex", alignItems: "center", gap: 5, padding: "7px 14px", borderRadius: 8,
+                                  background: "#16a34a", border: "none", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer",
+                                  boxShadow: "0 2px 6px rgba(22,163,74,0.25)", transition: "all 0.15s",
+                                  opacity: isDecisionSaving ? 0.7 : 1,
+                                }}>
+                                  {isDecisionSaving ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Check size={13} />}
+                                  Apply
+                                </button>
+                              ) : (
+                                <span style={{
+                                  display: "inline-flex", alignItems: "center",
+                                  padding: "7px 12px", borderRadius: 8,
+                                  background: "#f8fafc", border: "1px solid #e2e8f0",
+                                  fontSize: 12, fontWeight: 700, color: "#64748b",
+                                }}>
+                                  No price change
+                                </span>
+                              )}
+                              <button onClick={() => handleReject(p)} disabled={isDecisionSaving} style={{
                                 display: "flex", alignItems: "center", justifyContent: "center",
                                 width: 34, height: 34, borderRadius: 8,
                                 background: "#fff", border: "1px solid #e2e8f0",
                                 color: "#94a3b8", cursor: "pointer", transition: "all 0.15s",
+                                opacity: isDecisionSaving ? 0.7 : 1,
                               }}>
                                 <X size={14} />
                               </button>
@@ -746,7 +924,7 @@ export default function PricingPage() {
                       </div>
 
                       {/* Expanded: Supplier comparison */}
-                      {isExpanded && p.allPrices && p.allPrices.length > 0 && (
+                      {isExpanded && visibleSupplierPrices.length > 0 && (
                         <div style={{
                           padding: "0 22px 16px",
                           borderTop: "1px solid #f1f5f9",
@@ -756,7 +934,7 @@ export default function PricingPage() {
                             Supplier Comparison
                           </div>
                           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                            {p.allPrices.map((sp) => {
+                            {visibleSupplierPrices.map((sp) => {
                               const isBest = sp.supplier === p.supplier;
                               return (
                                 <div key={sp.supplier + sp.url} style={{
@@ -782,13 +960,11 @@ export default function PricingPage() {
                                     )}
                                   </div>
                                   <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a" }}>
-                                    ${sp.unitPrice?.toFixed(2) ?? "?"}<span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 500 }}>/ea</span>
+                                    ${sp.unitPrice!.toFixed(2)}<span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 500 }}>/ea</span>
                                   </div>
-                                  {sp.packPrice != null && sp.packSize != null && (
-                                    <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
-                                      ${sp.packPrice.toFixed(2)} / {sp.packSize}pk
-                                    </div>
-                                  )}
+                                  <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+                                    {sp.packSize ? `${sp.packSize}pk case` : "Supplier match"}
+                                  </div>
                                 </div>
                               );
                             })}
@@ -807,7 +983,7 @@ export default function PricingPage() {
               border: "1px solid #e2e8f0", borderRadius: 14, fontSize: 13, color: "#64748b", lineHeight: 1.7,
             }}>
               <strong style={{ color: "#0f172a" }}>How pricing works:</strong> Products appear automatically from machine sales.
-              Set <strong>Your Cost</strong> and click <strong>Check Market Prices</strong> to compare with Sam&apos;s Club and other suppliers.
+              We default the supplier lookup to <strong>Sam&apos;s Club</strong> for cost fills, keep other suppliers for comparison, and only use a per-unit cost when the pack size looks reliable.
               We recommend a selling price using your profit targets (Drinks: {margins.beverage}%, Snacks: {margins.snack}%).
             </div>
           </>

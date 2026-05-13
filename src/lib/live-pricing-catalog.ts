@@ -4,8 +4,15 @@ import path from "path";
 import { readEnv } from "./runtime-env";
 import { PRICING_SYSTEM_LEAD_ID } from "./system-records";
 
-const PRICING_ANALYSIS_ACTION = "pricing_analysis_snapshot";
-const PRICING_ANALYSIS_ITEM_ACTION = "pricing_analysis_item";
+// outreach_log has a CHECK constraint that limits action_type to a small set
+// (call/email/email_agent_settings). We reuse "call" — the same pattern
+// google-calendar-store and machine-order-store use for arbitrary system
+// state — and discriminate via action_data.kind. Reads filter by both
+// lead_id (PRICING_SYSTEM_LEAD_ID) and action_data.kind so we never pick up
+// rows from those other consumers.
+const PRICING_ANALYSIS_ACTION_TYPE = "call";
+const PRICING_ANALYSIS_SNAPSHOT_KIND = "pricing_analysis_snapshot";
+const PRICING_ANALYSIS_ITEM_KIND = "pricing_analysis_item";
 
 export type ProductCategory = "beverage" | "snack";
 
@@ -487,7 +494,12 @@ export async function saveProductPricing(
 }
 
 type SupabaseAnalysisRow = {
-  action_data: { productId?: string; analysis?: SavedPricingAnalysis } & Record<string, unknown>;
+  action_data: {
+    kind?: string;
+    productId?: string;
+    analysis?: SavedPricingAnalysis;
+    analyses?: Record<string, SavedPricingAnalysis>;
+  } & Record<string, unknown>;
   performed_at: string;
 };
 
@@ -497,11 +509,14 @@ async function readSupabaseAnalyses(): Promise<Record<string, SavedPricingAnalys
   // per-product POSTs each read the same snapshot and overwrite each other.
   try {
     const supabase = createServerClient();
+    // Filter by lead_id only — action_data->>kind discrimination happens in
+    // application code below. This keeps the query simple and avoids needing
+    // a jsonb operator that might not be supported in all PostgREST versions.
     const { data, error } = await supabase
       .from("outreach_log")
       .select("action_data, performed_at")
       .eq("lead_id", PRICING_SYSTEM_LEAD_ID)
-      .in("action_type", [PRICING_ANALYSIS_ITEM_ACTION, PRICING_ANALYSIS_ACTION])
+      .eq("action_type", PRICING_ANALYSIS_ACTION_TYPE)
       .order("performed_at", { ascending: false })
       .limit(5000);
 
@@ -515,8 +530,9 @@ async function readSupabaseAnalyses(): Promise<Record<string, SavedPricingAnalys
     const seen = new Set<string>();
 
     for (const row of (data || []) as SupabaseAnalysisRow[]) {
+      const kind = row.action_data?.kind;
       // Per-product row format (preferred — race-safe)
-      if (row.action_data?.productId && row.action_data?.analysis) {
+      if (kind === PRICING_ANALYSIS_ITEM_KIND && row.action_data?.productId && row.action_data?.analysis) {
         const pid = row.action_data.productId;
         if (!seen.has(pid)) {
           out[pid] = row.action_data.analysis;
@@ -526,12 +542,14 @@ async function readSupabaseAnalyses(): Promise<Record<string, SavedPricingAnalys
       }
       // Legacy snapshot format — only fill in products not already covered
       // by a per-product row.
-      const snapshot = (row.action_data as { analyses?: Record<string, SavedPricingAnalysis> })?.analyses;
-      if (snapshot && typeof snapshot === "object") {
-        for (const [pid, analysis] of Object.entries(snapshot)) {
-          if (!seen.has(pid)) {
-            out[pid] = analysis;
-            seen.add(pid);
+      if (kind === PRICING_ANALYSIS_SNAPSHOT_KIND || row.action_data?.analyses) {
+        const snapshot = row.action_data?.analyses;
+        if (snapshot && typeof snapshot === "object") {
+          for (const [pid, analysis] of Object.entries(snapshot)) {
+            if (!seen.has(pid)) {
+              out[pid] = analysis;
+              seen.add(pid);
+            }
           }
         }
       }
@@ -544,13 +562,58 @@ async function readSupabaseAnalyses(): Promise<Record<string, SavedPricingAnalys
   }
 }
 
+let pricingSystemLeadEnsured = false;
+
+async function ensurePricingSystemLead() {
+  // outreach_log.lead_id has a foreign key to leads.id. Other system stores
+  // (google-calendar-store, outreach-template-store) follow this same
+  // pattern — create a placeholder lead row the first time we need it.
+  if (pricingSystemLeadEnsured) return;
+  const supabase = createServerClient();
+  const { data: existing } = await supabase
+    .from("leads")
+    .select("id")
+    .eq("id", PRICING_SYSTEM_LEAD_ID)
+    .maybeSingle();
+
+  if (existing?.id) {
+    pricingSystemLeadEnsured = true;
+    return;
+  }
+
+  const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const { error: insertError } = await supabase.from("leads").insert({
+    id: PRICING_SYSTEM_LEAD_ID,
+    business: "__SYSTEM__ Pricing Analyses",
+    contact: "System",
+    phone: "0000000000",
+    email: "",
+    address: "",
+    distance: "—",
+    business_type: "system",
+    source: "Manual",
+    stage: "New Lead",
+    contact_method: "Call",
+    call_attempts: 0,
+    added_date: dateStr,
+    last_activity: "Pricing analyses store",
+  });
+
+  if (insertError && insertError.code !== "23505") {
+    throw insertError;
+  }
+  pricingSystemLeadEnsured = true;
+}
+
 async function writeSupabaseAnalysisItems(analyses: SavedPricingAnalysis[]) {
   if (analyses.length === 0) return;
+  await ensurePricingSystemLead();
   const supabase = createServerClient();
   const rows = analyses.map((analysis) => ({
     lead_id: PRICING_SYSTEM_LEAD_ID,
-    action_type: PRICING_ANALYSIS_ITEM_ACTION,
+    action_type: PRICING_ANALYSIS_ACTION_TYPE,
     action_data: {
+      kind: PRICING_ANALYSIS_ITEM_KIND,
       productId: analysis.productId,
       analysis,
       updatedAt: new Date().toISOString(),

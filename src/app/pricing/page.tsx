@@ -175,12 +175,38 @@ export default function PricingPage() {
   // Listen for the PocketPantry browser extension. The extension's content
   // script broadcasts a "ready" message on every page load. If we hear it,
   // we show the "Scrape via Extension" button; otherwise we show install help.
+  // Also recover any in-progress or recently-completed scrape state — so a
+  // page refresh mid-scrape doesn't lose visibility into the running job.
   useEffect(() => {
+    let stateRequestedAt = 0;
     const onMessage = (event: MessageEvent) => {
       if (event.source !== window) return;
       const msg = event.data;
-      if (msg && msg.source === "pp-extension" && msg.type === "ready") {
+      if (!msg || msg.source !== "pp-extension") return;
+
+      if (msg.type === "ready") {
         setExtensionDetected(true);
+        // Ask the extension if there's a scrape in progress or one whose
+        // results we missed because we refreshed. Throttle to once per
+        // 2s in case the extension announces multiple times on the same load.
+        if (Date.now() - stateRequestedAt > 2000) {
+          stateRequestedAt = Date.now();
+          window.postMessage({ source: "pp-dashboard", type: "get-state" }, "*");
+        }
+      } else if (msg.type === "state") {
+        // Reply from get-state — replay the latest progress/completion.
+        const state = msg.state as
+          | { status: string; completed: number; total: number; currentProduct?: string; results?: unknown[] }
+          | null;
+        if (!state) return;
+        if (state.status === "running") {
+          setScraping(true);
+          setScrapeProgress({ completed: state.completed, total: state.total });
+        } else if (state.status === "complete" && Array.isArray(state.results) && state.results.length > 0) {
+          // Resurrect the completion — re-process and clear extension storage.
+          persistExtensionResults(state.results)
+            .then(() => window.postMessage({ source: "pp-dashboard", type: "clear-state" }, "*"));
+        }
       }
     };
     window.addEventListener("message", onMessage);

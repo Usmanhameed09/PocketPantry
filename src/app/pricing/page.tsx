@@ -114,6 +114,8 @@ export default function PricingPage() {
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [scraping, setScraping] = useState(false);
   const [scrapeProgress, setScrapeProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [extensionDetected, setExtensionDetected] = useState(false);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [lastScraped, setLastScraped] = useState<string | null>(null);
   const [scrapeStats, setScrapeStats] = useState<{ scraped: number; failed: number } | null>(null);
   const [margins, setMargins] = useState<Record<string, number>>({ beverage: 50, snack: 45 });
@@ -169,6 +171,21 @@ export default function PricingPage() {
   }, []);
 
   useEffect(() => { loadCatalog(); }, [loadCatalog]);
+
+  // Listen for the PocketPantry browser extension. The extension's content
+  // script broadcasts a "ready" message on every page load. If we hear it,
+  // we show the "Scrape via Extension" button; otherwise we show install help.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== window) return;
+      const msg = event.data;
+      if (msg && msg.source === "pp-extension" && msg.type === "ready") {
+        setExtensionDetected(true);
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 
   async function handleMarginSave(category: string) {
     setSavingMargin(true);
@@ -293,6 +310,110 @@ export default function PricingPage() {
     return runScrape("/api/pricing/scrape");
   }
 
+  // ============ Extension-based scrape ============
+
+  async function handleExtensionScrape() {
+    if (!extensionDetected) {
+      setScrapeError(
+        "PocketPantry browser extension not detected. Install it once (Settings → instructions) to enable free scraping from your own session."
+      );
+      return;
+    }
+
+    setScraping(true);
+    setScrapeError(null);
+    setScrapeStats(null);
+    setScrapeProgress({ completed: 0, total: items.length });
+
+    // 1. Build payload from current catalog
+    const products = items.map((it) => ({
+      id: it.id,
+      name: it.product,
+      search_term: it.scrapedProduct || it.product,
+      vending_price: it.currentPrice,
+      last_known_cost: it.cost,
+      expected_pack_size: it.packSize ?? null,
+      category: it.category || "snack",
+    }));
+
+    const requestId = `pp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // 2. Listen for progress/completion messages from the extension
+    const onMessage = async (event: MessageEvent) => {
+      if (event.source !== window) return;
+      const msg = event.data;
+      if (!msg || msg.source !== "pp-extension") return;
+      if (msg.requestId && msg.requestId !== requestId) return;
+
+      if (msg.type === "scrape-progress") {
+        setScrapeProgress({ completed: msg.completed || 0, total: msg.total || products.length });
+      } else if (msg.type === "scrape-error") {
+        cleanup();
+        setScrapeError(msg.error || "Extension scrape failed");
+        setScraping(false);
+      } else if (msg.type === "scrape-complete") {
+        cleanup();
+        await persistExtensionResults(msg.results || []);
+      }
+    };
+
+    function cleanup() {
+      window.removeEventListener("message", onMessage);
+      setScrapeProgress(null);
+    }
+
+    window.addEventListener("message", onMessage);
+
+    // 3. Kick off the scrape in the extension
+    window.postMessage(
+      {
+        source: "pp-dashboard",
+        type: "scrape-request",
+        requestId,
+        products,
+      },
+      "*"
+    );
+  }
+
+  async function persistExtensionResults(results: unknown[]) {
+    try {
+      const res = await fetch("/api/pricing/scrape-extension-results", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ results }),
+      });
+      const json: PricingApiResponse = await res.json();
+      if (Array.isArray(json.data)) {
+        const mapped: PricingItem[] = json.data.map((r) => ({
+          id: r.id, product: r.product, scrapedProduct: r.scrapedProduct ?? null, supplier: r.supplier,
+          cost: r.cost, prevCost: r.prevCost, currentPrice: r.currentPrice,
+          suggestedPrice: r.suggestedPrice, margin: r.margin,
+          status: r.status as PriceStatus, trigger: r.trigger,
+          sourceUrl: r.sourceUrl, packPrice: r.packPrice, packSize: r.packSize,
+          scraped: r.scraped, allPrices: r.allPrices,
+          machineCount: r.machineCount, unitsSold: r.unitsSold,
+          platform: r.platform, lastSoldAt: r.lastSoldAt, category: r.category,
+          error: r.error ?? null, lastScrapedAt: r.lastScrapedAt ?? null,
+          firstFillCost: r.firstFillCost ?? null,
+          firstFillSupplier: r.firstFillSupplier ?? null,
+          firstFillPackSize: r.firstFillPackSize ?? null,
+        }));
+        setItems(mapped);
+        syncPriceDrafts(mapped);
+        setLastScraped(new Date().toLocaleTimeString());
+        setScrapeStats({ scraped: json.meta?.scraped ?? 0, failed: json.meta?.failed ?? 0 });
+      }
+      if (!res.ok || !json.success) {
+        setScrapeError(json.error || "Failed to save extension results");
+      }
+    } catch (e) {
+      setScrapeError(e instanceof Error ? e.message : "Failed to save extension results");
+    } finally {
+      setScraping(false);
+    }
+  }
+
   type RowUpdate = {
     id: string;
     product: string;
@@ -413,6 +534,57 @@ export default function PricingPage() {
     <div style={{ minHeight: "100vh", background: "#f8fafc" }}>
       <Header title="Pricing" />
 
+      {showInstallHelp && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 1000, padding: 20,
+          }}
+          onClick={() => setShowInstallHelp(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff", borderRadius: 16, maxWidth: 540, width: "100%",
+              padding: 28, boxShadow: "0 30px 80px rgba(15,23,42,0.35)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#0f172a" }}>
+                Install PocketPantry Sam&apos;s Club Scraper
+              </h2>
+              <button
+                onClick={() => setShowInstallHelp(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8" }}
+              ><X size={20} /></button>
+            </div>
+            <p style={{ fontSize: 13, color: "#475569", marginBottom: 16, lineHeight: 1.6 }}>
+              One-time setup. The extension runs Sam&apos;s Club scraping <strong>in your browser</strong> — uses your real residential IP, bypasses bot detection. Zero ongoing cost.
+            </p>
+            <ol style={{ fontSize: 13, color: "#334155", lineHeight: 1.7, paddingLeft: 18, marginBottom: 16 }}>
+              <li>Download the extension folder (ask your developer for the <code style={{ background: "#f1f5f9", padding: "1px 6px", borderRadius: 4 }}>chrome-extension/</code> zip).</li>
+              <li>Open <code style={{ background: "#f1f5f9", padding: "1px 6px", borderRadius: 4 }}>chrome://extensions</code> in Chrome.</li>
+              <li>Toggle <strong>Developer mode</strong> on (top-right).</li>
+              <li>Click <strong>Load unpacked</strong> and select the extracted <code style={{ background: "#f1f5f9", padding: "1px 6px", borderRadius: 4 }}>chrome-extension/</code> folder.</li>
+              <li>Refresh this page. The button should change to <em>&quot;Scrape Sam&apos;s (Extension)&quot;</em>.</li>
+            </ol>
+            <p style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>
+              Tip: if you log into your Sam&apos;s Club account in any tab before scraping, the extension will pick up member prices automatically.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                onClick={() => setShowInstallHelp(false)}
+                style={{
+                  padding: "10px 18px", borderRadius: 10, background: "#0f172a", color: "#fff",
+                  border: "none", fontWeight: 700, fontSize: 13, cursor: "pointer",
+                }}
+              >Got it</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="page-padding" style={{ padding: isMobile ? 16 : "24px 32px" }}>
 
         {/* Top bar: Tabs + Action */}
@@ -472,22 +644,38 @@ export default function PricingPage() {
                 {scrapeStats && ` (${scrapeStats.scraped} matched${scrapeStats.failed > 0 ? `, ${scrapeStats.failed} failed` : ""})`}
               </span>
             )}
-            <button
-              onClick={handleSeleniumScrape}
-              disabled={scraping}
-              title="Sam's Club only via Selenium — free, slower (~25s/product)"
-              style={{
-                display: "flex", alignItems: "center", gap: 8, padding: "10px 18px",
-                background: scraping ? "#eff6ff" : "#fff", color: "#2563eb",
-                border: "1px solid #bfdbfe", borderRadius: 12,
-                fontSize: 13, fontWeight: 700, cursor: scraping ? "not-allowed" : "pointer",
-                transition: "all 0.2s",
-              }}
-            >
-              {scraping
-                ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Scraping…</>
-                : <><RefreshCw size={15} /> Scrape Sam&apos;s (Free)</>}
-            </button>
+            {extensionDetected ? (
+              <button
+                onClick={handleExtensionScrape}
+                disabled={scraping}
+                title="Free — runs in your browser using the PocketPantry extension. Bypasses Akamai by using your real session."
+                style={{
+                  display: "flex", alignItems: "center", gap: 8, padding: "10px 18px",
+                  background: scraping ? "#eef2ff" : "#fff", color: "#6366f1",
+                  border: "1px solid #c7d2fe", borderRadius: 12,
+                  fontSize: 13, fontWeight: 700, cursor: scraping ? "not-allowed" : "pointer",
+                  transition: "all 0.2s",
+                }}
+              >
+                {scraping
+                  ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Scraping {scrapeProgress?.completed ?? 0}/{scrapeProgress?.total ?? items.length}…</>
+                  : <><RefreshCw size={15} /> Scrape Sam&apos;s (Extension)</>}
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowInstallHelp(true)}
+                title="Install the PocketPantry browser extension to enable free Sam's Club scraping from your own session"
+                style={{
+                  display: "flex", alignItems: "center", gap: 8, padding: "10px 18px",
+                  background: "#fff", color: "#64748b",
+                  border: "1px dashed #cbd5e1", borderRadius: 12,
+                  fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  transition: "all 0.2s",
+                }}
+              >
+                <Package size={15} /> Install Free Scraper Extension
+              </button>
+            )}
             <button
               onClick={handleScrape}
               disabled={scraping}

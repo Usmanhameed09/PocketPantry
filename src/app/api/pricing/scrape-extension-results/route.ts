@@ -1,0 +1,131 @@
+import { NextResponse } from "next/server";
+import { getPricingCatalog, savePricingAnalyses } from "@/lib/live-pricing-catalog";
+import { buildPricingFromScrape, type ExtensionScrapeResult } from "@/lib/build-pricing-from-scrape";
+
+type RequestBody = {
+  results?: ExtensionScrapeResult[];
+  requestId?: string;
+};
+
+/**
+ * Accepts scrape results gathered by the browser extension running in the
+ * user's session. Applies the same margin math the SerpAPI flow uses,
+ * persists to Supabase (or local fallback), and returns the mapped rows
+ * the dashboard renders.
+ */
+export async function POST(request: Request) {
+  try {
+    const body: RequestBody = await request.json();
+    const results = Array.isArray(body.results) ? body.results : [];
+
+    if (results.length === 0) {
+      return NextResponse.json({ success: false, error: "No results in payload" }, { status: 400 });
+    }
+
+    const catalog = await getPricingCatalog();
+    const catalogMap = new Map(catalog.map((p) => [p.id, p]));
+
+    const mappedRows: Record<string, unknown>[] = [];
+    const analyses = [];
+
+    for (const result of results) {
+      const product = catalogMap.get(result.productId);
+      if (!product) continue;
+
+      const computed = buildPricingFromScrape(product, result);
+
+      mappedRows.push({
+        id: product.id,
+        productRefId: product.productRefId,
+        product: product.name,
+        scrapedProduct: computed.scrapedProduct,
+        supplier: computed.supplier,
+        cost: computed.cost,
+        prevCost: computed.prevCost,
+        currentPrice: product.currentPrice,
+        suggestedPrice: computed.suggestedPrice,
+        margin: computed.margin,
+        status: computed.status,
+        trigger: computed.trigger,
+        sourceUrl: computed.sourceUrl,
+        packPrice: computed.packPrice,
+        packSize: computed.packSize,
+        scraped: computed.scraped,
+        error: computed.error,
+        allPrices: result.candidates
+          ? result.candidates.map((c) => ({
+              supplier: "Sam's Club",
+              packPrice: c.price,
+              packSize: c.pack_size,
+              unitPrice: c.pack_size && c.pack_size > 0
+                ? Math.round((c.price / c.pack_size) * 100) / 100
+                : c.price,
+              name: c.name,
+              url: c.url,
+            }))
+          : [],
+        machineCount: product.machineCount,
+        unitsSold: product.unitsSold,
+        platform: product.platform,
+        lastSoldAt: product.lastSoldAt,
+        category: product.category,
+        isManualOnly: product.isManualOnly,
+        firstFillCost: computed.scraped ? computed.packPrice : null,
+        firstFillSupplier: computed.scraped ? "Sam's Club" : null,
+        firstFillPackSize: computed.packSize,
+      });
+
+      analyses.push({
+        productId: product.id,
+        supplier: computed.supplier,
+        cost: computed.cost,
+        prevCost: computed.prevCost,
+        suggestedPrice: computed.suggestedPrice,
+        margin: computed.margin,
+        status: computed.status,
+        trigger: computed.trigger,
+        sourceUrl: computed.sourceUrl,
+        packPrice: computed.packPrice,
+        packSize: computed.packSize,
+        scraped: computed.scraped,
+        scrapedProduct: computed.scrapedProduct,
+        error: computed.error,
+        updatedAt: new Date().toISOString(),
+        allPrices: (mappedRows[mappedRows.length - 1].allPrices as unknown) as Array<{
+          supplier: string;
+          packPrice: number;
+          packSize: number | null;
+          unitPrice: number | null;
+          name: string;
+          url: string;
+        }>,
+        firstFillCost: computed.scraped ? computed.packPrice ?? null : null,
+        firstFillSupplier: computed.scraped ? "Sam's Club" : null,
+        firstFillPackSize: computed.packSize ?? null,
+      });
+    }
+
+    await savePricingAnalyses(analyses);
+
+    const scrapedCount = analyses.filter((a) => a.scraped).length;
+    return NextResponse.json({
+      success: true,
+      data: mappedRows,
+      meta: {
+        total: mappedRows.length,
+        scraped: scrapedCount,
+        failed: mappedRows.length - scrapedCount,
+        timestamp: new Date().toISOString(),
+        method: "extension",
+      },
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to process extension results",
+      },
+      { status: 500 }
+    );
+  }
+}

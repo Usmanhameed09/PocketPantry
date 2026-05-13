@@ -2,6 +2,9 @@ import { createServerClient } from "./supabase";
 import { promises as fs } from "fs";
 import path from "path";
 import { readEnv } from "./runtime-env";
+import { PRICING_SYSTEM_LEAD_ID } from "./system-records";
+
+const PRICING_ANALYSIS_ACTION = "pricing_analysis_snapshot";
 
 export type ProductCategory = "beverage" | "snack";
 
@@ -482,19 +485,88 @@ export async function saveProductPricing(
   return { updated: true };
 }
 
+async function readSupabaseAnalyses(): Promise<Record<string, SavedPricingAnalysis>> {
+  try {
+    const supabase = createServerClient();
+    const { data, error } = await supabase
+      .from("outreach_log")
+      .select("action_data")
+      .eq("lead_id", PRICING_SYSTEM_LEAD_ID)
+      .eq("action_type", PRICING_ANALYSIS_ACTION)
+      .order("performed_at", { ascending: false })
+      .limit(1);
+
+    if (error) {
+      if (isMissingTableError(error)) return {};
+      console.warn("[pricing-catalog] readSupabaseAnalyses error:", error.code, error.message);
+      return {};
+    }
+
+    const row = data?.[0];
+    const payload = (row?.action_data as { analyses?: Record<string, SavedPricingAnalysis> } | null)?.analyses;
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (err) {
+    console.warn("[pricing-catalog] readSupabaseAnalyses threw:", err);
+    return {};
+  }
+}
+
+async function writeSupabaseAnalyses(analyses: Record<string, SavedPricingAnalysis>) {
+  const supabase = createServerClient();
+  const { error } = await supabase.from("outreach_log").insert({
+    lead_id: PRICING_SYSTEM_LEAD_ID,
+    action_type: PRICING_ANALYSIS_ACTION,
+    action_data: {
+      analyses,
+      updatedAt: new Date().toISOString(),
+    },
+  });
+  if (error) throw error;
+}
+
 export async function getSavedPricingAnalyses() {
+  const supabaseAnalyses = await readSupabaseAnalyses();
+  if (Object.keys(supabaseAnalyses).length > 0) {
+    return supabaseAnalyses;
+  }
   const store = await readLocalStore();
   return store.savedAnalyses;
 }
 
 export async function savePricingAnalyses(analyses: SavedPricingAnalysis[]) {
-  const store = await readLocalStore();
+  if (analyses.length === 0) return { updated: 0 };
+
+  // Read latest snapshot from Supabase (or local if Supabase is empty/missing),
+  // merge new entries, then write back to Supabase. Falls back to local file
+  // only if Supabase write fails (dev environment without the table).
+  const existing = await readSupabaseAnalyses();
+  const localStore = await readLocalStore();
+  const merged: Record<string, SavedPricingAnalysis> = {
+    ...localStore.savedAnalyses,
+    ...existing,
+  };
 
   for (const analysis of analyses) {
-    store.savedAnalyses[analysis.productId] = analysis;
+    merged[analysis.productId] = analysis;
   }
 
-  await writeLocalStore(store);
+  try {
+    await writeSupabaseAnalyses(merged);
+  } catch (err) {
+    console.warn("[pricing-catalog] Supabase write failed, falling back to local file:", err);
+    localStore.savedAnalyses = merged;
+    await writeLocalStore(localStore);
+    return { updated: analyses.length, local: true };
+  }
+
+  // Best-effort local mirror so dev environments also see the data.
+  try {
+    localStore.savedAnalyses = merged;
+    await writeLocalStore(localStore);
+  } catch {
+    // ignore — Supabase is the source of truth
+  }
+
   return { updated: analyses.length };
 }
 
@@ -503,8 +575,15 @@ export async function savePricingDecision(
   decision: "approve" | "reject",
   values: { currentPrice: number; suggestedPrice: number }
 ) {
-  const store = await readLocalStore();
-  const existing = store.savedAnalyses[analysisId];
+  // Read merged view (Supabase wins, local fills gaps) so decisions apply to
+  // whatever the user just saw on the page.
+  const supabaseAnalyses = await readSupabaseAnalyses();
+  const localStore = await readLocalStore();
+  const merged: Record<string, SavedPricingAnalysis> = {
+    ...localStore.savedAnalyses,
+    ...supabaseAnalyses,
+  };
+  const existing = merged[analysisId];
 
   if (!existing) {
     return { updated: false };
@@ -521,8 +600,23 @@ export async function savePricingDecision(
   }
 
   existing.updatedAt = new Date().toISOString();
-  store.savedAnalyses[analysisId] = existing;
-  await writeLocalStore(store);
+  merged[analysisId] = existing;
+
+  try {
+    await writeSupabaseAnalyses(merged);
+  } catch (err) {
+    console.warn("[pricing-catalog] decision Supabase write failed, falling back to local:", err);
+    localStore.savedAnalyses = merged;
+    await writeLocalStore(localStore);
+    return { updated: true, local: true };
+  }
+
+  try {
+    localStore.savedAnalyses = merged;
+    await writeLocalStore(localStore);
+  } catch {
+    // ignore
+  }
 
   return { updated: true };
 }

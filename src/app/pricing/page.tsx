@@ -373,13 +373,28 @@ export default function PricingPage() {
 
       if (msg.type === "scrape-progress") {
         setScrapeProgress({ completed: msg.completed || 0, total: msg.total || products.length });
+        // Live mode — save this single product result immediately so the
+        // grid row updates without waiting for the full batch.
+        if (msg.latestResult) {
+          await persistExtensionResults([msg.latestResult]).catch(() => {});
+        }
       } else if (msg.type === "scrape-error") {
         cleanup();
         setScrapeError(msg.error || "Extension scrape failed");
         setScraping(false);
       } else if (msg.type === "scrape-complete") {
         cleanup();
-        await persistExtensionResults(msg.results || []);
+        // All per-product saves already happened during progress events.
+        // Just refresh the catalog one more time to pick up the final state
+        // and clear the extension's stored state.
+        await loadCatalog();
+        window.postMessage({ source: "pp-dashboard", type: "clear-state" }, "*");
+        setScraping(false);
+        setLastScraped(new Date().toLocaleTimeString());
+        setScrapeStats({
+          scraped: (msg.results || []).filter((r: { scraped: boolean }) => r.scraped).length,
+          failed: (msg.results || []).filter((r: { scraped: boolean }) => !r.scraped).length,
+        });
       }
     };
 
@@ -425,8 +440,28 @@ export default function PricingPage() {
           firstFillSupplier: r.firstFillSupplier ?? null,
           firstFillPackSize: r.firstFillPackSize ?? null,
         }));
-        setItems(mapped);
-        syncPriceDrafts(mapped);
+        // Merge: update returned rows by id, keep everything else. This is
+        // what makes per-product live updates work — a single-product POST
+        // updates just that row without nuking the rest.
+        if (mapped.length > 0) {
+          setItems((prev) => {
+            const byId = new Map(mapped.map((m) => [m.id, m]));
+            const merged = prev.map((p) => byId.get(p.id) || p);
+            for (const m of mapped) {
+              if (!merged.some((p) => p.id === m.id)) merged.push(m);
+            }
+            return merged;
+          });
+          // Merge cost drafts the same way — don't nuke drafts for products
+          // not in this batch.
+          setCostDrafts((prev) => {
+            const next = { ...prev };
+            for (const m of mapped) {
+              next[m.productRefId || m.id] = m.cost.toFixed(2);
+            }
+            return next;
+          });
+        }
         setLastScraped(new Date().toLocaleTimeString());
         setScrapeStats({ scraped: json.meta?.scraped ?? 0, failed: json.meta?.failed ?? 0 });
       }

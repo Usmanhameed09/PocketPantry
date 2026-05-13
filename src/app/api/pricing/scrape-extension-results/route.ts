@@ -105,7 +105,14 @@ export async function POST(request: Request) {
       });
     }
 
-    await savePricingAnalyses(analyses);
+    try {
+      await savePricingAnalyses(analyses);
+    } catch (err) {
+      // Persistence is best-effort. The mapped rows are still returned so
+      // the UI can show fresh data for this session even if the save layer
+      // is read-only (e.g. Vercel filesystem).
+      console.warn("[pricing/scrape-extension-results] save failed:", err);
+    }
 
     const scrapedCount = analyses.filter((a) => a.scraped).length;
     return NextResponse.json({

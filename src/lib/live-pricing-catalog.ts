@@ -168,8 +168,22 @@ async function readLocalStore(): Promise<LocalPricingStore> {
 }
 
 async function writeLocalStore(store: LocalPricingStore) {
-  await fs.mkdir(path.dirname(localStorePath), { recursive: true });
-  await fs.writeFile(localStorePath, JSON.stringify(store, null, 2), "utf8");
+  try {
+    await fs.mkdir(path.dirname(localStorePath), { recursive: true });
+    await fs.writeFile(localStorePath, JSON.stringify(store, null, 2), "utf8");
+  } catch (err) {
+    // Vercel's filesystem is read-only (EROFS). The save is best-effort; on
+    // production we silently skip and rely on the in-memory items state +
+    // the extension's chrome.storage to keep data visible for the current
+    // session. For durable cross-session persistence on production, swap
+    // this for a Supabase table.
+    const e = err as { code?: string };
+    if (e && (e.code === "EROFS" || e.code === "EACCES")) {
+      console.warn("[pricing-catalog] write skipped (read-only filesystem)");
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function getOrCreateCompanyId() {

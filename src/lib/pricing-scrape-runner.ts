@@ -157,29 +157,34 @@ export async function runPricingScrape(opts: ScrapeRunnerOpts) {
       };
     });
 
-    await savePricingAnalyses(
-      mappedRows.map((row) => ({
-        productId: row.id,
-        supplier: row.supplier,
-        cost: row.cost,
-        prevCost: row.prevCost,
-        suggestedPrice: row.suggestedPrice,
-        margin: row.margin,
-        status: row.status,
-        trigger: row.trigger,
-        sourceUrl: row.sourceUrl,
-        packPrice: row.packPrice,
-        packSize: row.packSize,
-        scraped: row.scraped,
-        scrapedProduct: row.scrapedProduct,
-        error: row.error || null,
-        updatedAt: new Date().toISOString(),
-        allPrices: row.allPrices || [],
-        firstFillCost: row.firstFillCost ?? null,
-        firstFillSupplier: row.firstFillSupplier ?? null,
-        firstFillPackSize: row.firstFillPackSize ?? null,
-      }))
-    );
+    try {
+      await savePricingAnalyses(
+        mappedRows.map((row) => ({
+          productId: row.id,
+          supplier: row.supplier,
+          cost: row.cost,
+          prevCost: row.prevCost,
+          suggestedPrice: row.suggestedPrice,
+          margin: row.margin,
+          status: row.status,
+          trigger: row.trigger,
+          sourceUrl: row.sourceUrl,
+          packPrice: row.packPrice,
+          packSize: row.packSize,
+          scraped: row.scraped,
+          scrapedProduct: row.scrapedProduct,
+          error: row.error || null,
+          updatedAt: new Date().toISOString(),
+          allPrices: row.allPrices || [],
+          firstFillCost: row.firstFillCost ?? null,
+          firstFillSupplier: row.firstFillSupplier ?? null,
+          firstFillPackSize: row.firstFillPackSize ?? null,
+        }))
+      );
+    } catch (err) {
+      // Best-effort save. UI still receives mapped rows for this session.
+      console.warn(`[pricing/scrape ${opts.upstreamPath}] save failed:`, err);
+    }
 
     const failedRows = data.data.filter((row) => !row.scraped);
     const uniqueErrors = Array.from(

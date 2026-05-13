@@ -7,6 +7,9 @@ import {
   type PricingCatalogProduct,
 } from "@/lib/live-pricing-catalog";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 function mapCatalogItem(
   product: PricingCatalogProduct,
   savedAnalysis?: Awaited<ReturnType<typeof getSavedPricingAnalyses>>[string]
@@ -54,11 +57,18 @@ export async function GET() {
   try {
     const products = await getPricingCatalog();
     const savedAnalyses = await getSavedPricingAnalyses();
-    return NextResponse.json({
-      success: true,
-      data: products.map((product) => mapCatalogItem(product, savedAnalyses[product.id])),
-      meta: { total: products.length },
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        data: products.map((product) => mapCatalogItem(product, savedAnalyses[product.id])),
+        meta: { total: products.length, savedCount: Object.keys(savedAnalyses).length },
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+        },
+      }
+    );
   } catch (error) {
     const e = error as Partial<{ message: string; code: string; details: string; hint: string }> | null;
     const msg = e?.message || (typeof error === "string" ? error : JSON.stringify(error));

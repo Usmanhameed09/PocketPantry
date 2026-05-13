@@ -105,12 +105,13 @@ export async function POST(request: Request) {
       });
     }
 
+    let saveError: string | null = null;
+    let saveLocation: "supabase" | "local" | "failed" = "failed";
     try {
-      await savePricingAnalyses(analyses);
+      const result = await savePricingAnalyses(analyses);
+      saveLocation = result?.local ? "local" : "supabase";
     } catch (err) {
-      // Persistence is best-effort. The mapped rows are still returned so
-      // the UI can show fresh data for this session even if the save layer
-      // is read-only (e.g. Vercel filesystem).
+      saveError = err instanceof Error ? err.message : String(err);
       console.warn("[pricing/scrape-extension-results] save failed:", err);
     }
 
@@ -124,6 +125,8 @@ export async function POST(request: Request) {
         failed: mappedRows.length - scrapedCount,
         timestamp: new Date().toISOString(),
         method: "extension",
+        saveLocation,
+        ...(saveError ? { saveError } : {}),
       },
     });
   } catch (error) {

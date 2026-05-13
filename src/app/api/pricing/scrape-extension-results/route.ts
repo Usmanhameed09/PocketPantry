@@ -54,7 +54,7 @@ export async function POST(request: Request) {
         error: computed.error,
         allPrices: result.candidates
           ? result.candidates.map((c) => ({
-              supplier: "Sam's Club",
+              supplier: c.retailer || "Sam's Club",
               packPrice: c.price,
               packSize: c.pack_size,
               unitPrice: c.pack_size && c.pack_size > 0
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
         category: product.category,
         isManualOnly: product.isManualOnly,
         firstFillCost: computed.scraped ? computed.packPrice : null,
-        firstFillSupplier: computed.scraped ? "Sam's Club" : null,
+        firstFillSupplier: computed.scraped ? (result.retailer || "Sam's Club") : null,
         firstFillPackSize: computed.packSize,
       });
 
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
           url: string;
         }>,
         firstFillCost: computed.scraped ? computed.packPrice ?? null : null,
-        firstFillSupplier: computed.scraped ? "Sam's Club" : null,
+        firstFillSupplier: computed.scraped ? (result.retailer || "Sam's Club") : null,
         firstFillPackSize: computed.packSize ?? null,
       });
     }

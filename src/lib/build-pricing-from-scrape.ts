@@ -22,13 +22,20 @@ function roundToQuarter(n: number): number {
 export type ExtensionScrapeResult = {
   productId: string;
   scraped: boolean;
+  retailer?: string; // "Sam's Club" | "Walmart" | "Costco"
   scrapedName?: string;
   packPrice?: number;
   packSize?: number | null;
   unitPrice?: number | null;
   sourceUrl?: string;
   error?: string;
-  candidates?: Array<{ name: string; price: number; pack_size: number | null; url: string }>;
+  candidates?: Array<{
+    name: string;
+    price: number;
+    pack_size: number | null;
+    url: string;
+    retailer?: string;
+  }>;
 };
 
 export type ComputedPricingRow = {
@@ -96,7 +103,7 @@ export function buildPricingFromScrape(
 
   return {
     productId: product.id,
-    supplier: scrape.scraped ? "Sam's Club" : "Not scraped yet",
+    supplier: scrape.scraped ? (scrape.retailer || "Sam's Club") : "Not scraped yet",
     cost: unitCost,
     prevCost,
     suggestedPrice: finalSuggested,

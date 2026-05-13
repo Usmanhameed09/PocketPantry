@@ -147,7 +147,7 @@ export default function PricingPage() {
   const loadCatalog = useCallback(async () => {
     setCatalogLoading(true);
     try {
-      const res = await fetch("/api/pricing/catalog");
+      const res = await fetch("/api/pricing/catalog", { cache: "no-store" });
       const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
         setItems(data.data);
@@ -163,6 +163,28 @@ export default function PricingPage() {
     }
   }, []);
 
+  // Quiet refresh — no loading flash, used by the in-scrape poller.
+  const refreshCatalogQuiet = useCallback(async () => {
+    try {
+      const res = await fetch("/api/pricing/catalog", { cache: "no-store" });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setItems((prev) => {
+          // Merge by id so we keep any in-flight UI state for products that
+          // aren't in the new payload yet, but pick up scraped data the
+          // extension just persisted to Supabase.
+          const byId = new Map(prev.map((p) => [p.id, p]));
+          for (const next of data.data as PricingItem[]) {
+            byId.set(next.id, next);
+          }
+          return Array.from(byId.values());
+        });
+      }
+    } catch {
+      // Silent — next poll will retry.
+    }
+  }, []);
+
   useEffect(() => {
     fetch("/api/pricing/margins")
       .then((r) => r.json())
@@ -171,6 +193,20 @@ export default function PricingPage() {
   }, []);
 
   useEffect(() => { loadCatalog(); }, [loadCatalog]);
+
+  // While a scrape is running, poll the catalog every 4s. This handles two
+  // cases the live message bus can't:
+  //   1. The user refreshed the dashboard mid-scrape — the per-product
+  //      `scrape-progress` messages now flow to the previous (dead) page
+  //      instance, but the saved Supabase rows are still landing, so we
+  //      pick them up here.
+  //   2. The Sam's Club scraper is in a separate browser tab — progress
+  //      events fire on that tab, not this one. Polling closes the gap.
+  useEffect(() => {
+    if (!scraping) return;
+    const id = setInterval(() => { refreshCatalogQuiet(); }, 4000);
+    return () => clearInterval(id);
+  }, [scraping, refreshCatalogQuiet]);
 
   // Listen for the PocketPantry browser extension. The extension's content
   // script broadcasts a "ready" message on every page load. If we hear it,

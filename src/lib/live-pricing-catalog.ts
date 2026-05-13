@@ -5,6 +5,7 @@ import { readEnv } from "./runtime-env";
 import { PRICING_SYSTEM_LEAD_ID } from "./system-records";
 
 const PRICING_ANALYSIS_ACTION = "pricing_analysis_snapshot";
+const PRICING_ANALYSIS_ITEM_ACTION = "pricing_analysis_item";
 
 export type ProductCategory = "beverage" | "snack";
 
@@ -485,16 +486,24 @@ export async function saveProductPricing(
   return { updated: true };
 }
 
+type SupabaseAnalysisRow = {
+  action_data: { productId?: string; analysis?: SavedPricingAnalysis } & Record<string, unknown>;
+  performed_at: string;
+};
+
 async function readSupabaseAnalyses(): Promise<Record<string, SavedPricingAnalysis>> {
+  // We persist one row per (productId, scrape) and keep the latest per
+  // productId on read. This avoids the race condition where 8 concurrent
+  // per-product POSTs each read the same snapshot and overwrite each other.
   try {
     const supabase = createServerClient();
     const { data, error } = await supabase
       .from("outreach_log")
-      .select("action_data")
+      .select("action_data, performed_at")
       .eq("lead_id", PRICING_SYSTEM_LEAD_ID)
-      .eq("action_type", PRICING_ANALYSIS_ACTION)
+      .in("action_type", [PRICING_ANALYSIS_ITEM_ACTION, PRICING_ANALYSIS_ACTION])
       .order("performed_at", { ascending: false })
-      .limit(1);
+      .limit(5000);
 
     if (error) {
       if (isMissingTableError(error)) return {};
@@ -502,25 +511,52 @@ async function readSupabaseAnalyses(): Promise<Record<string, SavedPricingAnalys
       return {};
     }
 
-    const row = data?.[0];
-    const payload = (row?.action_data as { analyses?: Record<string, SavedPricingAnalysis> } | null)?.analyses;
-    return payload && typeof payload === "object" ? payload : {};
+    const out: Record<string, SavedPricingAnalysis> = {};
+    const seen = new Set<string>();
+
+    for (const row of (data || []) as SupabaseAnalysisRow[]) {
+      // Per-product row format (preferred — race-safe)
+      if (row.action_data?.productId && row.action_data?.analysis) {
+        const pid = row.action_data.productId;
+        if (!seen.has(pid)) {
+          out[pid] = row.action_data.analysis;
+          seen.add(pid);
+        }
+        continue;
+      }
+      // Legacy snapshot format — only fill in products not already covered
+      // by a per-product row.
+      const snapshot = (row.action_data as { analyses?: Record<string, SavedPricingAnalysis> })?.analyses;
+      if (snapshot && typeof snapshot === "object") {
+        for (const [pid, analysis] of Object.entries(snapshot)) {
+          if (!seen.has(pid)) {
+            out[pid] = analysis;
+            seen.add(pid);
+          }
+        }
+      }
+    }
+
+    return out;
   } catch (err) {
     console.warn("[pricing-catalog] readSupabaseAnalyses threw:", err);
     return {};
   }
 }
 
-async function writeSupabaseAnalyses(analyses: Record<string, SavedPricingAnalysis>) {
+async function writeSupabaseAnalysisItems(analyses: SavedPricingAnalysis[]) {
+  if (analyses.length === 0) return;
   const supabase = createServerClient();
-  const { error } = await supabase.from("outreach_log").insert({
+  const rows = analyses.map((analysis) => ({
     lead_id: PRICING_SYSTEM_LEAD_ID,
-    action_type: PRICING_ANALYSIS_ACTION,
+    action_type: PRICING_ANALYSIS_ITEM_ACTION,
     action_data: {
-      analyses,
+      productId: analysis.productId,
+      analysis,
       updatedAt: new Date().toISOString(),
     },
-  });
+  }));
+  const { error } = await supabase.from("outreach_log").insert(rows);
   if (error) throw error;
 }
 
@@ -536,32 +572,28 @@ export async function getSavedPricingAnalyses() {
 export async function savePricingAnalyses(analyses: SavedPricingAnalysis[]) {
   if (analyses.length === 0) return { updated: 0 };
 
-  // Read latest snapshot from Supabase (or local if Supabase is empty/missing),
-  // merge new entries, then write back to Supabase. Falls back to local file
-  // only if Supabase write fails (dev environment without the table).
-  const existing = await readSupabaseAnalyses();
-  const localStore = await readLocalStore();
-  const merged: Record<string, SavedPricingAnalysis> = {
-    ...localStore.savedAnalyses,
-    ...existing,
-  };
-
-  for (const analysis of analyses) {
-    merged[analysis.productId] = analysis;
-  }
-
+  // Append per-product rows to Supabase (race-safe). Each call only inserts
+  // the products it owns, so concurrent per-product POSTs never overwrite
+  // each other. The read path keeps the latest row per productId.
   try {
-    await writeSupabaseAnalyses(merged);
+    await writeSupabaseAnalysisItems(analyses);
   } catch (err) {
     console.warn("[pricing-catalog] Supabase write failed, falling back to local file:", err);
-    localStore.savedAnalyses = merged;
+    const localStore = await readLocalStore();
+    for (const analysis of analyses) {
+      localStore.savedAnalyses[analysis.productId] = analysis;
+    }
     await writeLocalStore(localStore);
     return { updated: analyses.length, local: true };
   }
 
-  // Best-effort local mirror so dev environments also see the data.
+  // Best-effort local mirror so dev environments without Supabase also see
+  // the data. Ignored on Vercel (EROFS).
   try {
-    localStore.savedAnalyses = merged;
+    const localStore = await readLocalStore();
+    for (const analysis of analyses) {
+      localStore.savedAnalyses[analysis.productId] = analysis;
+    }
     await writeLocalStore(localStore);
   } catch {
     // ignore — Supabase is the source of truth
@@ -603,7 +635,7 @@ export async function savePricingDecision(
   merged[analysisId] = existing;
 
   try {
-    await writeSupabaseAnalyses(merged);
+    await writeSupabaseAnalysisItems([existing]);
   } catch (err) {
     console.warn("[pricing-catalog] decision Supabase write failed, falling back to local:", err);
     localStore.savedAnalyses = merged;

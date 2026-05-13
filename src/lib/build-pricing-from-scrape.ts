@@ -82,20 +82,31 @@ export function buildPricingFromScrape(
     margin = 0;
   }
 
+  // Needs review = operator must actually change the vending price.
+  // Cost moving is informational unless it forces a price change.
+  const priceChangeNeeded = hasCostBasis && finalSuggested > product.currentPrice + 0.01;
+
   let status: string;
   let trigger: string;
   if (!hasCostBasis) {
     status = "Pending Approval";
     trigger = "No reliable unit cost yet";
-  } else if (costChanged && costDiff > 0) {
+  } else if (priceChangeNeeded) {
     status = "Pending Approval";
-    trigger = `Supplier cost up $${costDiff.toFixed(2)}`;
-  } else if (costChanged && costDiff < 0) {
-    status = "Pending Approval";
-    trigger = `Supplier cost down $${Math.abs(costDiff).toFixed(2)}`;
+    if (costChanged && costDiff > 0) {
+      trigger = `Supplier cost up $${costDiff.toFixed(2)} — raise price to $${finalSuggested.toFixed(2)}`;
+    } else {
+      trigger = `Raise price to $${finalSuggested.toFixed(2)} (margin below target)`;
+    }
   } else if (margin >= 45) {
     status = "Cost Margin";
-    trigger = "Healthy margin";
+    if (costChanged && costDiff > 0) {
+      trigger = `Cost up $${costDiff.toFixed(2)} — current price still healthy`;
+    } else if (costChanged && costDiff < 0) {
+      trigger = `Cost down $${Math.abs(costDiff).toFixed(2)} — margin improved`;
+    } else {
+      trigger = "Healthy margin";
+    }
   } else {
     status = "Pending Approval";
     trigger = "Margin below target";

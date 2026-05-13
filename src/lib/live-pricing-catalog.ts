@@ -578,13 +578,15 @@ export async function savePricingAnalyses(analyses: SavedPricingAnalysis[]) {
   try {
     await writeSupabaseAnalysisItems(analyses);
   } catch (err) {
-    console.warn("[pricing-catalog] Supabase write failed, falling back to local file:", err);
+    const e = err as { code?: string; message?: string; details?: string; hint?: string };
+    const errorMsg = `${e.code || ""} ${e.message || err} ${e.details || ""} ${e.hint || ""}`.trim();
+    console.warn("[pricing-catalog] Supabase write failed, falling back to local file:", e);
     const localStore = await readLocalStore();
     for (const analysis of analyses) {
       localStore.savedAnalyses[analysis.productId] = analysis;
     }
     await writeLocalStore(localStore);
-    return { updated: analyses.length, local: true };
+    return { updated: analyses.length, local: true as const, supabaseError: errorMsg };
   }
 
   // Best-effort local mirror so dev environments without Supabase also see

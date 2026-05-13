@@ -109,7 +109,12 @@ export async function POST(request: Request) {
     let saveLocation: "supabase" | "local" | "failed" = "failed";
     try {
       const result = await savePricingAnalyses(analyses);
-      saveLocation = result?.local ? "local" : "supabase";
+      if (result && "local" in result && result.local) {
+        saveLocation = "local";
+        saveError = (result as { supabaseError?: string }).supabaseError || "supabase write fell back to local";
+      } else {
+        saveLocation = "supabase";
+      }
     } catch (err) {
       saveError = err instanceof Error ? err.message : String(err);
       console.warn("[pricing/scrape-extension-results] save failed:", err);

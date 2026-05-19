@@ -12,40 +12,49 @@ export const maxDuration = 300;
 const SCRAPER_API_URL = process.env.SCRAPER_API_URL || "https://arbersaas.duckdns.org/api2";
 
 /**
- * Write one sale_estimate ledger row per (product, machine) per day with
- * qty = -daily_sales_rate. Idempotent — checks for an existing row in the
- * last 23 hours and skips if found. This feeds the projection engine
- * without double-counting on multiple syncs per day.
+ * Bulk-write sale_estimate ledger rows for the projection engine.
+ * Skips (product, machine) pairs that already have a row in the last 23h
+ * so re-running the sync the same day doesn't double-count.
  */
-async function recordDailySaleEstimate(
-  productId: string,
-  machineId: string,
-  dailySalesRate: number
+async function bulkRecordSaleEstimates(
+  rows: Array<{ productId: string; machineId: string; dailySalesRate: number }>
 ) {
-  if (dailySalesRate <= 0) return;
+  if (rows.length === 0) return;
   const supabase = createServerClient();
   const cutoff = new Date();
   cutoff.setHours(cutoff.getHours() - 23);
 
-  const { data: existing } = await supabase
+  // Single query for ALL recently-recorded estimates
+  const productIds = [...new Set(rows.map((r) => r.productId))];
+  const { data: recent } = await supabase
     .from("stock_movements")
-    .select("id")
-    .eq("product_id", productId)
-    .eq("machine_id", machineId)
+    .select("product_id, machine_id")
+    .in("product_id", productIds)
     .eq("reason", "sale_estimate")
-    .gte("created_at", cutoff.toISOString())
-    .limit(1);
+    .gte("created_at", cutoff.toISOString());
 
-  if (existing && existing.length > 0) return;
+  const seen = new Set<string>();
+  for (const r of recent || []) {
+    seen.add(`${r.product_id}|${r.machine_id}`);
+  }
 
-  await supabase.from("stock_movements").insert({
-    product_id: productId,
-    location: machineId,
-    machine_id: machineId,
-    qty: -Math.round(dailySalesRate * 100) / 100,
-    reason: "sale_estimate",
-    notes: `Nayax sync daily estimate (${dailySalesRate.toFixed(2)}/day)`,
-  });
+  const toInsert = rows
+    .filter((r) => r.dailySalesRate > 0)
+    .filter((r) => !seen.has(`${r.productId}|${r.machineId}`))
+    .map((r) => ({
+      product_id: r.productId,
+      location: r.machineId,
+      machine_id: r.machineId,
+      qty: -Math.round(r.dailySalesRate * 100) / 100,
+      reason: "sale_estimate",
+      notes: `Nayax sync (${r.dailySalesRate.toFixed(2)}/day)`,
+    }));
+
+  if (toInsert.length === 0) return;
+  // Insert in chunks of 200 to stay under Supabase request limits
+  for (let i = 0; i < toInsert.length; i += 200) {
+    await supabase.from("stock_movements").insert(toInsert.slice(i, i + 200));
+  }
 }
 
 interface NayaxProduct {
@@ -106,6 +115,7 @@ export async function POST() {
     let machinesSynced = 0;
     let inventoryRows = 0;
     const errors: string[] = [];
+    const saleEstimates: Array<{ productId: string; machineId: string; dailySalesRate: number }> = [];
 
     for (const m of machines) {
       try {
@@ -131,9 +141,12 @@ export async function POST() {
             });
             inventoryRows++;
 
-            // Also write a sale_estimate ledger row so the projection
-            // engine has data to compute velocity from.
-            await recordDailySaleEstimate(productId, machineId, p.daily_sales_rate);
+            // Collect for bulk ledger write at the end (saves per-product roundtrips)
+            saleEstimates.push({
+              productId,
+              machineId,
+              dailySalesRate: p.daily_sales_rate,
+            });
           } catch (err: any) {
             errors.push(`Product ${p.name}: ${err.message}`);
           }
@@ -143,11 +156,22 @@ export async function POST() {
       }
     }
 
+    // Single bulk insert for all sale_estimate ledger rows
+    let ledgerWrites = 0;
+    try {
+      const before = saleEstimates.length;
+      await bulkRecordSaleEstimates(saleEstimates);
+      ledgerWrites = before;
+    } catch (err: any) {
+      errors.push(`Ledger write: ${err.message}`);
+    }
+
     return NextResponse.json({
       success: true,
       machinesSynced,
       productsProcessed: productsCreated,
       inventoryRows,
+      ledgerWrites,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error: any) {

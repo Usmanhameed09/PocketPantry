@@ -3,26 +3,24 @@
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import InventoryTabs from "../InventoryTabs";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { Loader2, Plus, Sparkles, Check, X } from "lucide-react";
+import {
+  PAGE_BG, CARD, EmptyState, LoadingBox, Modal,
+  Field, Select, BtnPrimary, BtnSecondary, Badge, pageContainer,
+} from "../ui";
 
 type Proposal = {
-  id: string;
-  candidateName: string;
-  category: string | null;
-  reason: string | null;
-  status: "Proposed" | "Approved" | "Rejected";
-  suggestedInitialQty: number | null;
-  targetLocations: string[];
-  suggestedPriceMin: number | null;
-  suggestedPriceMax: number | null;
-  reasoningText: string | null;
-  comparableSkuName: string | null;
-  proposedBy: string | null;
-  createdAt: string;
-  decidedAt: string | null;
+  id: string; candidateName: string; category: string | null;
+  reason: string | null; status: "Proposed" | "Approved" | "Rejected";
+  suggestedInitialQty: number | null; targetLocations: string[];
+  suggestedPriceMin: number | null; suggestedPriceMax: number | null;
+  reasoningText: string | null; comparableSkuName: string | null;
+  proposedBy: string | null; createdAt: string; decidedAt: string | null;
 };
 
 export default function ProposalsPage() {
+  const isMobile = useIsMobile();
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -62,76 +60,70 @@ export default function ProposalsPage() {
     await load();
   }
 
+  const statusColor: Record<Proposal["status"], "blue" | "green" | "gray"> = {
+    Proposed: "blue", Approved: "green", Rejected: "gray",
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Header title="Product Proposals" subtitle="AI-advised new products. You approve before they hit buy lists." />
+    <div style={{ minHeight: "100vh", background: PAGE_BG }}>
+      <Header title="Product Proposals" />
       <InventoryTabs />
-      <div className="max-w-5xl mx-auto px-4 py-6">
-        <div className="flex justify-end mb-4">
-          <button onClick={() => setShowForm(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
-            <Plus className="w-4 h-4" /> Propose product
-          </button>
+
+      <div style={pageContainer(isMobile)}>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+          <BtnPrimary onClick={() => setShowForm(true)}>
+            <Plus size={16} /> Propose product
+          </BtnPrimary>
         </div>
 
-        {loading ? (
-          <div className="text-center py-12"><Loader2 className="w-6 h-6 animate-spin inline text-gray-400" /></div>
-        ) : proposals.length === 0 ? (
-          <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">No proposals yet.</div>
+        {loading ? <div style={CARD}><LoadingBox /></div> : proposals.length === 0 ? (
+          <div style={CARD}>
+            <EmptyState icon={<Sparkles size={40} color="#94a3b8" />}
+              title="No proposals yet"
+              message="Propose a new product and GPT-4o will suggest initial qty, target locations, and price range based on comparable SKUs." />
+          </div>
         ) : (
-          <div className="space-y-3">
+          <div style={{ display: "grid", gap: 14 }}>
             {proposals.map((p) => (
-              <div key={p.id} className="bg-white rounded-lg shadow p-5">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-lg font-semibold">{p.candidateName}</h3>
-                      <span className={`text-xs px-2 py-0.5 rounded ${
-                        p.status === "Proposed" ? "bg-blue-100 text-blue-700"
-                        : p.status === "Approved" ? "bg-green-100 text-green-700"
-                        : "bg-gray-100 text-gray-600"
-                      }`}>{p.status}</span>
-                      <span className="text-xs text-gray-500">· {p.category}</span>
+              <div key={p.id} style={{ ...CARD, padding: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 240 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                      <h3 style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", margin: 0 }}>{p.candidateName}</h3>
+                      <Badge color={statusColor[p.status]}>{p.status}</Badge>
+                      <span style={{ fontSize: 12, color: "#94a3b8" }}>· {p.category}</span>
                     </div>
-                    <p className="text-sm text-gray-600 mt-1">{p.reason}</p>
+                    <p style={{ fontSize: 14, color: "#475569", margin: 0 }}>{p.reason}</p>
 
-                    <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                      <div>
-                        <div className="text-xs text-gray-500">Initial qty</div>
-                        <div className="font-medium">{p.suggestedInitialQty ?? "—"}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500">Price range</div>
-                        <div className="font-medium">
-                          {p.suggestedPriceMin && p.suggestedPriceMax
-                            ? `$${p.suggestedPriceMin.toFixed(2)}–$${p.suggestedPriceMax.toFixed(2)}`
-                            : "—"}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500">Comparable</div>
-                        <div className="font-medium">{p.comparableSkuName || "—"}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500">Locations</div>
-                        <div className="font-medium text-xs">{p.targetLocations.join(", ") || "—"}</div>
-                      </div>
+                    <div style={{
+                      display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
+                      gap: 12, marginTop: 14,
+                    }}>
+                      <KV label="Initial qty" value={p.suggestedInitialQty ?? "—"} />
+                      <KV label="Price range" value={
+                        p.suggestedPriceMin && p.suggestedPriceMax
+                          ? `$${p.suggestedPriceMin.toFixed(2)}–$${p.suggestedPriceMax.toFixed(2)}`
+                          : "—"
+                      } />
+                      <KV label="Comparable" value={p.comparableSkuName || "—"} />
+                      <KV label="Locations" value={p.targetLocations.join(", ") || "—"} small />
                     </div>
 
                     {p.reasoningText && (
-                      <div className="mt-3 flex items-start gap-2 bg-indigo-50 border border-indigo-100 rounded p-3 text-sm text-gray-700">
-                        <Sparkles className="w-4 h-4 text-indigo-500 mt-0.5 flex-shrink-0" />
-                        <p>{p.reasoningText}</p>
+                      <div style={{
+                        marginTop: 14, padding: 12, background: "#ede9fe", borderRadius: 10,
+                        border: "1px solid #ddd6fe", display: "flex", gap: 10,
+                      }}>
+                        <Sparkles size={16} color="#6366f1" style={{ flexShrink: 0, marginTop: 2 }} />
+                        <p style={{ fontSize: 13, color: "#3730a3", margin: 0, lineHeight: 1.5 }}>{p.reasoningText}</p>
                       </div>
                     )}
                   </div>
+
                   {p.status === "Proposed" && (
-                    <div className="flex gap-2 ml-4">
-                      <button onClick={() => decide(p.id, "Approved")} className="inline-flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded text-sm hover:bg-green-700">
-                        <Check className="w-4 h-4" /> Approve
-                      </button>
-                      <button onClick={() => decide(p.id, "Rejected")} className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300">
-                        <X className="w-4 h-4" /> Reject
-                      </button>
+                    <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "flex-start" }}>
+                      <BtnPrimary onClick={() => decide(p.id, "Approved")}><Check size={16} /> Approve</BtnPrimary>
+                      <BtnSecondary onClick={() => decide(p.id, "Rejected")}><X size={16} /> Reject</BtnSecondary>
                     </div>
                   )}
                 </div>
@@ -142,40 +134,47 @@ export default function ProposalsPage() {
       </div>
 
       {showForm && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h2 className="text-lg font-semibold mb-4">Propose new product</h2>
-            <div className="space-y-3">
-              <label className="block">
-                <span className="text-sm text-gray-600">Candidate name</span>
-                <input type="text" className="mt-1 w-full px-3 py-2 border rounded text-sm"
-                  value={form.candidateName}
-                  onChange={(e) => setForm({ ...form, candidateName: e.target.value })} />
-              </label>
-              <label className="block">
-                <span className="text-sm text-gray-600">Category</span>
-                <select className="mt-1 w-full px-3 py-2 border rounded text-sm"
-                  value={form.category}
-                  onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                  <option>Snacks</option><option>Drinks</option><option>Meals</option><option>Health</option>
-                </select>
-              </label>
-              <label className="block">
-                <span className="text-sm text-gray-600">Why propose this?</span>
-                <textarea rows={3} className="mt-1 w-full px-3 py-2 border rounded text-sm"
-                  value={form.reason}
-                  onChange={(e) => setForm({ ...form, reason: e.target.value })} />
-              </label>
-            </div>
-            <div className="mt-6 flex items-center justify-end gap-2">
-              <button onClick={() => setShowForm(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
-              <button onClick={submit} disabled={submitting || !form.candidateName} className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} Generate proposal
-              </button>
-            </div>
+        <Modal onClose={() => setShowForm(false)} title="Propose new product">
+          <div style={{ display: "grid", gap: 14 }}>
+            <Field label="Candidate name" type="text" value={form.candidateName}
+              onChange={(v) => setForm({ ...form, candidateName: v })} />
+            <Select label="Category" value={form.category}
+              options={[
+                { value: "Snacks", label: "Snacks" },
+                { value: "Drinks", label: "Drinks" },
+                { value: "Meals", label: "Meals" },
+                { value: "Health", label: "Health" },
+              ]}
+              onChange={(v) => setForm({ ...form, category: v })} />
+            <label style={{ display: "block" }}>
+              <span style={{ fontSize: 13, color: "#475569", fontWeight: 500 }}>Why propose this?</span>
+              <textarea rows={3} value={form.reason}
+                onChange={(e) => setForm({ ...form, reason: e.target.value })}
+                style={{
+                  width: "100%", marginTop: 4, padding: "9px 12px",
+                  border: "1px solid #d5d9e2", borderRadius: 8, fontSize: 14,
+                  outline: "none", fontFamily: "inherit", resize: "vertical",
+                }} />
+            </label>
           </div>
-        </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 24 }}>
+            <BtnSecondary onClick={() => setShowForm(false)}>Cancel</BtnSecondary>
+            <BtnPrimary onClick={submit} disabled={submitting || !form.candidateName}>
+              {submitting ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : <Sparkles size={16} />}
+              Generate proposal
+            </BtnPrimary>
+          </div>
+        </Modal>
       )}
+    </div>
+  );
+}
+
+function KV({ label, value, small }: { label: string; value: React.ReactNode; small?: boolean }) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</div>
+      <div style={{ fontSize: small ? 12 : 14, color: "#0f172a", fontWeight: 600, marginTop: 2 }}>{value}</div>
     </div>
   );
 }

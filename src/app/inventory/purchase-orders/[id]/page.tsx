@@ -4,31 +4,30 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import InventoryTabs from "../../InventoryTabs";
-import { Loader2, CheckCircle2, ShoppingBag, PackageCheck, Ban } from "lucide-react";
+import { useIsMobile } from "@/hooks/useIsMobile";
+import { Loader2, CheckCircle2, ShoppingBag, PackageCheck, Ban, ArrowLeft } from "lucide-react";
+import {
+  PAGE_BG, CARD, Th, Td, LoadingBox, Badge,
+  BtnPrimary, BtnSecondary, BtnDanger, pageContainer,
+} from "../../ui";
 
 type Line = {
-  id: string;
-  productId: string;
-  productName: string;
-  qtyOrdered: number;
-  qtyReceived: number;
-  unitCost: number;
+  id: string; productId: string; productName: string;
+  qtyOrdered: number; qtyReceived: number; unitCost: number;
 };
 
 type PODetail = {
-  id: string;
-  supplier: string;
-  status: string;
-  totalCost: number;
-  createdAt: string;
-  approvedAt: string | null;
-  purchasedAt: string | null;
-  receivedAt: string | null;
-  notes: string | null;
-  lines: Line[];
+  id: string; supplier: string; status: string; totalCost: number;
+  createdAt: string; approvedAt: string | null; purchasedAt: string | null; receivedAt: string | null;
+  notes: string | null; lines: Line[];
+};
+
+const STATUS_COLOR: Record<string, "gray" | "blue" | "amber" | "green" | "red"> = {
+  Draft: "gray", Approved: "blue", Purchased: "amber", Received: "green", Cancelled: "red",
 };
 
 export default function PODetailPage() {
+  const isMobile = useIsMobile();
   const params = useParams<{ id: string }>();
   const id = params.id;
   const router = useRouter();
@@ -77,110 +76,107 @@ export default function PODetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div style={{ minHeight: "100vh", background: PAGE_BG }}>
         <Header title="Purchase Order" />
         <InventoryTabs />
-        <div className="max-w-5xl mx-auto px-4 py-6 flex justify-center">
-          <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
-        </div>
+        <div style={pageContainer(isMobile)}><div style={CARD}><LoadingBox /></div></div>
       </div>
     );
   }
-
   if (!po) return null;
 
   const canApprove = po.status === "Draft";
   const canPurchase = po.status === "Approved";
   const canReceive = po.status === "Purchased" || po.status === "Approved";
+  const hasReceiptInput = Object.values(receipts).some((v) => Number(v) > 0);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Header title={`PO ${po.id.slice(0, 8)}`} subtitle={po.supplier} />
+    <div style={{ minHeight: "100vh", background: PAGE_BG }}>
+      <Header title={`PO ${po.id.slice(0, 8)}`} />
       <InventoryTabs />
-      <div className="max-w-5xl mx-auto px-4 py-6">
-        <div className="bg-white rounded-lg shadow p-6 mb-4">
-          <div className="flex items-center justify-between">
+
+      <div style={pageContainer(isMobile)}>
+        <button onClick={() => router.push("/inventory/purchase-orders")} style={{
+          display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 12, padding: "6px 10px",
+          background: "transparent", border: "none", cursor: "pointer", color: "#475569", fontSize: 13,
+        }}>
+          <ArrowLeft size={14} /> Back to purchase orders
+        </button>
+
+        <div style={{ ...CARD, padding: 24, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
             <div>
-              <div className="text-sm text-gray-600">Status</div>
-              <div className="text-xl font-semibold text-gray-900">{po.status}</div>
-              <div className="text-xs text-gray-500 mt-1">Created {new Date(po.createdAt).toLocaleString()}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                <h2 style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", margin: 0 }}>{po.supplier}</h2>
+                <Badge color={STATUS_COLOR[po.status] || "gray"}>{po.status}</Badge>
+              </div>
+              <div style={{ fontSize: 13, color: "#64748b" }}>
+                Created {new Date(po.createdAt).toLocaleString()}
+                {po.approvedAt && ` · Approved ${new Date(po.approvedAt).toLocaleDateString()}`}
+                {po.purchasedAt && ` · Purchased ${new Date(po.purchasedAt).toLocaleDateString()}`}
+                {po.receivedAt && ` · Received ${new Date(po.receivedAt).toLocaleDateString()}`}
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", marginTop: 8 }}>${po.totalCost.toFixed(2)}</div>
             </div>
-            <div className="flex gap-2">
-              {canApprove && (
-                <button onClick={() => transition("Approved")} disabled={submitting} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-                  <CheckCircle2 className="w-4 h-4" /> Approve
-                </button>
-              )}
-              {canPurchase && (
-                <button onClick={() => transition("Purchased")} disabled={submitting} className="inline-flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded text-sm font-medium hover:bg-amber-700 disabled:opacity-50">
-                  <ShoppingBag className="w-4 h-4" /> Mark Purchased
-                </button>
-              )}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {canApprove && <BtnPrimary onClick={() => transition("Approved")} disabled={submitting}><CheckCircle2 size={16} />Approve</BtnPrimary>}
+              {canPurchase && <BtnPrimary onClick={() => transition("Purchased")} disabled={submitting}><ShoppingBag size={16} />Mark purchased</BtnPrimary>}
               {po.status !== "Received" && po.status !== "Cancelled" && (
-                <button onClick={() => transition("Cancelled")} disabled={submitting} className="inline-flex items-center gap-2 px-4 py-2 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300 disabled:opacity-50">
-                  <Ban className="w-4 h-4" /> Cancel
-                </button>
+                <BtnDanger onClick={() => transition("Cancelled")}><Ban size={16} />Cancel</BtnDanger>
               )}
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-gray-600">
-              <tr>
-                <th className="text-left px-4 py-3 font-medium">Product</th>
-                <th className="text-right px-4 py-3 font-medium">Ordered</th>
-                <th className="text-right px-4 py-3 font-medium">Received</th>
-                <th className="text-right px-4 py-3 font-medium">Unit cost</th>
-                {canReceive && <th className="text-right px-4 py-3 font-medium">Receive now</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {po.lines.map((l) => {
-                const remaining = l.qtyOrdered - l.qtyReceived;
-                return (
-                  <tr key={l.id} className="border-t">
-                    <td className="px-4 py-3 font-medium text-gray-900">{l.productName}</td>
-                    <td className="px-4 py-3 text-right">{l.qtyOrdered}</td>
-                    <td className="px-4 py-3 text-right">{l.qtyReceived}</td>
-                    <td className="px-4 py-3 text-right">${l.unitCost.toFixed(2)}</td>
-                    {canReceive && (
-                      <td className="px-4 py-3 text-right">
-                        {remaining > 0 ? (
-                          <input
-                            type="number"
-                            max={remaining}
-                            min={0}
-                            placeholder={String(remaining)}
-                            className="w-20 px-2 py-1 text-sm border rounded"
-                            value={receipts[l.id] || ""}
-                            onChange={(e) => setReceipts((p) => ({ ...p, [l.id]: e.target.value }))}
-                          />
-                        ) : (
-                          <span className="text-green-600 text-xs">Complete</span>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div style={CARD}>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>
+                <Th>Product</Th>
+                <Th align="right">Ordered</Th>
+                <Th align="right">Received</Th>
+                <Th align="right">Unit cost</Th>
+                {canReceive && <Th align="right">Receive now</Th>}
+              </tr></thead>
+              <tbody>
+                {po.lines.map((l, idx) => {
+                  const remaining = l.qtyOrdered - l.qtyReceived;
+                  return (
+                    <tr key={l.id} style={{ borderTop: idx === 0 ? "none" : "1px solid #f1f5f9" }}>
+                      <Td><strong>{l.productName}</strong></Td>
+                      <Td align="right" mono>{l.qtyOrdered}</Td>
+                      <Td align="right" mono>{l.qtyReceived}</Td>
+                      <Td align="right" mono>${l.unitCost.toFixed(2)}</Td>
+                      {canReceive && (
+                        <Td align="right">
+                          {remaining > 0 ? (
+                            <input type="number" max={remaining} min={0} placeholder={String(remaining)}
+                              value={receipts[l.id] || ""}
+                              onChange={(e) => setReceipts((p) => ({ ...p, [l.id]: e.target.value }))}
+                              style={{
+                                width: 76, padding: "6px 10px", border: "1px solid #d5d9e2", borderRadius: 6,
+                                fontSize: 13, textAlign: "right", outline: "none",
+                              }}
+                            />
+                          ) : <Badge color="green">Complete</Badge>}
+                        </Td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        {canReceive && Object.values(receipts).some((v) => Number(v) > 0) && (
-          <div className="mt-4 flex justify-end">
-            <button onClick={submitReceipts} disabled={submitting} className="inline-flex items-center gap-2 px-5 py-2.5 bg-green-600 text-white rounded font-medium hover:bg-green-700 disabled:opacity-50">
-              {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <PackageCheck className="w-4 h-4" />}
+        {canReceive && hasReceiptInput && (
+          <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+            <BtnPrimary onClick={submitReceipts} disabled={submitting}>
+              {submitting ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : <PackageCheck size={16} />}
               Submit receipt
-            </button>
+            </BtnPrimary>
           </div>
         )}
-
-        <div className="mt-6 text-right text-sm">
-          <button onClick={() => router.push("/inventory/purchase-orders")} className="text-indigo-600 hover:text-indigo-700">← All purchase orders</button>
-        </div>
       </div>
     </div>
   );

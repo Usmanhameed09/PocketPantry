@@ -4,29 +4,22 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import InventoryTabs from "../InventoryTabs";
-import { Loader2, ExternalLink } from "lucide-react";
+import { useIsMobile } from "@/hooks/useIsMobile";
+import { Loader2, ExternalLink, ClipboardList } from "lucide-react";
+import { PAGE_BG, CARD, Th, Td, EmptyState, LoadingBox, Badge, pageContainer } from "../ui";
 
 type PO = {
-  id: string;
-  supplier: string;
-  status: string;
-  totalCost: number;
-  createdAt: string;
-  approvedAt: string | null;
-  purchasedAt: string | null;
-  receivedAt: string | null;
+  id: string; supplier: string; status: string; totalCost: number;
+  createdAt: string; approvedAt: string | null; purchasedAt: string | null; receivedAt: string | null;
   lineCount: number;
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  Draft: "bg-gray-100 text-gray-700",
-  Approved: "bg-blue-100 text-blue-700",
-  Purchased: "bg-amber-100 text-amber-700",
-  Received: "bg-green-100 text-green-700",
-  Cancelled: "bg-red-100 text-red-700",
+const STATUS_COLOR: Record<string, "gray" | "blue" | "amber" | "green" | "red"> = {
+  Draft: "gray", Approved: "blue", Purchased: "amber", Received: "green", Cancelled: "red",
 };
 
 export default function PurchaseOrdersPage() {
+  const isMobile = useIsMobile();
   const [pos, setPos] = useState<PO[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>("All");
@@ -43,61 +36,72 @@ export default function PurchaseOrdersPage() {
 
   const filtered = filterStatus === "All" ? pos : pos.filter((p) => p.status === filterStatus);
   const byStatus = pos.reduce((acc, p) => ({ ...acc, [p.status]: (acc[p.status] || 0) + 1 }), {} as Record<string, number>);
+  const statuses = ["All", "Draft", "Approved", "Purchased", "Received"];
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Header title="Purchase Orders" subtitle="Draft → Approved → Purchased → Received" />
+    <div style={{ minHeight: "100vh", background: PAGE_BG }}>
+      <Header title="Purchase Orders" />
       <InventoryTabs />
-      <div className="max-w-7xl mx-auto px-4 py-6">
-        <div className="flex items-center gap-2 mb-4">
-          {["All", "Draft", "Approved", "Purchased", "Received"].map((s) => (
-            <button
-              key={s}
-              onClick={() => setFilterStatus(s)}
-              className={`px-3 py-1.5 text-sm rounded ${filterStatus === s ? "bg-indigo-600 text-white" : "bg-white border text-gray-700"}`}
-            >
-              {s} {s !== "All" && byStatus[s] ? `(${byStatus[s]})` : ""}
+
+      <div style={pageContainer(isMobile)}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+          {statuses.map((s) => (
+            <button key={s} onClick={() => setFilterStatus(s)}
+              style={{
+                padding: "8px 14px", borderRadius: 10, fontSize: 13, fontWeight: 600,
+                background: filterStatus === s ? "#16a34a" : "#fff",
+                color: filterStatus === s ? "#fff" : "#475569",
+                border: `1px solid ${filterStatus === s ? "#15803d" : "#d5d9e2"}`,
+                cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6,
+              }}>
+              {s}
+              {s !== "All" && byStatus[s] && (
+                <span style={{
+                  background: filterStatus === s ? "rgba(255,255,255,0.25)" : "#f1f5f9",
+                  color: filterStatus === s ? "#fff" : "#64748b",
+                  padding: "1px 8px", borderRadius: 999, fontSize: 11,
+                }}>{byStatus[s]}</span>
+              )}
             </button>
           ))}
         </div>
 
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-gray-600">
-              <tr>
-                <th className="text-left px-4 py-3 font-medium">PO</th>
-                <th className="text-left px-4 py-3 font-medium">Supplier</th>
-                <th className="text-left px-4 py-3 font-medium">Status</th>
-                <th className="text-right px-4 py-3 font-medium">Lines</th>
-                <th className="text-right px-4 py-3 font-medium">Total</th>
-                <th className="text-left px-4 py-3 font-medium">Created</th>
-                <th className="w-12"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={7} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
-              ) : filtered.length === 0 ? (
-                <tr><td colSpan={7} className="text-center py-8 text-gray-500">No purchase orders.</td></tr>
-              ) : filtered.map((p) => (
-                <tr key={p.id} className="border-t hover:bg-gray-50">
-                  <td className="px-4 py-3 font-mono text-xs">{p.id.slice(0, 8)}</td>
-                  <td className="px-4 py-3 font-medium text-gray-900">{p.supplier}</td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-block px-2 py-0.5 rounded text-xs ${STATUS_COLORS[p.status] || "bg-gray-100"}`}>{p.status}</span>
-                  </td>
-                  <td className="px-4 py-3 text-right">{p.lineCount}</td>
-                  <td className="px-4 py-3 text-right">${p.totalCost.toFixed(2)}</td>
-                  <td className="px-4 py-3 text-gray-600">{new Date(p.createdAt).toLocaleDateString()}</td>
-                  <td className="px-2 py-3">
-                    <Link href={`/inventory/purchase-orders/${p.id}`} className="text-indigo-600 hover:text-indigo-700">
-                      <ExternalLink className="w-4 h-4" />
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div style={CARD}>
+          {loading ? <LoadingBox /> : filtered.length === 0 ? (
+            <EmptyState icon={<ClipboardList size={40} color="#94a3b8" />}
+              title="No purchase orders" message="Generate a buy list to create PO drafts." />
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>
+                  <Th>PO</Th>
+                  <Th>Supplier</Th>
+                  <Th>Status</Th>
+                  <Th align="right">Lines</Th>
+                  <Th align="right">Total</Th>
+                  <Th>Created</Th>
+                  <Th width={48}></Th>
+                </tr></thead>
+                <tbody>
+                  {filtered.map((p, idx) => (
+                    <tr key={p.id} style={{ borderTop: idx === 0 ? "none" : "1px solid #f1f5f9" }}>
+                      <Td><span style={{ fontFamily: "ui-monospace, monospace", fontSize: 12, color: "#64748b" }}>{p.id.slice(0, 8)}</span></Td>
+                      <Td><strong>{p.supplier}</strong></Td>
+                      <Td><Badge color={STATUS_COLOR[p.status] || "gray"}>{p.status}</Badge></Td>
+                      <Td align="right" mono>{p.lineCount}</Td>
+                      <Td align="right" mono bold>${p.totalCost.toFixed(2)}</Td>
+                      <Td color="#64748b">{new Date(p.createdAt).toLocaleDateString()}</Td>
+                      <Td>
+                        <Link href={`/inventory/purchase-orders/${p.id}`} style={{ color: "#16a34a", display: "inline-flex" }}>
+                          <ExternalLink size={16} />
+                        </Link>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

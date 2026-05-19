@@ -3,7 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import InventoryTabs from "../InventoryTabs";
-import { Loader2, AlertCircle, AlertTriangle, Info, X, Check } from "lucide-react";
+import { useIsMobile } from "@/hooks/useIsMobile";
+import { Loader2, AlertCircle, AlertTriangle, Info, X, Check, Bell } from "lucide-react";
+import { PAGE_BG, CARD, EmptyState, LoadingBox, BtnPrimary, BtnSecondary, Badge, pageContainer, StatCard } from "../ui";
 
 type Alert = {
   id: string;
@@ -20,19 +22,14 @@ type Alert = {
   createdAt: string;
 };
 
-const SEV_ICON: Record<Alert["severity"], React.ReactNode> = {
-  high: <AlertCircle className="w-5 h-5 text-red-600" />,
-  medium: <AlertTriangle className="w-5 h-5 text-amber-600" />,
-  low: <Info className="w-5 h-5 text-blue-600" />,
-};
-
-const SEV_BG: Record<Alert["severity"], string> = {
-  high: "border-red-200 bg-red-50",
-  medium: "border-amber-200 bg-amber-50",
-  low: "border-blue-200 bg-blue-50",
+const SEV_META = {
+  high:   { icon: AlertCircle,   bg: "#fef2f2", border: "#fecaca", color: "#dc2626", badge: "red"    as const },
+  medium: { icon: AlertTriangle, bg: "#fffbeb", border: "#fcd34d", color: "#d97706", badge: "amber"  as const },
+  low:    { icon: Info,          bg: "#eff6ff", border: "#bfdbfe", color: "#2563eb", badge: "blue"   as const },
 };
 
 export default function AlertsPage() {
+  const isMobile = useIsMobile();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
   const [includeResolved, setIncludeResolved] = useState(false);
@@ -55,7 +52,7 @@ export default function AlertsPage() {
     await load();
   }
 
-  async function action(id: string, action: "acknowledge" | "dismiss") {
+  async function alertAction(id: string, action: "acknowledge" | "dismiss") {
     await fetch("/api/inventory/alerts", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -64,61 +61,95 @@ export default function AlertsPage() {
     await load();
   }
 
+  const open = alerts.filter((a) => a.status === "open");
+  const byCount = {
+    high: open.filter((a) => a.severity === "high").length,
+    medium: open.filter((a) => a.severity === "medium").length,
+    low: open.filter((a) => a.severity === "low").length,
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Header title="Alerts" subtitle="Predictive low-stock + velocity spikes" />
+    <div style={{ minHeight: "100vh", background: PAGE_BG }}>
+      <Header title="Alerts" />
       <InventoryTabs />
-      <div className="max-w-5xl mx-auto px-4 py-6">
-        <div className="flex items-center justify-between mb-4">
-          <label className="inline-flex items-center gap-2 text-sm text-gray-700">
-            <input type="checkbox" checked={includeResolved} onChange={(e) => setIncludeResolved(e.target.checked)} />
-            Include resolved
-          </label>
-          <button
-            onClick={runScan}
-            disabled={scanRunning}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {scanRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-            Run scan now
-          </button>
+
+      <div style={pageContainer(isMobile)}>
+        <div style={{
+          display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
+          gap: 16, marginBottom: 24,
+        }}>
+          <StatCard icon={<Bell size={20} />} iconBg="#ede9fe" iconColor="#6366f1"
+            label="Total open" value={open.length} sub="needs attention" />
+          <StatCard icon={<AlertCircle size={20} />} iconBg="#fee2e2" iconColor="#dc2626"
+            label="High severity" value={byCount.high} sub="critical low stock" />
+          <StatCard icon={<AlertTriangle size={20} />} iconBg="#fef3c7" iconColor="#d97706"
+            label="Medium" value={byCount.medium} sub="approaching threshold" />
+          <StatCard icon={<Info size={20} />} iconBg="#dbeafe" iconColor="#2563eb"
+            label="Low" value={byCount.low} sub="warnings" />
         </div>
 
-        {loading ? (
-          <div className="text-center py-12"><Loader2 className="w-6 h-6 animate-spin inline text-gray-400" /></div>
-        ) : alerts.length === 0 ? (
-          <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">
-            No alerts. Click "Run scan now" to check.
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {alerts.map((a) => (
-              <div key={a.id} className={`border rounded-lg p-4 flex items-start gap-3 ${SEV_BG[a.severity]}`}>
-                <div className="mt-0.5">{SEV_ICON[a.severity]}</div>
-                <div className="flex-1">
-                  <div className="font-medium text-gray-900">{a.productName || a.machineName || a.type}</div>
-                  <div className="text-sm text-gray-700 mt-1">{a.message}</div>
-                  <div className="text-xs text-gray-500 mt-2 flex gap-3">
-                    <span>Created {new Date(a.createdAt).toLocaleString()}</span>
-                    {a.daysRemaining !== null && <span>· {a.daysRemaining}d remaining</span>}
-                    {a.recommendedQty !== null && <span>· Buy {a.recommendedQty}</span>}
-                    <span className="capitalize">· {a.status}</span>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 14, color: "#475569", cursor: "pointer" }}>
+            <input type="checkbox" checked={includeResolved} onChange={(e) => setIncludeResolved(e.target.checked)} />
+            Include resolved alerts
+          </label>
+          <BtnPrimary onClick={runScan} disabled={scanRunning}>
+            {scanRunning ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : <Bell size={16} />}
+            Run scan now
+          </BtnPrimary>
+        </div>
+
+        {loading ? <div style={CARD}><LoadingBox /></div>
+          : alerts.length === 0 ? (
+            <div style={CARD}>
+              <EmptyState icon={<Bell size={40} color="#94a3b8" />}
+                title="No alerts" message="All stock levels are healthy. Click 'Run scan now' to refresh." />
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 8 }}>
+              {alerts.map((a) => {
+                const meta = SEV_META[a.severity];
+                const Icon = meta.icon;
+                return (
+                  <div key={a.id} style={{
+                    background: a.status === "open" ? meta.bg : "#fff",
+                    border: `1px solid ${a.status === "open" ? meta.border : "#e2e8f0"}`,
+                    borderRadius: 12, padding: 16, display: "flex", alignItems: "flex-start", gap: 12,
+                    opacity: a.status === "open" ? 1 : 0.7,
+                  }}>
+                    <Icon size={20} color={meta.color} style={{ flexShrink: 0, marginTop: 2 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>
+                          {a.productName || a.machineName || a.type}
+                        </span>
+                        <Badge color={meta.badge}>{a.severity}</Badge>
+                        {a.status !== "open" && <Badge color="gray">{a.status}</Badge>}
+                      </div>
+                      <p style={{ fontSize: 14, color: "#334155", margin: 0 }}>{a.message}</p>
+                      <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 11, color: "#94a3b8", flexWrap: "wrap" }}>
+                        <span>{new Date(a.createdAt).toLocaleString()}</span>
+                        {a.daysRemaining !== null && <span>· {a.daysRemaining}d remaining</span>}
+                        {a.recommendedQty !== null && <span>· Buy {a.recommendedQty}</span>}
+                      </div>
+                    </div>
+                    {a.status === "open" && (
+                      <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                        <button onClick={() => alertAction(a.id, "acknowledge")} title="Acknowledge"
+                          style={{ padding: 8, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, cursor: "pointer", color: "#64748b" }}>
+                          <Check size={16} />
+                        </button>
+                        <button onClick={() => alertAction(a.id, "dismiss")} title="Dismiss"
+                          style={{ padding: 8, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, cursor: "pointer", color: "#64748b" }}>
+                          <X size={16} />
+                        </button>
+                      </div>
+                    )}
                   </div>
-                </div>
-                {a.status === "open" && (
-                  <div className="flex gap-1">
-                    <button onClick={() => action(a.id, "acknowledge")} className="p-1.5 text-gray-600 hover:bg-white rounded" title="Acknowledge">
-                      <Check className="w-4 h-4" />
-                    </button>
-                    <button onClick={() => action(a.id, "dismiss")} className="p-1.5 text-gray-600 hover:bg-white rounded" title="Dismiss">
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+                );
+              })}
+            </div>
+          )}
       </div>
     </div>
   );

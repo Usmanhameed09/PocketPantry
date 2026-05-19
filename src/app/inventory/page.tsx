@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import Header from "@/components/Header";
 import RefillModal from "./RefillModal";
+import InventoryTabs from "./InventoryTabs";
 import {
   Search,
   Plus,
@@ -175,6 +176,7 @@ export default function InventoryPage() {
     return (
       <div style={{ minHeight: "100vh" }}>
         <Header title="Inventory" />
+        <InventoryTabs />
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 400 }}>
           <Loader2 size={32} color="#16a34a" style={{ animation: "spin 1s linear infinite" }} />
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
@@ -186,6 +188,7 @@ export default function InventoryPage() {
   return (
     <div style={{ minHeight: "100vh" }}>
       <Header title="Inventory" />
+      <InventoryTabs />
 
       <div className="page-padding" style={{ padding: isMobile ? 16 : "24px 32px" }}>
 

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
+import InventoryTabs from "../InventoryTabs";
 import { Loader2, ExternalLink } from "lucide-react";
 
 type PO = {
@@ -46,6 +47,7 @@ export default function PurchaseOrdersPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header title="Purchase Orders" subtitle="Draft → Approved → Purchased → Received" />
+      <InventoryTabs />
       <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="flex items-center gap-2 mb-4">
           {["All", "Draft", "Approved", "Purchased", "Received"].map((s) => (

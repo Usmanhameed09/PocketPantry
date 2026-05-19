@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
+import InventoryTabs from "../InventoryTabs";
 import { Loader2, ArrowRightLeft } from "lucide-react";
 
 type Underperformer = {
@@ -55,6 +56,7 @@ export default function UnderperformersPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header title="Underperformers" subtitle="Products flagged for low volume or low margin" />
+      <InventoryTabs />
       <div className="max-w-5xl mx-auto px-4 py-6">
         {loading ? (
           <div className="text-center py-12"><Loader2 className="w-6 h-6 animate-spin inline text-gray-400" /></div>

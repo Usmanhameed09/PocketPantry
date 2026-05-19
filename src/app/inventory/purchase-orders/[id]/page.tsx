@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Header from "@/components/Header";
+import InventoryTabs from "../../InventoryTabs";
 import { Loader2, CheckCircle2, ShoppingBag, PackageCheck, Ban } from "lucide-react";
 
 type Line = {
@@ -78,6 +79,7 @@ export default function PODetailPage() {
     return (
       <div className="min-h-screen bg-gray-50">
         <Header title="Purchase Order" />
+        <InventoryTabs />
         <div className="max-w-5xl mx-auto px-4 py-6 flex justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
         </div>
@@ -94,6 +96,7 @@ export default function PODetailPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header title={`PO ${po.id.slice(0, 8)}`} subtitle={po.supplier} />
+      <InventoryTabs />
       <div className="max-w-5xl mx-auto px-4 py-6">
         <div className="bg-white rounded-lg shadow p-6 mb-4">
           <div className="flex items-center justify-between">

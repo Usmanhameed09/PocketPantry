@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
+import InventoryTabs from "../InventoryTabs";
 import { Loader2, AlertCircle, AlertTriangle, Info, X, Check } from "lucide-react";
 
 type Alert = {
@@ -66,6 +67,7 @@ export default function AlertsPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header title="Alerts" subtitle="Predictive low-stock + velocity spikes" />
+      <InventoryTabs />
       <div className="max-w-5xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-4">
           <label className="inline-flex items-center gap-2 text-sm text-gray-700">

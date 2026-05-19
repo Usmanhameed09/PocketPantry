@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import Header from "@/components/Header";
+import InventoryTabs from "../InventoryTabs";
 import { Loader2, Zap, ShoppingCart, ChevronDown, ChevronRight } from "lucide-react";
 
 type BuyListLine = {
@@ -73,6 +74,7 @@ export default function BuyListPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header title="Buy List" subtitle="Generate this week's purchase list grouped by vendor" />
+      <InventoryTabs />
       <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="bg-white rounded-lg shadow p-6 mb-4">
           <div className="flex items-center justify-between">

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
+import InventoryTabs from "../InventoryTabs";
 import { Plus, Edit2, Loader2, Search, Save, X } from "lucide-react";
 
 type Product = {
@@ -86,6 +87,7 @@ export default function ProductsPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header title="Products" subtitle="Catalog master — every SKU your operation stocks" />
+      <InventoryTabs />
       <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-4">
           <div className="relative flex-1 max-w-md">

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
+import InventoryTabs from "../InventoryTabs";
 import { Loader2, Plus, Sparkles, Check, X } from "lucide-react";
 
 type Proposal = {
@@ -64,6 +65,7 @@ export default function ProposalsPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header title="Product Proposals" subtitle="AI-advised new products. You approve before they hit buy lists." />
+      <InventoryTabs />
       <div className="max-w-5xl mx-auto px-4 py-6">
         <div className="flex justify-end mb-4">
           <button onClick={() => setShowForm(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">

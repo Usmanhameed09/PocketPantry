@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
+import InventoryTabs from "../InventoryTabs";
 import { Loader2, Save, Settings } from "lucide-react";
 
 type Projection = {
@@ -72,6 +73,7 @@ export default function ProjectionsPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header title="Projections" subtitle="30-day demand forecasts driven by sales velocity + seasonal multipliers" />
+      <InventoryTabs />
       <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-4">
           <div className="text-sm text-gray-600">
@@ -90,9 +92,9 @@ export default function ProjectionsPage() {
                 <th className="text-right px-4 py-3 font-medium">Velocity/day</th>
                 <th className="text-right px-4 py-3 font-medium">Seasonal</th>
                 <th className="text-right px-4 py-3 font-medium">Projected 30d</th>
-                <th className="text-right px-4 py-3 font-medium">COGS</th>
-                <th className="text-left px-4 py-3 font-medium">Why</th>
-                <th className="px-4 py-3 font-medium">Override</th>
+                <th className="text-right px-4 py-3 font-medium border-l">COGS</th>
+                <th className="text-left px-4 py-3 font-medium border-l">Why</th>
+                <th className="px-4 py-3 font-medium border-l">Override</th>
               </tr>
             </thead>
             <tbody>

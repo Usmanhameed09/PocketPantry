@@ -4,10 +4,49 @@ import {
   ensureMachine,
   upsertMachineInventory,
 } from "@/lib/inventory-store";
+import { createServerClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const SCRAPER_API_URL = process.env.SCRAPER_API_URL || "https://arbersaas.duckdns.org/api2";
+
+/**
+ * Write one sale_estimate ledger row per (product, machine) per day with
+ * qty = -daily_sales_rate. Idempotent — checks for an existing row in the
+ * last 23 hours and skips if found. This feeds the projection engine
+ * without double-counting on multiple syncs per day.
+ */
+async function recordDailySaleEstimate(
+  productId: string,
+  machineId: string,
+  dailySalesRate: number
+) {
+  if (dailySalesRate <= 0) return;
+  const supabase = createServerClient();
+  const cutoff = new Date();
+  cutoff.setHours(cutoff.getHours() - 23);
+
+  const { data: existing } = await supabase
+    .from("stock_movements")
+    .select("id")
+    .eq("product_id", productId)
+    .eq("machine_id", machineId)
+    .eq("reason", "sale_estimate")
+    .gte("created_at", cutoff.toISOString())
+    .limit(1);
+
+  if (existing && existing.length > 0) return;
+
+  await supabase.from("stock_movements").insert({
+    product_id: productId,
+    location: machineId,
+    machine_id: machineId,
+    qty: -Math.round(dailySalesRate * 100) / 100,
+    reason: "sale_estimate",
+    notes: `Nayax sync daily estimate (${dailySalesRate.toFixed(2)}/day)`,
+  });
+}
 
 interface NayaxProduct {
   name: string;
@@ -27,8 +66,13 @@ interface NayaxMachineStatus {
 }
 
 /**
- * POST /api/inventory/sync — Fetch live Nayax data and sync to Supabase.
+ * POST/GET /api/inventory/sync — Fetch live Nayax data and sync to Supabase.
+ * GET supported so cron-job.org can hit it without configuring a body.
  */
+export async function GET() {
+  return POST();
+}
+
 export async function POST() {
   try {
     // 1. Fetch inventory status from scraper-api
@@ -86,6 +130,10 @@ export async function POST() {
               soldSinceRefill: p.sold_since_refill,
             });
             inventoryRows++;
+
+            // Also write a sale_estimate ledger row so the projection
+            // engine has data to compute velocity from.
+            await recordDailySaleEstimate(productId, machineId, p.daily_sales_rate);
           } catch (err: any) {
             errors.push(`Product ${p.name}: ${err.message}`);
           }

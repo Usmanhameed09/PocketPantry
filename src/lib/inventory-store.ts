@@ -186,7 +186,8 @@ export interface InventoryProduct {
   dailySales: number;   // avg daily sales rate
   daysLeft: number;     // (onHand + inMachines) / dailySales
   leadTimeDays: number;
-  restockStatus: "OK" | "Low" | "Critical" | "Out";
+  hasStockSignal: boolean; // true if any refill/PO/count adjustment recorded
+  restockStatus: "OK" | "Low" | "Critical" | "Out" | "NoData";
   machines: Array<{
     machineId: string;
     machineName: string;
@@ -221,6 +222,15 @@ export async function getInventoryOverview(): Promise<InventoryProduct[]> {
   for (const w of warehouse || []) {
     warehouseMap.set(w.product_id, w.on_hand);
   }
+
+  // Track which products have any real stock signal (refill/PO/count fix).
+  // Without one of these we cannot know what's in machines — Nayax doesn't
+  // expose slot-level stock. UI should mark these as "Needs setup".
+  const { data: signals } = await supabase
+    .from("stock_movements")
+    .select("product_id")
+    .in("reason", ["purchase", "refill", "count_correction"]);
+  const stockSignalSet = new Set((signals || []).map((m) => m.product_id as string));
 
   // Fetch machine inventory with machine names
   const { data: machineInv } = await supabase
@@ -261,11 +271,21 @@ export async function getInventoryOverview(): Promise<InventoryProduct[]> {
     const totalStock = onHand + inMachines;
     const daysLeft = dailySales > 0 ? Math.round(totalStock / dailySales) : 999;
     const leadTime = p.lead_time_days || 1;
+    const hasStockSignal = stockSignalSet.has(p.id);
 
-    let restockStatus: InventoryProduct["restockStatus"] = "OK";
-    if (totalStock === 0 && dailySales > 0) restockStatus = "Out";
-    else if (daysLeft <= leadTime) restockStatus = "Critical";
-    else if (daysLeft <= leadTime * 2) restockStatus = "Low";
+    let restockStatus: InventoryProduct["restockStatus"];
+    if (!hasStockSignal) {
+      // No refill or PO ever recorded — can't say anything meaningful
+      restockStatus = "NoData";
+    } else if (totalStock === 0 && dailySales > 0) {
+      restockStatus = "Out";
+    } else if (daysLeft <= leadTime) {
+      restockStatus = "Critical";
+    } else if (daysLeft <= leadTime * 2) {
+      restockStatus = "Low";
+    } else {
+      restockStatus = "OK";
+    }
 
     return {
       id: p.id,
@@ -277,6 +297,7 @@ export async function getInventoryOverview(): Promise<InventoryProduct[]> {
       dailySales: Math.round(dailySales * 100) / 100,
       daysLeft,
       leadTimeDays: leadTime,
+      hasStockSignal,
       restockStatus,
       machines,
     };

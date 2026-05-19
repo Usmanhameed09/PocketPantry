@@ -22,7 +22,7 @@ import {
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
-type RestockStatus = "OK" | "Low" | "Critical" | "Out";
+type RestockStatus = "OK" | "Low" | "Critical" | "Out" | "NoData";
 type Category = "All" | "Drinks" | "Snacks";
 
 interface MachineDetail {
@@ -77,6 +77,7 @@ const restockConfig: Record<RestockStatus, { label: string; color: string; bg: s
   Low: { label: "Low Stock", color: "#d97706", bg: "#fef3c7" },
   Critical: { label: "Order Needed", color: "#dc2626", bg: "#fef2f2" },
   Out: { label: "Out of Stock", color: "#dc2626", bg: "#fef2f2" },
+  NoData: { label: "Needs setup", color: "#475569", bg: "#f1f5f9" },
 };
 
 function daysRemaining(daysLeft: number): string {

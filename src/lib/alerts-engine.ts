@@ -121,8 +121,24 @@ export async function scanAndPersistAlerts(): Promise<{ created: number; dismiss
 
   const newAlerts: Array<Record<string, unknown>> = [];
 
-  // ---- Low stock alerts (warehouse-level) ----
+  // Identify products that have any real stock signal — either a received PO,
+  // a logged refill, or a non-zero warehouse balance from any non-sale movement.
+  // Without ANY of those we have no idea what's in the machines and the
+  // alert would be pure noise.
+  const { data: stockSignals } = await supabase
+    .from("stock_movements")
+    .select("product_id, reason")
+    .in("reason", ["purchase", "refill", "count_correction"])
+    .limit(10000);
+  const productsWithStockSignal = new Set(
+    (stockSignals || []).map((m) => m.product_id as string)
+  );
+
+  // ---- Low stock alerts (only fire when we have a real stock signal) ----
   for (const p of projections) {
+    // Skip products with no stock history — we don't know what's in machines
+    if (!productsWithStockSignal.has(p.productId)) continue;
+
     const onHand = onHandByProduct.get(p.productId) || 0;
     const incoming = coverageByProduct.get(p.productId) || 0;
     const effectiveStock = onHand + incoming;

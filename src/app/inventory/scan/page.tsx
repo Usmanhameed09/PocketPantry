@@ -33,6 +33,7 @@ export default function ScanPage() {
   const [busy, setBusy] = useState(false);
   const [manualBarcode, setManualBarcode] = useState("");
   const [history, setHistory] = useState<ScanEvent[]>([]);
+  const [debugMsg, setDebugMsg] = useState<string | null>(null);
 
   // Unknown barcode → register modal
   const [registerFor, setRegisterFor] = useState<string | null>(null);
@@ -73,43 +74,63 @@ export default function ScanPage() {
   const startScanner = useCallback(async () => {
     if (!containerRef.current) return;
     setError(null);
+    setDebugMsg(null);
     try {
       // Dynamic import — html5-qrcode is a browser-only lib
-      const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import("html5-qrcode");
-      const formats = [
-        Html5QrcodeSupportedFormats.EAN_13,
-        Html5QrcodeSupportedFormats.EAN_8,
-        Html5QrcodeSupportedFormats.UPC_A,
-        Html5QrcodeSupportedFormats.UPC_E,
-        Html5QrcodeSupportedFormats.CODE_128,
-        Html5QrcodeSupportedFormats.CODE_39,
-        Html5QrcodeSupportedFormats.QR_CODE,
-      ];
-      const scanner = new Html5Qrcode("pp-scanner", { formatsToSupport: formats, verbose: false });
+      const { Html5Qrcode } = await import("html5-qrcode");
+
+      // No format restriction — let the engine try every common barcode type.
+      // Also enable the native BarcodeDetector when the browser supports it
+      // (Chrome on Android), which is much faster and more reliable than the
+      // ZXing WASM fallback used by older browsers.
+      const scanner = new Html5Qrcode("pp-scanner", {
+        verbose: false,
+        useBarCodeDetectorIfSupported: true,
+      } as unknown as undefined);
       scannerRef.current = {
         stop: () => scanner.stop(),
         clear: () => scanner.clear(),
       };
+
+      // Compute a large qrbox sized to ~80% of the camera viewport — barcodes
+      // on cases are wide so make the scan box wide too.
+      const viewportWidth = containerRef.current?.clientWidth || 480;
+      const boxW = Math.min(360, Math.floor(viewportWidth * 0.85));
+      const boxH = Math.floor(boxW * 0.55);
+
       await scanner.start(
         { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 280, height: 160 }, aspectRatio: 1.7 },
+        {
+          fps: 15,
+          qrbox: { width: boxW, height: boxH },
+          aspectRatio: 1.5,
+          // Request high resolution so even small barcodes are readable
+          videoConstraints: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1920, min: 640 },
+            height: { ideal: 1080, min: 480 },
+          },
+        } as unknown as undefined,
         (decodedText: string) => handleScan(decodedText),
-        () => {}
+        () => {
+          // Per-frame failure — silent (fires constantly while searching)
+        }
       );
       setScanning(true);
+      setDebugMsg("Scanning… hold a barcode 4–8 inches from the camera, well-lit.");
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       let friendly = "Camera couldn't start.";
       if (/Permission|NotAllowed/i.test(raw)) {
-        friendly = "📵 Camera permission denied. Click the camera icon in your browser address bar and allow access, then try again.";
+        friendly = "📵 Camera permission denied. In your browser address bar, tap the lock/camera icon and Allow camera, then try again.";
       } else if (/NotFound|requested device/i.test(raw)) {
-        friendly = "📱 No camera detected on this device. Open this page on your phone (any modern Android/iPhone browser) — the scanner works best there.";
+        friendly = "📱 No camera detected. On a desktop you need a webcam; on a phone make sure no other app is using the camera.";
       } else if (/NotReadable|InUse/i.test(raw)) {
-        friendly = "📷 Camera is being used by another app. Close other apps using the camera and try again.";
+        friendly = "📷 Camera is busy. Close other apps using the camera (Zoom, Teams, another tab) and try again.";
       } else if (/Insecure|secure context|https/i.test(raw)) {
-        friendly = "🔒 Camera requires HTTPS. This page must be served over a secure connection.";
+        friendly = "🔒 Camera requires HTTPS — make sure you're on the https:// URL, not http://.";
       } else {
-        friendly = `Camera error: ${raw}. Try opening this page on your phone instead.`;
+        friendly = `Camera error: ${raw}`;
       }
       setError(friendly);
       setScanning(false);
@@ -338,15 +359,38 @@ export default function ScanPage() {
             <BtnSecondary onClick={manualLookup}>Look up</BtnSecondary>
           </div>
 
+          {debugMsg && scanning && !error && (
+            <div style={{
+              marginTop: 12, padding: "10px 14px", borderRadius: 10, fontSize: 13,
+              background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe",
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+              <ScanLine size={16} /> {debugMsg}
+            </div>
+          )}
+
           {error && (
             <div style={{
               marginTop: 12, padding: "10px 14px", borderRadius: 10, fontSize: 13,
               background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca",
-              display: "flex", alignItems: "center", gap: 8,
+              display: "flex", alignItems: "flex-start", gap: 8,
             }}>
-              <AlertCircle size={16} /> {error}
+              <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 1 }} /> {error}
             </div>
           )}
+
+          {/* Scanning tips - always visible */}
+          <details style={{ marginTop: 12, fontSize: 12, color: "#64748b" }}>
+            <summary style={{ cursor: "pointer", fontWeight: 600 }}>📋 Scanning tips</summary>
+            <ul style={{ marginTop: 8, paddingLeft: 20, lineHeight: 1.7 }}>
+              <li>Hold barcode <strong>4–8 inches</strong> from the camera (not too close)</li>
+              <li>Make sure barcode is <strong>well-lit</strong> — bright room or use flashlight</li>
+              <li>Hold steady for 1–2 seconds — don't move while scanning</li>
+              <li>Try <strong>portrait orientation</strong> on phone for landscape barcodes</li>
+              <li>Clean the camera lens if blurry</li>
+              <li>If still no luck → type the barcode manually in the field above</li>
+            </ul>
+          </details>
         </div>
 
         {/* History */}

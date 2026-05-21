@@ -98,7 +98,20 @@ export default function ScanPage() {
       );
       setScanning(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Camera failed to start. Check permissions.");
+      const raw = err instanceof Error ? err.message : String(err);
+      let friendly = "Camera couldn't start.";
+      if (/Permission|NotAllowed/i.test(raw)) {
+        friendly = "📵 Camera permission denied. Click the camera icon in your browser address bar and allow access, then try again.";
+      } else if (/NotFound|requested device/i.test(raw)) {
+        friendly = "📱 No camera detected on this device. Open this page on your phone (any modern Android/iPhone browser) — the scanner works best there.";
+      } else if (/NotReadable|InUse/i.test(raw)) {
+        friendly = "📷 Camera is being used by another app. Close other apps using the camera and try again.";
+      } else if (/Insecure|secure context|https/i.test(raw)) {
+        friendly = "🔒 Camera requires HTTPS. This page must be served over a secure connection.";
+      } else {
+        friendly = `Camera error: ${raw}. Try opening this page on your phone instead.`;
+      }
+      setError(friendly);
       setScanning(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -226,6 +239,23 @@ export default function ScanPage() {
       <InventoryTabs />
 
       <div style={pageContainer(isMobile)}>
+        {!isMobile && (
+          <div style={{
+            ...CARD, padding: 14, marginBottom: 16, background: "#eff6ff",
+            border: "1px solid #bfdbfe", display: "flex", alignItems: "center", gap: 10,
+          }}>
+            <span style={{ fontSize: 22 }}>📱</span>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1d4ed8" }}>
+                For best results, open this page on your phone
+              </div>
+              <div style={{ fontSize: 12, color: "#475569" }}>
+                Desktop needs a webcam to scan. Type a barcode below as a fallback if you don't have a phone handy.
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Last scan flash */}
         {lastScan && (
           <div style={{

@@ -1,8 +1,14 @@
 /**
  * Buy-list + PO generator (Sprint 4).
  *
- * Buy qty = (projected_demand_for_horizon × seasonal) + (safety_stock_days × velocity)
- *           - (warehouse_on_hand - reserved_in_open_pos)
+ * Buy qty (raw units) = (projected_demand × seasonal × horizon)
+ *                     + (safety_stock_days × velocity)
+ *                     − warehouse_on_hand
+ *                     − machine_estimated_remaining
+ *                     − reserved_in_open_pos
+ *
+ * Then rounded UP to the nearest whole case using products.case_size,
+ * because vendors sell in cases not loose units.
  */
 
 import "server-only";
@@ -18,12 +24,17 @@ export type BuyListLine = {
   category: string;
   vendor: string;
   unitCost: number;
+  caseSize: number;             // units per case (1 if not configured)
+  caseCost: number;             // unitCost × caseSize
   warehouseOnHand: number;
+  inMachines: number;           // estimated remaining across all machines
   reservedInOpenPos: number;
   velocityPerDay: number;
   horizonDemand: number;
   safetyBuffer: number;
-  recommendedQty: number;     // clamped at 0
+  netNeedUnits: number;         // raw units needed before case rounding
+  recommendedCases: number;     // whole cases to order
+  recommendedQty: number;       // recommendedCases × caseSize (display units)
   estimatedCost: number;
   explanation: string;
 };
@@ -63,14 +74,19 @@ export async function generateBuyList(): Promise<BuyListResult> {
   const projections = await getProjections();
   const reserved = await getReservedByProduct();
 
-  // Pull warehouse on-hand + vendor data
+  // Pull warehouse on-hand + vendor + case size + machine remaining
   const productIds = projections.map((p) => p.productId);
+  const safeIds = productIds.length > 0 ? productIds : ["00000000-0000-0000-0000-000000000000"];
+
   const { data: products } = await supabase
     .from("products")
-    .select("id, vendor")
-    .in("id", productIds.length > 0 ? productIds : ["00000000-0000-0000-0000-000000000000"]);
+    .select("id, vendor, case_size")
+    .in("id", safeIds);
   const vendorById = new Map(
     (products || []).map((p) => [p.id as string, (p.vendor as string) || "Default"])
+  );
+  const caseSizeById = new Map(
+    (products || []).map((p) => [p.id as string, Math.max(1, (p.case_size as number) || 1)])
   );
 
   const { data: warehouse } = await supabase
@@ -81,14 +97,38 @@ export async function generateBuyList(): Promise<BuyListResult> {
     (warehouse || []).map((w) => [w.product_id as string, w.on_hand as number])
   );
 
+  // NEW: estimated remaining across all machines per product
+  const { data: machineInv } = await supabase
+    .from("machine_inventory")
+    .select("product_id, estimated_remaining")
+    .in("product_id", safeIds);
+  const inMachinesById = new Map<string, number>();
+  for (const m of machineInv || []) {
+    const pid = m.product_id as string;
+    inMachinesById.set(pid, (inMachinesById.get(pid) || 0) + (m.estimated_remaining as number));
+  }
+
   const lines: BuyListLine[] = projections.map((p) => {
     const onHand = onHandById.get(p.productId) || 0;
+    const inMachines = inMachinesById.get(p.productId) || 0;
     const reservedQty = reserved.get(p.productId) || 0;
+    const caseSize = caseSizeById.get(p.productId) || 1;
     const velocity = p.velocityPerDay * (p.seasonalMultiplier || 1);
     const horizonDemand = velocity * settings.horizonDays;
     const safety = velocity * settings.safetyStockDays;
-    const needed = horizonDemand + safety - (onHand - reservedQty);
-    const recommendedQty = Math.max(0, Math.ceil(needed));
+    // Subtract ALL stock that will help meet demand (warehouse + in-machine + reserved POs)
+    const netNeedUnits = horizonDemand + safety - onHand - inMachines - reservedQty;
+    // Round UP to whole cases (vendors don't sell loose units)
+    const recommendedCases = netNeedUnits > 0 ? Math.ceil(netNeedUnits / caseSize) : 0;
+    const recommendedQty = recommendedCases * caseSize;
+    const caseCost = Math.round(p.cost * caseSize * 100) / 100;
+
+    const explanation =
+      `${velocity.toFixed(2)}/day × ${settings.horizonDays}d + ${settings.safetyStockDays}d safety = ${(horizonDemand + safety).toFixed(1)} need` +
+      `, minus ${onHand} warehouse + ${inMachines} in-machine${reservedQty > 0 ? ` + ${reservedQty} reserved` : ""}` +
+      (recommendedCases > 0
+        ? ` = order ${recommendedCases} case${recommendedCases === 1 ? "" : "s"} of ${caseSize}`
+        : ` = no order needed`);
 
     return {
       productId: p.productId,
@@ -97,14 +137,19 @@ export async function generateBuyList(): Promise<BuyListResult> {
       category: p.category,
       vendor: vendorById.get(p.productId) || "Default",
       unitCost: p.cost,
+      caseSize,
+      caseCost,
       warehouseOnHand: onHand,
+      inMachines,
       reservedInOpenPos: reservedQty,
       velocityPerDay: velocity,
       horizonDemand: Math.round(horizonDemand * 10) / 10,
       safetyBuffer: Math.round(safety * 10) / 10,
+      netNeedUnits: Math.round(netNeedUnits * 10) / 10,
+      recommendedCases,
       recommendedQty,
       estimatedCost: Math.round(recommendedQty * p.cost * 100) / 100,
-      explanation: `${velocity.toFixed(2)}/day × ${settings.horizonDays}d + ${settings.safetyStockDays}d safety − ${onHand} on hand${reservedQty > 0 ? ` − ${reservedQty} reserved` : ""}`,
+      explanation,
     };
   });
 

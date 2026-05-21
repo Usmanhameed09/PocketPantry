@@ -12,12 +12,14 @@ import {
   Sparkles,
   AlertTriangle,
   ArrowRightLeft,
+  ScanLine,
 } from "lucide-react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 const TABS = [
   { href: "/inventory",                  label: "Overview",       icon: Package },
   { href: "/inventory/warehouse",        label: "Warehouse",      icon: Warehouse },
+  { href: "/inventory/scan",             label: "Scan",           icon: ScanLine },
   { href: "/inventory/products",         label: "Products",       icon: Package },
   { href: "/inventory/projections",      label: "Projections",    icon: TrendingUp },
   { href: "/inventory/buy-list",         label: "Buy List",       icon: ShoppingCart },

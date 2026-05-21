@@ -12,9 +12,13 @@ import {
 
 type BuyListLine = {
   productId: string; productName: string; sku: string; category: string;
-  vendor: string; unitCost: number; warehouseOnHand: number;
+  vendor: string; unitCost: number;
+  caseSize: number; caseCost: number;
+  warehouseOnHand: number; inMachines: number;
   reservedInOpenPos: number; velocityPerDay: number; horizonDemand: number;
-  safetyBuffer: number; recommendedQty: number; estimatedCost: number; explanation: string;
+  safetyBuffer: number; netNeedUnits: number;
+  recommendedCases: number; recommendedQty: number;
+  estimatedCost: number; explanation: string;
 };
 type VendorGroup = { vendor: string; lines: BuyListLine[]; subtotal: number };
 
@@ -65,6 +69,7 @@ export default function BuyListPage() {
 
   const totalCost = groups.reduce((s, g) => s + g.subtotal, 0);
   const totalUnits = groups.reduce((s, g) => s + g.lines.reduce((s2, l) => s2 + l.recommendedQty, 0), 0);
+  const totalCases = groups.reduce((s, g) => s + g.lines.reduce((s2, l) => s2 + l.recommendedCases, 0), 0);
 
   return (
     <div style={{ minHeight: "100vh", background: PAGE_BG }}>
@@ -104,7 +109,7 @@ export default function BuyListPage() {
               <StatCard icon={<DollarSign size={20} />} iconBg="#dcfce7" iconColor="#16a34a"
                 label="Total cost" value={`$${totalCost.toFixed(2)}`} sub="estimated" />
               <StatCard icon={<Package size={20} />} iconBg="#ede9fe" iconColor="#6366f1"
-                label="Total units" value={totalUnits} sub="across all vendors" />
+                label="Cases / units" value={`${totalCases} / ${totalUnits}`} sub="cases of all sizes" />
               <StatCard icon={<Store size={20} />} iconBg="#fef3c7" iconColor="#d97706"
                 label="Vendors" value={groups.length} sub={`${groups.reduce((s, g) => s + g.lines.length, 0)} line items`} />
               <div style={{ ...CARD, padding: 18, display: "flex", alignItems: "center" }}>
@@ -143,10 +148,12 @@ export default function BuyListPage() {
                       <table style={{ width: "100%", borderCollapse: "collapse" }}>
                         <thead><tr>
                           <Th>Product</Th>
-                          <Th align="right">On hand</Th>
+                          <Th align="right">Warehouse</Th>
+                          <Th align="right">In machines</Th>
                           <Th align="right">Reserved</Th>
-                          <Th align="right">Buy qty</Th>
-                          <Th align="right">Cost</Th>
+                          <Th align="right">Order</Th>
+                          <Th align="right">Case cost</Th>
+                          <Th align="right">Subtotal</Th>
                           <Th>Why</Th>
                         </tr></thead>
                         <tbody>
@@ -157,10 +164,19 @@ export default function BuyListPage() {
                                 <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2, fontFamily: "ui-monospace, monospace" }}>{l.sku}</div>
                               </Td>
                               <Td align="right" mono>{l.warehouseOnHand}</Td>
+                              <Td align="right" mono>{l.inMachines}</Td>
                               <Td align="right" mono>{l.reservedInOpenPos}</Td>
-                              <Td align="right" mono bold>{l.recommendedQty}</Td>
-                              <Td align="right" mono>${l.estimatedCost.toFixed(2)}</Td>
-                              <Td><span style={{ fontSize: 12, color: "#64748b" }}>{l.explanation}</span></Td>
+                              <Td align="right">
+                                <div style={{ fontWeight: 700, color: "#0f172a" }}>
+                                  {l.recommendedCases} case{l.recommendedCases === 1 ? "" : "s"}
+                                </div>
+                                <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                                  {l.recommendedQty} units ({l.caseSize}/case)
+                                </div>
+                              </Td>
+                              <Td align="right" mono>${l.caseCost.toFixed(2)}</Td>
+                              <Td align="right" mono bold>${l.estimatedCost.toFixed(2)}</Td>
+                              <Td><span style={{ fontSize: 11, color: "#64748b" }}>{l.explanation}</span></Td>
                             </tr>
                           ))}
                         </tbody>

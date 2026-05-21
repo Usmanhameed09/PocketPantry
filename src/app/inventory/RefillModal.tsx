@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { X, Plus, Trash2, Loader2 } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { X, Plus, Trash2, Loader2, ScanLine, Camera, CameraOff } from "lucide-react";
 
 interface MachineOption {
   id: string;
@@ -14,6 +14,7 @@ interface ProductOption {
   id: string;
   name: string;
   sku: string;
+  caseSize?: number;
 }
 
 interface RefillItem {
@@ -33,6 +34,79 @@ export default function RefillModal({ machines, products, onClose, onDone }: Pro
   const [items, setItems] = useState<RefillItem[]>([{ productId: "", quantity: 0 }]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [scanMsg, setScanMsg] = useState<string | null>(null);
+  const scannerRef = useRef<{ stop: () => Promise<void>; clear: () => void } | null>(null);
+  const lastScannedAtRef = useRef<{ code: string; at: number } | null>(null);
+
+  const stopScanner = async () => {
+    if (scannerRef.current) {
+      try { await scannerRef.current.stop(); scannerRef.current.clear(); } catch {}
+      scannerRef.current = null;
+    }
+    setScanning(false);
+  };
+
+  useEffect(() => () => { stopScanner(); }, []);
+
+  const startScanner = async () => {
+    try {
+      const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import("html5-qrcode");
+      const formats = [
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.QR_CODE,
+      ];
+      const scanner = new Html5Qrcode("pp-refill-scanner", { formatsToSupport: formats, verbose: false });
+      scannerRef.current = { stop: () => scanner.stop(), clear: () => scanner.clear() };
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 260, height: 140 } },
+        (text: string) => handleScannedBarcode(text),
+        () => {}
+      );
+      setScanning(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Camera failed");
+    }
+  };
+
+  const handleScannedBarcode = async (barcode: string) => {
+    const now = Date.now();
+    const last = lastScannedAtRef.current;
+    if (last && last.code === barcode && now - last.at < 2000) return;
+    lastScannedAtRef.current = { code: barcode, at: now };
+
+    const res = await fetch(`/api/inventory/barcode?barcode=${encodeURIComponent(barcode)}`);
+    const data = await res.json();
+    if (!data.success || !data.product) {
+      setScanMsg(`Unknown barcode ${barcode} — register it via the Scan page first.`);
+      return;
+    }
+    const p = data.product;
+    const caseSize = Math.max(1, p.case_size || 1);
+    // Find existing row for this product, else add new
+    const existingIdx = items.findIndex((it) => it.productId === p.id);
+    if (existingIdx >= 0) {
+      const updated = [...items];
+      updated[existingIdx].quantity += caseSize;
+      setItems(updated);
+    } else {
+      const empty = items.findIndex((it) => !it.productId && it.quantity === 0);
+      if (empty >= 0) {
+        const updated = [...items];
+        updated[empty] = { productId: p.id, quantity: caseSize };
+        setItems(updated);
+      } else {
+        setItems([...items, { productId: p.id, quantity: caseSize }]);
+      }
+    }
+    setScanMsg(`✓ +${caseSize} ${p.name}`);
+    setTimeout(() => setScanMsg(null), 2000);
+  };
 
   const addRow = () => setItems([...items, { productId: "", quantity: 0 }]);
 
@@ -144,6 +218,45 @@ export default function RefillModal({ machines, products, onClose, onDone }: Pro
               ))}
             </select>
           </label>
+
+          {/* Barcode Scanner */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
+                <ScanLine size={14} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />
+                Scan barcode (auto-adds 1 case)
+              </span>
+              {scanning ? (
+                <button onClick={stopScanner} style={{
+                  padding: "6px 12px", fontSize: 12, fontWeight: 600, color: "#dc2626",
+                  background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, cursor: "pointer",
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                }}>
+                  <CameraOff size={12} /> Stop
+                </button>
+              ) : (
+                <button onClick={startScanner} style={{
+                  padding: "6px 12px", fontSize: 12, fontWeight: 600, color: "#15803d",
+                  background: "#dcfce7", border: "1px solid #bbf7d0", borderRadius: 6, cursor: "pointer",
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                }}>
+                  <Camera size={12} /> Start camera
+                </button>
+              )}
+            </div>
+            <div id="pp-refill-scanner" style={{
+              width: "100%", borderRadius: 8, overflow: "hidden",
+              background: scanning ? "#0f172a" : "transparent",
+              minHeight: scanning ? 200 : 0,
+            }} />
+            {scanMsg && (
+              <div style={{
+                marginTop: 8, padding: "8px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600,
+                background: scanMsg.startsWith("✓") ? "#dcfce7" : "#fef3c7",
+                color: scanMsg.startsWith("✓") ? "#15803d" : "#92400e",
+              }}>{scanMsg}</div>
+            )}
+          </div>
 
           {/* Product Rows */}
           <div style={{ marginBottom: 16 }}>

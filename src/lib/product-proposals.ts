@@ -251,8 +251,11 @@ export type Underperformer = {
   reason: string;
 };
 
-const WEEKLY_VOLUME_FLOOR = 5;     // less than 5 units/week for 4 weeks
-const MARGIN_FLOOR_PCT = 25;       // margin < 25%
+// Vending velocities are low — most products sell well under 1 unit/day per
+// machine. A "true" underperformer is one that doesn't even sell once a week
+// across the entire fleet. Tunable via env if the operator's data is denser.
+const WEEKLY_VOLUME_FLOOR = Number(process.env.UNDERPERFORMER_WEEKLY_FLOOR) || 0.5;
+const MARGIN_FLOOR_PCT = Number(process.env.UNDERPERFORMER_MARGIN_FLOOR) || 25;
 
 export async function findUnderperformers(): Promise<Underperformer[]> {
   const companyId = await ensureDefaultCompany();

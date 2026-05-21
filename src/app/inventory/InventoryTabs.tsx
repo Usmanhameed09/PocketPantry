@@ -16,7 +16,8 @@ import {
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 const TABS = [
-  { href: "/inventory",                  label: "Overview",       icon: Warehouse },
+  { href: "/inventory",                  label: "Overview",       icon: Package },
+  { href: "/inventory/warehouse",        label: "Warehouse",      icon: Warehouse },
   { href: "/inventory/products",         label: "Products",       icon: Package },
   { href: "/inventory/projections",      label: "Projections",    icon: TrendingUp },
   { href: "/inventory/buy-list",         label: "Buy List",       icon: ShoppingCart },

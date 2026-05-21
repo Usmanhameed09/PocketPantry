@@ -205,29 +205,48 @@ export default function ScanPage() {
     }
   }
 
+  const [registerError, setRegisterError] = useState<string | null>(null);
+
   async function registerNewProduct() {
-    if (!registerFor || !draft.name || !draft.caseSize) {
-      setError("Name and case size are required");
+    setRegisterError(null);
+    if (!registerFor) {
+      setRegisterError("No barcode to register");
+      return;
+    }
+    if (!draft.name.trim()) {
+      setRegisterError("Product name is required");
+      return;
+    }
+    const caseSizeNum = Number(draft.caseSize);
+    if (!Number.isFinite(caseSizeNum) || caseSizeNum < 1) {
+      setRegisterError("Case size must be 1 or more");
       return;
     }
     setRegistering(true);
-    const res = await fetch("/api/inventory/barcode", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        barcode: registerFor,
-        name: draft.name,
-        category: draft.category,
-        vendor: draft.vendor || null,
-        unitCost: Number(draft.unitCost) || 0,
-        defaultVendPrice: draft.defaultVendPrice ? Number(draft.defaultVendPrice) : null,
-        caseSize: Number(draft.caseSize),
-      }),
-    });
-    const data = await res.json();
+    let res: Response;
+    let data: { success: boolean; product?: { id: string; name: string; sku: string; case_size: number }; error?: string; attached?: boolean } = { success: false };
+    try {
+      res = await fetch("/api/inventory/barcode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          barcode: registerFor,
+          name: draft.name.trim(),
+          category: draft.category,
+          vendor: draft.vendor || null,
+          unitCost: Number(draft.unitCost) || 0,
+          defaultVendPrice: draft.defaultVendPrice ? Number(draft.defaultVendPrice) : null,
+          caseSize: caseSizeNum,
+        }),
+      });
+      data = await res.json();
+    } catch (err) {
+      setRegistering(false);
+      setRegisterError(`Network error: ${err instanceof Error ? err.message : "unknown"}`);
+      return;
+    }
     setRegistering(false);
     if (data.success && data.product) {
-      // Immediately add 1 case
       const newProduct: Product = {
         id: data.product.id,
         name: data.product.name,
@@ -241,9 +260,10 @@ export default function ScanPage() {
         status: "Active",
       };
       setRegisterFor(null);
+      setRegisterError(null);
       await addStockForProduct(newProduct, newProduct.case_size);
     } else {
-      setError(data.error || "Failed to register");
+      setRegisterError(data.error || `Server error (${res!.status})`);
     }
   }
 
@@ -500,8 +520,19 @@ export default function ScanPage() {
                 onChange={(v) => setDraft({ ...draft, defaultVendPrice: v })} />
             </div>
           </div>
+          {registerError && (
+            <div style={{
+              marginTop: 14, padding: "10px 14px", borderRadius: 10, fontSize: 13,
+              background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca",
+              display: "flex", alignItems: "flex-start", gap: 8,
+            }}>
+              <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>{registerError}</span>
+            </div>
+          )}
+
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
-            <BtnSecondary onClick={() => setRegisterFor(null)}>
+            <BtnSecondary onClick={() => { setRegisterFor(null); setRegisterError(null); }}>
               <X size={14} /> Cancel
             </BtnSecondary>
             <BtnPrimary onClick={registerNewProduct} disabled={registering || !draft.name || !draft.caseSize}>

@@ -33,9 +33,12 @@ function normName(s: string): string {
 }
 
 function makeSku(name: string, barcode: string): string {
-  const base = name.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 22);
-  const suffix = (barcode.slice(-4) || Math.random().toString(36).slice(-4)).toUpperCase();
-  return `${base}-${suffix}`.slice(0, 28);
+  // Use last-8 of barcode (more unique than last-4) + a 2-char random nonce.
+  // Together that's effectively collision-proof for our catalog size.
+  const base = name.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 16);
+  const bcSuffix = barcode.slice(-8) || "";
+  const nonce = Math.random().toString(36).slice(2, 4).toUpperCase();
+  return `${base}-${bcSuffix}${nonce}`.slice(0, 32);
 }
 
 export async function POST(req: Request) {

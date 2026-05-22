@@ -9,16 +9,25 @@ export async function GET() {
   try {
     const companyId = await ensureDefaultCompany();
     const supabase = createServerClient();
-    // Supabase default page size is 1000 — explicitly raise the cap so we
-    // return the full catalog (now likely 6k+ after bulk imports).
-    const { data, error, count } = await supabase
-      .from("products")
-      .select("id, name, sku, category, vendor, status, unit_cost, default_vend_price, case_size, unit_size, barcode, lead_time_days", { count: "exact" })
-      .eq("company_id", companyId)
-      .order("name")
-      .range(0, 19999);
-    if (error) throw error;
-    return NextResponse.json({ success: true, data, total: count });
+    // Supabase enforces a server-side 1000-row cap per query. To return the
+    // whole catalog (now 6k+ after bulk import) we paginate in 1000-row chunks.
+    const PAGE = 1000;
+    const all: unknown[] = [];
+    let total = 0;
+    for (let from = 0; from < 50000; from += PAGE) {
+      const { data, error, count } = await supabase
+        .from("products")
+        .select("id, name, sku, category, vendor, status, unit_cost, default_vend_price, case_size, unit_size, barcode, lead_time_days", { count: from === 0 ? "exact" : undefined })
+        .eq("company_id", companyId)
+        .order("name")
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      if (from === 0 && count != null) total = count;
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < PAGE) break;
+    }
+    return NextResponse.json({ success: true, data: all, total: total || all.length });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : "Failed" },

@@ -4,11 +4,12 @@ import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import InventoryTabs from "../InventoryTabs";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { Plus, Edit2, Loader2, Search, Save, X, Package } from "lucide-react";
+import { Plus, Edit2, Loader2, Search, Save, X, Package, Upload } from "lucide-react";
 import {
   PAGE_BG, CARD, Th, Td, EmptyState, LoadingBox,
   Modal, Field, Select, BtnPrimary, BtnSecondary, Badge, pageContainer,
 } from "../ui";
+import BulkImportModal from "./BulkImportModal";
 
 type Product = {
   id: string; name: string; sku: string; category: string;
@@ -31,6 +32,7 @@ export default function ProductsPage() {
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<Partial<Product> | null>(null);
   const [saving, setSaving] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -100,9 +102,14 @@ export default function ProductsPage() {
               }}
             />
           </div>
-          <BtnPrimary onClick={() => setEditing({ ...EMPTY_DRAFT })}>
-            <Plus size={16} /> Add product
-          </BtnPrimary>
+          <div style={{ display: "flex", gap: 8 }}>
+            <BtnSecondary onClick={() => setShowImport(true)}>
+              <Upload size={16} /> Bulk import
+            </BtnSecondary>
+            <BtnPrimary onClick={() => setEditing({ ...EMPTY_DRAFT })}>
+              <Plus size={16} /> Add product
+            </BtnPrimary>
+          </div>
         </div>
 
         <div style={CARD}>
@@ -194,6 +201,10 @@ export default function ProductsPage() {
             </BtnPrimary>
           </div>
         </Modal>
+      )}
+
+      {showImport && (
+        <BulkImportModal onClose={() => setShowImport(false)} onDone={load} />
       )}
     </div>
   );

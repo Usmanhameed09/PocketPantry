@@ -9,13 +9,16 @@ export async function GET() {
   try {
     const companyId = await ensureDefaultCompany();
     const supabase = createServerClient();
-    const { data, error } = await supabase
+    // Supabase default page size is 1000 — explicitly raise the cap so we
+    // return the full catalog (now likely 6k+ after bulk imports).
+    const { data, error, count } = await supabase
       .from("products")
-      .select("id, name, sku, category, vendor, status, unit_cost, default_vend_price, case_size, unit_size, barcode, lead_time_days")
+      .select("id, name, sku, category, vendor, status, unit_cost, default_vend_price, case_size, unit_size, barcode, lead_time_days", { count: "exact" })
       .eq("company_id", companyId)
-      .order("name");
+      .order("name")
+      .range(0, 19999);
     if (error) throw error;
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ success: true, data, total: count });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : "Failed" },

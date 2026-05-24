@@ -103,8 +103,9 @@ export async function getProjections(): Promise<ProjectionRow[]> {
   // Supabase enforces a 1000-row page cap. The catalog is now 6k+ after the
   // supplier UPC import, so we paginate to scan the whole thing — otherwise
   // products beyond row 1000 never get a velocity match.
+  type ProductRow = { id: string; name: string; sku: string; category: string; unit_cost: number; status: string };
   const PAGE = 1000;
-  const products: Array<{ id: string; name: string; sku: string; category: string; unit_cost: number; status: string }> = [];
+  const products: ProductRow[] = [];
   for (let from = 0; from < 50000; from += PAGE) {
     const { data, error } = await supabase
       .from("products")
@@ -115,7 +116,7 @@ export async function getProjections(): Promise<ProjectionRow[]> {
       .range(from, from + PAGE - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
-    products.push(...(data as never));
+    products.push(...(data as unknown as ProductRow[]));
     if (data.length < PAGE) break;
   }
 

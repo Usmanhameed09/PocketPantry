@@ -128,12 +128,20 @@ export async function getProjections(): Promise<ProjectionRow[]> {
     machineCountByProduct.set(pid, (machineCountByProduct.get(pid) || 0) + 1);
   }
 
-  const rows: ProjectionRow[] = products.map((p) => {
+  const rows: ProjectionRow[] = [];
+  for (const p of products) {
     const productId = p.id as string;
     const velocity = velocityByProduct.get(productId) || 0;
+    const override = overrides.get(productId) ?? null;
+
+    // Skip products with zero projected demand AND no manual override —
+    // they have no sales history and don't belong on the projections view.
+    // (They're still tracked in the catalog and will appear automatically
+    // once they start selling or get an override.)
+    if (velocity === 0 && override === null) continue;
+
     const machineCount = machineCountByProduct.get(productId) || 0;
     const mult = seasonal.get(`${p.category}::${month}`) ?? 1.0;
-    const override = overrides.get(productId) ?? null;
     const baseProjection = velocity * 30 * mult;
     const projectedUnits = override !== null ? override : Math.round(baseProjection * 10) / 10;
     const cost = (p.unit_cost as number) || 0;
@@ -141,17 +149,13 @@ export async function getProjections(): Promise<ProjectionRow[]> {
     let explanation: string;
     if (override !== null) {
       explanation = `Manual override: ${override} units/30d`;
-    } else if (velocity === 0) {
-      explanation = machineCount === 0
-        ? "Not in any machine yet"
-        : "No sales recorded in last 30 days";
     } else {
       const multText = mult !== 1.0 ? ` × ${mult.toFixed(2)} seasonal` : "";
       const machineText = machineCount > 1 ? ` across ${machineCount} machines` : "";
       explanation = `${velocity.toFixed(2)} units/day${machineText}${multText} × 30d`;
     }
 
-    return {
+    rows.push({
       productId,
       productName: p.name as string,
       sku: p.sku as string,
@@ -163,8 +167,8 @@ export async function getProjections(): Promise<ProjectionRow[]> {
       projectedCogs30d: Math.round(projectedUnits * cost * 100) / 100,
       override,
       explanation,
-    };
-  });
+    });
+  }
 
   return rows;
 }

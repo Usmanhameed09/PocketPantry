@@ -36,34 +36,64 @@ export default function BuyListPage() {
   const generate = useCallback(async () => {
     setGenerating(true);
     setResultMsg(null);
-    const res = await fetch("/api/inventory/buy-list", { cache: "no-store" });
-    const data = await res.json();
-    if (data.success) {
-      setGroups(data.data.vendorGroups || []);
-      setHorizonDays(data.data.horizonDays);
-      setSafetyDays(data.data.safetyStockDays);
-      setGeneratedAt(data.data.generatedAt);
-      setExpanded(new Set(data.data.vendorGroups.map((g: VendorGroup) => g.vendor)));
-    } else {
-      setResultMsg({ text: data.error || "Failed", type: "err" });
+    setGroups([]);
+    try {
+      const res = await fetch("/api/inventory/buy-list", { cache: "no-store" });
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        const text = await res.text();
+        throw new Error(`Server returned ${res.status} (not JSON): ${text.slice(0, 200)}`);
+      }
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || `API returned success=false`);
+      }
+      const vendorGroups = data.data?.vendorGroups || [];
+      setGroups(vendorGroups);
+      setHorizonDays(data.data?.horizonDays || 7);
+      setSafetyDays(data.data?.safetyStockDays || 5);
+      setGeneratedAt(data.data?.generatedAt || new Date().toISOString());
+      setExpanded(new Set(vendorGroups.map((g: VendorGroup) => g.vendor)));
+      if (vendorGroups.length === 0) {
+        setResultMsg({
+          text: `Buy list generated — but nothing needs ordering right now. (${data.data?.lines?.length || 0} products analyzed; all are above safety stock or have zero velocity.)`,
+          type: "ok",
+        });
+      }
+    } catch (err) {
+      setResultMsg({
+        text: err instanceof Error ? err.message : "Failed to generate buy list",
+        type: "err",
+      });
+    } finally {
+      setGenerating(false);
     }
-    setGenerating(false);
   }, []);
 
   async function convertToPOs() {
     setConverting(true);
-    const res = await fetch("/api/inventory/buy-list", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    const data = await res.json();
-    setConverting(false);
-    if (data.success) {
+    try {
+      const res = await fetch("/api/inventory/buy-list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        const text = await res.text();
+        throw new Error(`Server returned ${res.status} (not JSON): ${text.slice(0, 200)}`);
+      }
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || "API failed");
       setResultMsg({ text: `Created ${data.poIds.length} purchase order draft${data.poIds.length === 1 ? "" : "s"}.`, type: "ok" });
       setGroups([]);
-    } else {
-      setResultMsg({ text: data.error || "Failed", type: "err" });
+    } catch (err) {
+      setResultMsg({
+        text: err instanceof Error ? err.message : "Failed to convert to POs",
+        type: "err",
+      });
+    } finally {
+      setConverting(false);
     }
   }
 

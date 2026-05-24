@@ -13,6 +13,7 @@ import { listAlerts } from "@/lib/alerts-engine";
 
 export type AssistantContext = {
   generatedAt: string;
+  dataWindow: string;
   totals: {
     products: number;
     machines: number;
@@ -22,15 +23,17 @@ export type AssistantContext = {
   };
   topSellers: Array<{
     name: string; category: string; velocityPerDay: number;
-    monthlyProjection: number; margin: number | null;
+    monthlyProjection: number; margin: number | null; activeMachines: number;
   }>;
   underperformers: Array<{
-    name: string; category: string; weeklyAvg: number; margin: number | null; reason: string;
+    name: string; category: string; monthlyUnits: number; margin: number | null; reason: string;
   }>;
   alerts: Array<{ severity: string; message: string }>;
-  categoryBreakdown: Array<{ category: string; count: number; totalVelocity: number }>;
-  machines: Array<{ name: string; status: string; productCount: number; topProducts: string[] }>;
-  recentTrends: { lastWeekVsPrev: number; spikes: string[]; declines: string[] };
+  categoryBreakdown: Array<{ category: string; count: number; totalDailyVelocity: number; monthlyUnits: number }>;
+  machines: Array<{
+    name: string; status: string; productCount: number; dailySales: number;
+    topProducts: string[]; categoryMix: Record<string, number>;
+  }>;
 };
 
 export async function buildAssistantContext(): Promise<AssistantContext> {
@@ -50,11 +53,23 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
   const productCount = productsRes.count || products.length;
   const machines = machinesRes.data || [];
 
-  // Top sellers by velocity
+  // Top sellers by velocity — uses Nayax's daily_sales_rate (30-day avg)
   const withVelocity = projections.filter((p) => p.velocityPerDay > 0);
+  // Per-product machine count
+  const { data: machineCounts } = await supabase
+    .from("machine_inventory")
+    .select("product_id, machine_id")
+    .gt("daily_sales_rate", 0);
+  const machinesPerProduct = new Map<string, Set<string>>();
+  for (const m of machineCounts || []) {
+    const pid = m.product_id as string;
+    if (!machinesPerProduct.has(pid)) machinesPerProduct.set(pid, new Set());
+    machinesPerProduct.get(pid)!.add(m.machine_id as string);
+  }
+
   const topSellers = withVelocity
     .sort((a, b) => b.velocityPerDay - a.velocityPerDay)
-    .slice(0, 15)
+    .slice(0, 20)
     .map((p) => {
       const product = products.find((pr) => pr.id === p.productId);
       const price = product?.default_vend_price as number | null;
@@ -66,87 +81,70 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
         velocityPerDay: Math.round(p.velocityPerDay * 100) / 100,
         monthlyProjection: p.projectedUnits30d,
         margin,
+        activeMachines: machinesPerProduct.get(p.productId)?.size || 0,
       };
     });
 
-  // Category breakdown
-  const catMap = new Map<string, { count: number; totalVelocity: number }>();
+  // Category breakdown — by sales (real velocity from Nayax)
+  const catMap = new Map<string, { count: number; totalDailyVelocity: number }>();
   for (const p of products) {
     const cat = (p.category as string) || "Snacks";
     const v = projections.find((x) => x.productId === p.id)?.velocityPerDay || 0;
-    const e = catMap.get(cat) || { count: 0, totalVelocity: 0 };
+    const e = catMap.get(cat) || { count: 0, totalDailyVelocity: 0 };
     e.count++;
-    e.totalVelocity += v;
+    e.totalDailyVelocity += v;
     catMap.set(cat, e);
   }
   const categoryBreakdown = Array.from(catMap.entries())
     .map(([category, e]) => ({
       category,
       count: e.count,
-      totalVelocity: Math.round(e.totalVelocity * 100) / 100,
+      totalDailyVelocity: Math.round(e.totalDailyVelocity * 100) / 100,
+      monthlyUnits: Math.round(e.totalDailyVelocity * 30),
     }))
-    .sort((a, b) => b.totalVelocity - a.totalVelocity);
+    .sort((a, b) => b.totalDailyVelocity - a.totalDailyVelocity);
 
-  // Recent trends — compare last week vs prior week
-  const since = new Date();
-  since.setDate(since.getDate() - 14);
-  const { data: moves } = await supabase
-    .from("stock_movements")
-    .select("product_id, qty, created_at, products(name)")
-    .eq("reason", "sale_estimate")
-    .gte("created_at", since.toISOString());
-  const lastWeekCut = new Date();
-  lastWeekCut.setDate(lastWeekCut.getDate() - 7);
-  const lastWeek = new Map<string, { name: string; units: number }>();
-  const prevWeek = new Map<string, { name: string; units: number }>();
-  for (const m of moves || []) {
-    const pid = m.product_id as string;
-    const pname = ((m.products as unknown) as { name?: string })?.name || pid;
-    const created = new Date(m.created_at as string);
-    const target = created >= lastWeekCut ? lastWeek : prevWeek;
-    const e = target.get(pid) || { name: pname, units: 0 };
-    e.units += Math.abs(m.qty as number);
-    target.set(pid, e);
-  }
-  let lastTotal = 0; let prevTotal = 0;
-  const spikes: string[] = []; const declines: string[] = [];
-  for (const [pid, lw] of lastWeek) {
-    lastTotal += lw.units;
-    const pw = prevWeek.get(pid);
-    if (!pw || pw.units < 3) continue;
-    const ratio = lw.units / pw.units;
-    if (ratio >= 1.3) spikes.push(`${lw.name} (+${Math.round((ratio - 1) * 100)}%)`);
-    else if (ratio <= 0.7) declines.push(`${lw.name} (-${Math.round((1 - ratio) * 100)}%)`);
-  }
-  for (const pw of prevWeek.values()) prevTotal += pw.units;
-  const lastWeekVsPrev = prevTotal > 0 ? Math.round((lastTotal / prevTotal - 1) * 1000) / 10 : 0;
-
-  // Per-machine top products
+  // Per-machine breakdown — uses Nayax daily_sales_rate (30-day avg)
   const { data: machineInv } = await supabase
     .from("machine_inventory")
-    .select("machine_id, product_id, daily_sales_rate, products(name)");
-  const byMachine = new Map<string, Array<{ name: string; rate: number }>>();
+    .select("machine_id, product_id, daily_sales_rate, products(name, category)");
+  const byMachine = new Map<string, Array<{ name: string; category: string; rate: number }>>();
   for (const m of machineInv || []) {
     const mid = m.machine_id as string;
+    const prod = (m.products as unknown) as { name?: string; category?: string } | null;
     const arr = byMachine.get(mid) || [];
     arr.push({
-      name: ((m.products as unknown) as { name?: string })?.name || "?",
+      name: prod?.name || "?",
+      category: prod?.category || "Snacks",
       rate: (m.daily_sales_rate as number) || 0,
     });
     byMachine.set(mid, arr);
   }
   const machineRows = machines.map((m) => {
-    const items = (byMachine.get(m.id as string) || []).sort((a, b) => b.rate - a.rate);
+    const items = (byMachine.get(m.id as string) || []).filter((x) => x.rate > 0).sort((a, b) => b.rate - a.rate);
+    const categoryMix: Record<string, number> = {};
+    let dailySales = 0;
+    for (const it of items) {
+      categoryMix[it.category] = (categoryMix[it.category] || 0) + it.rate;
+      dailySales += it.rate;
+    }
+    // Round category mix
+    for (const k of Object.keys(categoryMix)) {
+      categoryMix[k] = Math.round(categoryMix[k] * 10) / 10;
+    }
     return {
       name: m.name as string,
       status: m.status as string,
       productCount: items.length,
-      topProducts: items.slice(0, 5).map((x) => `${x.name} (${x.rate.toFixed(1)}/d)`),
+      dailySales: Math.round(dailySales * 10) / 10,
+      topProducts: items.slice(0, 8).map((x) => `${x.name} (${x.rate.toFixed(1)}/d)`),
+      categoryMix,
     };
   });
 
   return {
     generatedAt: new Date().toISOString(),
+    dataWindow: "Velocity figures are Nayax's 30-day daily-sales averages per machine, summed across the fleet.",
     totals: {
       products: productCount,
       machines: machines.length,
@@ -155,20 +153,15 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       underperformers: underperformersRaw.length,
     },
     topSellers,
-    underperformers: underperformersRaw.slice(0, 15).map((u) => ({
+    underperformers: underperformersRaw.slice(0, 20).map((u) => ({
       name: u.productName,
       category: u.category,
-      weeklyAvg: u.averageWeekly,
+      monthlyUnits: Math.round(u.averageWeekly * 4),
       margin: u.margin,
       reason: u.reason,
     })),
-    alerts: alerts.slice(0, 15).map((a) => ({ severity: a.severity, message: a.message })),
+    alerts: alerts.slice(0, 20).map((a) => ({ severity: a.severity, message: a.message })),
     categoryBreakdown,
     machines: machineRows,
-    recentTrends: {
-      lastWeekVsPrev,
-      spikes: spikes.slice(0, 10),
-      declines: declines.slice(0, 10),
-    },
   };
 }

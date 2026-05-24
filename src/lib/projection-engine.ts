@@ -109,27 +109,29 @@ export async function getProjections(): Promise<ProjectionRow[]> {
 
   if (!products?.length) return [];
 
-  // Pull last N weeks of sale_estimate movements grouped by product.
-  const since = new Date();
-  since.setDate(since.getDate() - settings.windowWeeks * 7);
-  const { data: movements } = await supabase
-    .from("stock_movements")
-    .select("product_id, qty, created_at")
-    .eq("reason", "sale_estimate")
-    .gte("created_at", since.toISOString());
+  // Velocity source: machine_inventory.daily_sales_rate is the per-machine
+  // daily rate that Nayax calculates over its own 30-day lookback window.
+  // We sum across machines to get fleet-wide per-product velocity. This is
+  // far more accurate than aggregating our own sparse sale_estimate ledger
+  // which only has a few sync samples.
+  const { data: machineInv } = await supabase
+    .from("machine_inventory")
+    .select("product_id, daily_sales_rate");
 
-  const unitsSoldByProduct = new Map<string, number>();
-  for (const m of movements || []) {
+  const velocityByProduct = new Map<string, number>();
+  const machineCountByProduct = new Map<string, number>();
+  for (const m of machineInv || []) {
     const pid = m.product_id as string;
-    const qty = Math.abs(m.qty as number);
-    unitsSoldByProduct.set(pid, (unitsSoldByProduct.get(pid) || 0) + qty);
+    const rate = (m.daily_sales_rate as number) || 0;
+    if (rate <= 0) continue;
+    velocityByProduct.set(pid, (velocityByProduct.get(pid) || 0) + rate);
+    machineCountByProduct.set(pid, (machineCountByProduct.get(pid) || 0) + 1);
   }
 
-  const windowDays = settings.windowWeeks * 7;
   const rows: ProjectionRow[] = products.map((p) => {
     const productId = p.id as string;
-    const unitsSold = unitsSoldByProduct.get(productId) || 0;
-    const velocity = windowDays > 0 ? unitsSold / windowDays : 0;
+    const velocity = velocityByProduct.get(productId) || 0;
+    const machineCount = machineCountByProduct.get(productId) || 0;
     const mult = seasonal.get(`${p.category}::${month}`) ?? 1.0;
     const override = overrides.get(productId) ?? null;
     const baseProjection = velocity * 30 * mult;
@@ -140,10 +142,13 @@ export async function getProjections(): Promise<ProjectionRow[]> {
     if (override !== null) {
       explanation = `Manual override: ${override} units/30d`;
     } else if (velocity === 0) {
-      explanation = `No recent sales (${windowDays}d window)`;
+      explanation = machineCount === 0
+        ? "Not in any machine yet"
+        : "No sales recorded in last 30 days";
     } else {
       const multText = mult !== 1.0 ? ` × ${mult.toFixed(2)} seasonal` : "";
-      explanation = `${velocity.toFixed(2)} units/day${multText} × 30d`;
+      const machineText = machineCount > 1 ? ` across ${machineCount} machines` : "";
+      explanation = `${velocity.toFixed(2)} units/day${machineText}${multText} × 30d`;
     }
 
     return {

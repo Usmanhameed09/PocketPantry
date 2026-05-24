@@ -268,32 +268,32 @@ export async function findUnderperformers(): Promise<Underperformer[]> {
     .eq("status", "Active");
   if (!products?.length) return [];
 
-  const since = new Date();
-  since.setDate(since.getDate() - 28);
-  const { data: moves } = await supabase
-    .from("stock_movements")
-    .select("product_id, qty, created_at")
-    .eq("reason", "sale_estimate")
-    .gte("created_at", since.toISOString());
+  // Source of truth: machine_inventory.daily_sales_rate (Nayax 30-day average).
+  // Sum across all machines to get fleet-wide velocity per product.
+  const { data: invRows } = await supabase
+    .from("machine_inventory")
+    .select("product_id, daily_sales_rate");
 
-  const unitsByProduct = new Map<string, number>();
-  for (const m of moves || []) {
-    unitsByProduct.set(
-      m.product_id as string,
-      (unitsByProduct.get(m.product_id as string) || 0) + Math.abs(m.qty as number)
-    );
+  const dailyByProduct = new Map<string, number>();
+  for (const m of invRows || []) {
+    const pid = m.product_id as string;
+    dailyByProduct.set(pid, (dailyByProduct.get(pid) || 0) + ((m.daily_sales_rate as number) || 0));
   }
 
   const out: Underperformer[] = [];
   for (const p of products) {
-    const units = unitsByProduct.get(p.id as string) || 0;
-    const weekly = units / 4;
+    const daily = dailyByProduct.get(p.id as string) || 0;
+    const weekly = daily * 7;
+    const monthly = daily * 30;
     const cost = (p.unit_cost as number) || 0;
     const price = (p.default_vend_price as number) || 0;
     const margin = price > 0 ? ((price - cost) / price) * 100 : null;
 
+    // Skip products that aren't in any machine (no data ≠ underperforming)
+    if (daily === 0) continue;
+
     const reasons: string[] = [];
-    if (weekly < WEEKLY_VOLUME_FLOOR) reasons.push(`only ${weekly.toFixed(1)} units/week`);
+    if (weekly < WEEKLY_VOLUME_FLOOR) reasons.push(`only ${weekly.toFixed(1)} units/week (~${monthly.toFixed(0)}/month)`);
     if (margin !== null && margin < MARGIN_FLOOR_PCT) reasons.push(`${margin.toFixed(0)}% margin`);
     if (reasons.length === 0) continue;
 
@@ -301,7 +301,7 @@ export async function findUnderperformers(): Promise<Underperformer[]> {
       productId: p.id as string,
       productName: p.name as string,
       category: p.category as string,
-      unitsLast4Weeks: units,
+      unitsLast4Weeks: Math.round(monthly),
       averageWeekly: Math.round(weekly * 10) / 10,
       margin: margin !== null ? Math.round(margin) : null,
       reason: reasons.join("; "),

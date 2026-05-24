@@ -100,14 +100,26 @@ export async function getProjections(): Promise<ProjectionRow[]> {
   const overrides = await getOverridesByProduct();
   const month = new Date().getMonth() + 1;
 
-  const { data: products } = await supabase
-    .from("products")
-    .select("id, name, sku, category, unit_cost, status")
-    .eq("company_id", companyId)
-    .neq("status", "PhaseOut")
-    .order("name");
+  // Supabase enforces a 1000-row page cap. The catalog is now 6k+ after the
+  // supplier UPC import, so we paginate to scan the whole thing — otherwise
+  // products beyond row 1000 never get a velocity match.
+  const PAGE = 1000;
+  const products: Array<{ id: string; name: string; sku: string; category: string; unit_cost: number; status: string }> = [];
+  for (let from = 0; from < 50000; from += PAGE) {
+    const { data, error } = await supabase
+      .from("products")
+      .select("id, name, sku, category, unit_cost, status")
+      .eq("company_id", companyId)
+      .neq("status", "PhaseOut")
+      .order("name")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    products.push(...(data as never));
+    if (data.length < PAGE) break;
+  }
 
-  if (!products?.length) return [];
+  if (!products.length) return [];
 
   // Velocity source: machine_inventory.daily_sales_rate is the per-machine
   // daily rate that Nayax calculates over its own 30-day lookback window.

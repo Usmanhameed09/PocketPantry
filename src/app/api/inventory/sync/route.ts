@@ -12,6 +12,46 @@ export const maxDuration = 300;
 const SCRAPER_API_URL = process.env.SCRAPER_API_URL || "https://arbersaas.duckdns.org/api2";
 
 /**
+ * Bulk-upsert daily_sales rows from Nayax's per-day breakdown. Each row is
+ * (product, machine, date) → units sold that day. Upsert on conflict so
+ * re-syncing the same day overwrites with the latest count rather than
+ * duplicating.
+ */
+async function bulkUpsertDailySales(
+  rows: Array<{ productId: string; machineId: string; date: string; units: number; revenue: number }>
+) {
+  if (rows.length === 0) return 0;
+  const supabase = createServerClient();
+  const insertRows = rows
+    .filter((r) => r.units > 0)
+    .map((r) => ({
+      product_id: r.productId,
+      machine_id: r.machineId,
+      sale_date: r.date,
+      units_sold: r.units,
+      revenue: r.revenue,
+      updated_at: new Date().toISOString(),
+    }));
+  let written = 0;
+  for (let i = 0; i < insertRows.length; i += 500) {
+    const chunk = insertRows.slice(i, i + 500);
+    const { error } = await supabase
+      .from("daily_sales")
+      .upsert(chunk, { onConflict: "product_id,machine_id,sale_date" });
+    if (error) {
+      // Table might not exist yet — log and continue (sync still useful)
+      if (error.code === "PGRST205" || error.code === "42P01") {
+        console.warn("[sync] daily_sales table missing — run migration 003_daily_sales.sql");
+        return 0;
+      }
+      throw error;
+    }
+    written += chunk.length;
+  }
+  return written;
+}
+
+/**
  * Bulk-write sale_estimate ledger rows for the projection engine.
  * Skips (product, machine) pairs that already have a row in the last 23h
  * so re-running the sync the same day doesn't double-count.
@@ -63,6 +103,8 @@ interface NayaxProduct {
   sold_since_refill: number;
   daily_sales_rate: number;
   sale_count: number;
+  daily_breakdown?: Record<string, number>;  // {"YYYY-MM-DD": units}
+  daily_revenue?: Record<string, number>;
 }
 
 interface NayaxMachineStatus {
@@ -116,6 +158,7 @@ export async function POST() {
     let inventoryRows = 0;
     const errors: string[] = [];
     const saleEstimates: Array<{ productId: string; machineId: string; dailySalesRate: number }> = [];
+    const dailySales: Array<{ productId: string; machineId: string; date: string; units: number; revenue: number }> = [];
 
     for (const m of machines) {
       try {
@@ -147,6 +190,14 @@ export async function POST() {
               machineId,
               dailySalesRate: p.daily_sales_rate,
             });
+
+            // Collect daily breakdown rows for weekly-trend analysis
+            if (p.daily_breakdown) {
+              for (const [date, units] of Object.entries(p.daily_breakdown)) {
+                const rev = (p.daily_revenue && p.daily_revenue[date]) || 0;
+                dailySales.push({ productId, machineId, date, units, revenue: rev });
+              }
+            }
           } catch (err: any) {
             errors.push(`Product ${p.name}: ${err.message}`);
           }
@@ -166,12 +217,21 @@ export async function POST() {
       errors.push(`Ledger write: ${err.message}`);
     }
 
+    // Bulk-upsert daily_sales rows for weekly trends
+    let dailySalesWritten = 0;
+    try {
+      dailySalesWritten = await bulkUpsertDailySales(dailySales);
+    } catch (err: any) {
+      errors.push(`daily_sales: ${err.message}`);
+    }
+
     return NextResponse.json({
       success: true,
       machinesSynced,
       productsProcessed: productsCreated,
       inventoryRows,
       ledgerWrites,
+      dailySalesWritten,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error: any) {

@@ -34,6 +34,16 @@ export type AssistantContext = {
     name: string; status: string; productCount: number; dailySales: number;
     topProducts: string[]; categoryMix: Record<string, number>;
   }>;
+  weeklyTrends: {
+    available: boolean;
+    daysOfData: number;
+    lastWeekTotal: number;
+    priorWeekTotal: number;
+    fleetWoWPct: number;
+    spikes: Array<{ name: string; lastWeek: number; priorWeek: number; pct: number }>;
+    declines: Array<{ name: string; lastWeek: number; priorWeek: number; pct: number }>;
+    topSellersThisWeek: Array<{ name: string; units: number }>;
+  };
 };
 
 export async function buildAssistantContext(): Promise<AssistantContext> {
@@ -142,9 +152,14 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     };
   });
 
+  // Weekly trends — from daily_sales table (per-day units)
+  const weeklyTrends = await buildWeeklyTrends(supabase);
+
   return {
     generatedAt: new Date().toISOString(),
-    dataWindow: "Velocity figures are Nayax's 30-day daily-sales averages per machine, summed across the fleet.",
+    dataWindow: weeklyTrends.available
+      ? `Velocity = Nayax 30-day average. Weekly trends pulled from daily_sales (last ${weeklyTrends.daysOfData} days of per-day data).`
+      : "Velocity = Nayax 30-day average. Weekly trends not yet available (run the sync first).",
     totals: {
       products: productCount,
       machines: machines.length,
@@ -163,5 +178,91 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     alerts: alerts.slice(0, 20).map((a) => ({ severity: a.severity, message: a.message })),
     categoryBreakdown,
     machines: machineRows,
+    weeklyTrends,
+  };
+}
+
+async function buildWeeklyTrends(supabase: ReturnType<typeof createServerClient>) {
+  const today = new Date();
+  const sinceDate = new Date(today);
+  sinceDate.setDate(sinceDate.getDate() - 14);
+  const sinceStr = sinceDate.toISOString().slice(0, 10);
+
+  const { data, error } = await supabase
+    .from("daily_sales")
+    .select("product_id, sale_date, units_sold, products(name)")
+    .gte("sale_date", sinceStr);
+
+  if (error || !data || data.length === 0) {
+    return {
+      available: false,
+      daysOfData: 0,
+      lastWeekTotal: 0,
+      priorWeekTotal: 0,
+      fleetWoWPct: 0,
+      spikes: [] as Array<{ name: string; lastWeek: number; priorWeek: number; pct: number }>,
+      declines: [] as Array<{ name: string; lastWeek: number; priorWeek: number; pct: number }>,
+      topSellersThisWeek: [] as Array<{ name: string; units: number }>,
+    };
+  }
+
+  const cutoff = new Date(today);
+  cutoff.setDate(cutoff.getDate() - 7);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const lastWeek = new Map<string, { name: string; units: number }>();
+  const priorWeek = new Map<string, { name: string; units: number }>();
+  const allDates = new Set<string>();
+
+  for (const r of data) {
+    const pid = r.product_id as string;
+    const date = r.sale_date as string;
+    const units = (r.units_sold as number) || 0;
+    const name = ((r.products as unknown) as { name?: string } | null)?.name || pid;
+    allDates.add(date);
+    const target = date >= cutoffStr ? lastWeek : priorWeek;
+    const e = target.get(pid) || { name, units: 0 };
+    e.units += units;
+    target.set(pid, e);
+  }
+
+  let lastTotal = 0;
+  let priorTotal = 0;
+  for (const e of lastWeek.values()) lastTotal += e.units;
+  for (const e of priorWeek.values()) priorTotal += e.units;
+
+  const spikes: Array<{ name: string; lastWeek: number; priorWeek: number; pct: number }> = [];
+  const declines: Array<{ name: string; lastWeek: number; priorWeek: number; pct: number }> = [];
+
+  for (const [pid, lw] of lastWeek) {
+    const pw = priorWeek.get(pid);
+    const priorUnits = pw?.units || 0;
+    // Need at least 3 units in prior week to be a meaningful trend
+    if (priorUnits < 3) continue;
+    const pct = Math.round(((lw.units - priorUnits) / priorUnits) * 1000) / 10;
+    if (pct >= 30) spikes.push({ name: lw.name, lastWeek: lw.units, priorWeek: priorUnits, pct });
+    else if (pct <= -30) declines.push({ name: lw.name, lastWeek: lw.units, priorWeek: priorUnits, pct });
+  }
+
+  spikes.sort((a, b) => b.pct - a.pct);
+  declines.sort((a, b) => a.pct - b.pct);
+
+  const topSellers = Array.from(lastWeek.values())
+    .sort((a, b) => b.units - a.units)
+    .slice(0, 10)
+    .map((e) => ({ name: e.name, units: e.units }));
+
+  const fleetWoWPct = priorTotal > 0
+    ? Math.round(((lastTotal - priorTotal) / priorTotal) * 1000) / 10
+    : 0;
+
+  return {
+    available: true,
+    daysOfData: allDates.size,
+    lastWeekTotal: lastTotal,
+    priorWeekTotal: priorTotal,
+    fleetWoWPct,
+    spikes: spikes.slice(0, 10),
+    declines: declines.slice(0, 10),
+    topSellersThisWeek: topSellers,
   };
 }

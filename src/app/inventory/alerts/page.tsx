@@ -4,12 +4,13 @@ import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import InventoryTabs from "../InventoryTabs";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { Loader2, AlertCircle, AlertTriangle, Info, X, Check, Bell } from "lucide-react";
+import { Loader2, AlertCircle, AlertTriangle, Info, X, Check, Bell, WifiOff } from "lucide-react";
 import { PAGE_BG, CARD, EmptyState, LoadingBox, BtnPrimary, BtnSecondary, Badge, pageContainer, StatCard } from "../ui";
 
 type Alert = {
   id: string;
   type: "low_stock" | "spike" | "expiry" | "underperformer";
+  kind: "low_stock" | "spike" | "machine_offline" | "expiry" | "underperformer";
   productId: string | null;
   productName: string | null;
   machineId: string | null;
@@ -18,6 +19,7 @@ type Alert = {
   message: string;
   daysRemaining: number | null;
   recommendedQty: number | null;
+  ageHours: number | null;
   status: "open" | "acknowledged" | "dismissed" | "resolved";
   createdAt: string;
 };
@@ -108,22 +110,31 @@ export default function AlertsPage() {
           ) : (
             <div style={{ display: "grid", gap: 8 }}>
               {alerts.map((a) => {
+                const isOffline = a.kind === "machine_offline";
                 const meta = SEV_META[a.severity];
-                const Icon = meta.icon;
+                // Use a WifiOff icon for offline alerts; severity icon otherwise
+                const Icon = isOffline ? WifiOff : meta.icon;
+                const accentColor = isOffline ? "#7c3aed" : meta.color;
+                const accentBg = isOffline ? "#f5f3ff" : meta.bg;
+                const accentBorder = isOffline ? "#ddd6fe" : meta.border;
                 return (
                   <div key={a.id} style={{
-                    background: a.status === "open" ? meta.bg : "#fff",
-                    border: `1px solid ${a.status === "open" ? meta.border : "#e2e8f0"}`,
+                    background: a.status === "open" ? accentBg : "#fff",
+                    border: `1px solid ${a.status === "open" ? accentBorder : "#e2e8f0"}`,
                     borderRadius: 12, padding: 16, display: "flex", alignItems: "flex-start", gap: 12,
                     opacity: a.status === "open" ? 1 : 0.7,
                   }}>
-                    <Icon size={20} color={meta.color} style={{ flexShrink: 0, marginTop: 2 }} />
+                    <Icon size={20} color={accentColor} style={{ flexShrink: 0, marginTop: 2 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>
                           {a.productName || a.machineName || a.type}
                         </span>
-                        <Badge color={meta.badge}>{a.severity}</Badge>
+                        {isOffline ? (
+                          <Badge color="indigo">MACHINE OFFLINE</Badge>
+                        ) : (
+                          <Badge color={meta.badge}>{a.severity}</Badge>
+                        )}
                         {a.status !== "open" && <Badge color="gray">{a.status}</Badge>}
                       </div>
                       <p style={{ fontSize: 14, color: "#334155", margin: 0 }}>{a.message}</p>
@@ -131,6 +142,7 @@ export default function AlertsPage() {
                         <span>{new Date(a.createdAt).toLocaleString()}</span>
                         {a.daysRemaining !== null && <span>· {a.daysRemaining}d remaining</span>}
                         {a.recommendedQty !== null && <span>· Buy {a.recommendedQty}</span>}
+                        {a.ageHours !== null && <span>· {a.ageHours.toFixed(1)}h since last data</span>}
                       </div>
                     </div>
                     {a.status === "open" && (

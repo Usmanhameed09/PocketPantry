@@ -11,6 +11,7 @@ import { getProjections, getProjectionSettings } from "@/lib/projection-engine";
 export type Alert = {
   id: string;
   type: "low_stock" | "spike" | "expiry" | "underperformer";
+  kind: "low_stock" | "spike" | "machine_offline" | "expiry" | "underperformer";
   productId: string | null;
   productName: string | null;
   machineId: string | null;
@@ -19,6 +20,7 @@ export type Alert = {
   message: string;
   daysRemaining: number | null;
   recommendedQty: number | null;
+  ageHours: number | null;
   status: "open" | "acknowledged" | "dismissed" | "resolved";
   createdAt: string;
 };
@@ -47,13 +49,132 @@ async function getThresholdDaysByProduct(): Promise<Map<string, number>> {
   return map;
 }
 
-export async function scanAndPersistAlerts(): Promise<{ created: number; dismissed: number }> {
+const OFFLINE_HOURS_THRESHOLD = Number(process.env.MACHINE_OFFLINE_HOURS) || 24;
+
+/**
+ * Detect machines that haven't reported any inventory update in the last
+ * MACHINE_OFFLINE_HOURS hours. We can't get this directly from Nayax/Chinese
+ * APIs yet (we asked for the access), so we infer from "last time the sync
+ * wrote machine_inventory rows for this machine".
+ *
+ * Returns the number of alerts created + machines marked offline.
+ */
+async function scanOfflineMachines(): Promise<{ created: number; marked: number }> {
+  const companyId = await ensureDefaultCompany();
+  const supabase = createServerClient();
+
+  const { data: machines } = await supabase
+    .from("machines")
+    .select("id, name, status, last_sync_at")
+    .eq("company_id", companyId);
+  if (!machines?.length) return { created: 0, marked: 0 };
+
+  // Find latest updated_at per machine from machine_inventory (more reliable
+  // than machines.last_sync_at since the sync writes there each run).
+  const { data: invRows } = await supabase
+    .from("machine_inventory")
+    .select("machine_id, updated_at")
+    .in("machine_id", machines.map((m) => m.id as string))
+    .order("updated_at", { ascending: false });
+
+  const latestByMachine = new Map<string, string>();
+  for (const r of invRows || []) {
+    const mid = r.machine_id as string;
+    if (!latestByMachine.has(mid)) {
+      latestByMachine.set(mid, r.updated_at as string);
+    }
+  }
+
+  // Existing open offline alerts so we don't duplicate
+  const { data: openAlertsRaw } = await supabase
+    .from("alerts")
+    .select("id, machine_id, status, metadata")
+    .eq("company_id", companyId)
+    .eq("status", "open")
+    .not("machine_id", "is", null);
+  const openOfflineByMachine = new Set(
+    (openAlertsRaw || [])
+      .filter((a) => ((a.metadata as { kind?: string } | null)?.kind) === "machine_offline")
+      .map((a) => a.machine_id as string)
+  );
+
+  const now = Date.now();
+  const thresholdMs = OFFLINE_HOURS_THRESHOLD * 3600 * 1000;
+  const newAlerts: Array<Record<string, unknown>> = [];
+  const offlineIds: string[] = [];
+  const recoveredIds: string[] = [];
+
+  for (const m of machines) {
+    const machineId = m.id as string;
+    // Prefer machine_inventory.updated_at; fall back to machines.last_sync_at
+    const latestStr = latestByMachine.get(machineId) || (m.last_sync_at as string | null);
+    if (!latestStr) {
+      // Never synced — skip (different problem; could fire later if needed)
+      continue;
+    }
+    const latest = new Date(latestStr).getTime();
+    const ageMs = now - latest;
+    const ageHours = Math.round(ageMs / 36000) / 100; // 2 decimals
+
+    if (ageMs > thresholdMs) {
+      // Offline — mark + alert (if not already alerted)
+      offlineIds.push(machineId);
+      if (!openOfflineByMachine.has(machineId)) {
+        newAlerts.push({
+          company_id: companyId,
+          type: "low_stock", // reuse existing enum; metadata.kind distinguishes
+          machine_id: machineId,
+          severity: ageHours > 72 ? "high" : "medium",
+          message: `${m.name} hasn't reported in ${ageHours.toFixed(1)} hours — likely offline or unplugged.`,
+          metadata: { kind: "machine_offline", ageHours, lastSeen: latestStr },
+        });
+      }
+    } else if (m.status === "offline") {
+      // Came back online — mark healthy + resolve any open offline alerts
+      recoveredIds.push(machineId);
+    }
+  }
+
+  // Update statuses
+  if (offlineIds.length > 0) {
+    await supabase.from("machines").update({ status: "offline" }).in("id", offlineIds);
+  }
+  if (recoveredIds.length > 0) {
+    await supabase.from("machines").update({ status: "healthy" }).in("id", recoveredIds);
+    // Resolve open offline alerts for recovered machines
+    const idsToResolve = (openAlertsRaw || [])
+      .filter((a) =>
+        ((a.metadata as { kind?: string } | null)?.kind) === "machine_offline" &&
+        recoveredIds.includes(a.machine_id as string)
+      )
+      .map((a) => a.id as string);
+    if (idsToResolve.length > 0) {
+      await supabase
+        .from("alerts")
+        .update({ status: "resolved", resolved_at: new Date().toISOString() })
+        .in("id", idsToResolve);
+    }
+  }
+
+  let created = 0;
+  if (newAlerts.length > 0) {
+    const { error } = await supabase.from("alerts").insert(newAlerts);
+    if (!error) created = newAlerts.length;
+  }
+
+  return { created, marked: offlineIds.length };
+}
+
+export async function scanAndPersistAlerts(): Promise<{ created: number; dismissed: number; offlineCreated?: number; offlineMarked?: number }> {
   const companyId = await ensureDefaultCompany();
   const supabase = createServerClient();
   const projections = await getProjections();
   const settings = await getProjectionSettings();
   const thresholds = await getThresholdDaysByProduct();
   const categoryDefaults = (thresholds as unknown as { _categoryDefaults: Map<string, number> })._categoryDefaults;
+
+  // Detect offline machines first — independent of stock-level checks
+  const offlineResult = await scanOfflineMachines();
 
   const productIds = projections.map((p) => p.productId);
   const { data: warehouse } = await supabase
@@ -222,7 +343,12 @@ export async function scanAndPersistAlerts(): Promise<{ created: number; dismiss
       .in("id", dismissIds);
   }
 
-  return { created, dismissed: dismissIds.length };
+  return {
+    created,
+    dismissed: dismissIds.length,
+    offlineCreated: offlineResult.created,
+    offlineMarked: offlineResult.marked,
+  };
 }
 
 export async function listAlerts(includeResolved = false): Promise<Alert[]> {
@@ -230,7 +356,7 @@ export async function listAlerts(includeResolved = false): Promise<Alert[]> {
   const supabase = createServerClient();
   let query = supabase
     .from("alerts")
-    .select("id, type, product_id, machine_id, severity, message, days_remaining, recommended_qty, status, created_at, products(name), machines(name)")
+    .select("id, type, product_id, machine_id, severity, message, days_remaining, recommended_qty, status, created_at, metadata, products(name), machines(name)")
     .eq("company_id", companyId)
     .order("created_at", { ascending: false })
     .limit(200);
@@ -239,20 +365,26 @@ export async function listAlerts(includeResolved = false): Promise<Alert[]> {
   }
   const { data, error } = await query;
   if (error) throw new Error(`listAlerts: ${error.message}`);
-  return (data || []).map((a) => ({
-    id: a.id as string,
-    type: a.type as Alert["type"],
-    productId: (a.product_id as string | null) ?? null,
-    productName: ((a.products as unknown) as { name?: string } | null)?.name ?? null,
-    machineId: (a.machine_id as string | null) ?? null,
-    machineName: ((a.machines as unknown) as { name?: string } | null)?.name ?? null,
-    severity: a.severity as Alert["severity"],
-    message: a.message as string,
-    daysRemaining: (a.days_remaining as number | null) ?? null,
-    recommendedQty: (a.recommended_qty as number | null) ?? null,
-    status: a.status as Alert["status"],
-    createdAt: a.created_at as string,
-  }));
+  return (data || []).map((a) => {
+    const meta = (a.metadata as { kind?: string; ageHours?: number } | null) || {};
+    const kind = (meta.kind as Alert["kind"]) || (a.type as Alert["kind"]);
+    return {
+      id: a.id as string,
+      type: a.type as Alert["type"],
+      kind,
+      productId: (a.product_id as string | null) ?? null,
+      productName: ((a.products as unknown) as { name?: string } | null)?.name ?? null,
+      machineId: (a.machine_id as string | null) ?? null,
+      machineName: ((a.machines as unknown) as { name?: string } | null)?.name ?? null,
+      severity: a.severity as Alert["severity"],
+      message: a.message as string,
+      daysRemaining: (a.days_remaining as number | null) ?? null,
+      recommendedQty: (a.recommended_qty as number | null) ?? null,
+      ageHours: typeof meta.ageHours === "number" ? meta.ageHours : null,
+      status: a.status as Alert["status"],
+      createdAt: a.created_at as string,
+    };
+  });
 }
 
 export async function acknowledgeAlert(id: string) {

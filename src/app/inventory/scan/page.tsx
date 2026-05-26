@@ -106,7 +106,8 @@ export default function ScanPage() {
         {
           fps: 15,
           qrbox: { width: boxW, height: boxH },
-          aspectRatio: 1.5,
+          // Don't pin aspectRatio — let the camera deliver its native ratio,
+          // otherwise iOS Safari shows black bars on one side.
           // Request high resolution so even small barcodes are readable
           videoConstraints: {
             facingMode: { ideal: "environment" },
@@ -369,7 +370,25 @@ export default function ScanPage() {
             minHeight: scanning ? 280 : 120,
             display: "flex", alignItems: "center", justifyContent: "center",
           }}>
-            <div id="pp-scanner" style={{ width: "100%" }} />
+            <div id="pp-scanner" style={{ width: "100%", lineHeight: 0 }} />
+            <style>{`
+              /* Make the html5-qrcode video fill the container on iOS/mobile */
+              #pp-scanner video {
+                width: 100% !important;
+                height: auto !important;
+                max-width: 100% !important;
+                display: block !important;
+                object-fit: cover !important;
+              }
+              #pp-scanner > div {
+                width: 100% !important;
+                max-width: 100% !important;
+              }
+              #pp-scanner canvas {
+                width: 100% !important;
+                max-width: 100% !important;
+              }
+            `}</style>
             {!scanning && (
               <div style={{ textAlign: "center", color: "#94a3b8", padding: 20 }}>
                 <ScanLine size={48} style={{ marginBottom: 10 }} />

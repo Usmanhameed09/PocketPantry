@@ -9,13 +9,16 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
+import { lookupExternalUpc } from "@/lib/upc-lookup";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const barcode = (searchParams.get("barcode") || "").trim();
+    const skipExternal = searchParams.get("skipExternal") === "1";
     if (!barcode) {
       return NextResponse.json({ success: false, error: "barcode required" }, { status: 400 });
     }
@@ -28,7 +31,38 @@ export async function GET(req: Request) {
       .eq("barcode", barcode)
       .limit(1)
       .maybeSingle();
-    return NextResponse.json({ success: true, product: data || null });
+
+    if (data) {
+      return NextResponse.json({ success: true, source: "local", product: data });
+    }
+
+    // Not in our DB — fall back to UPCItemDB (free trial: ~100/day).
+    // The case/unit-UPC distinction is invisible to us locally but UPCItemDB
+    // hosts the full global catalog, so we'll usually get a clean match.
+    if (skipExternal) {
+      return NextResponse.json({ success: true, source: "local", product: null });
+    }
+    const external = await lookupExternalUpc(barcode);
+    if (external.found) {
+      return NextResponse.json({
+        success: true,
+        source: "external",
+        product: null,
+        external: {
+          barcode: external.upc,
+          name: external.title || "",
+          brand: external.brand,
+          category: external.category,
+          description: external.description,
+          imageUrl: external.imageUrl,
+          inferredCaseSize: external.inferredCaseSize,
+          suggestedCost: external.cheapestOffer
+            ? Math.round((external.cheapestOffer.price / (external.inferredCaseSize || 1)) * 100) / 100
+            : null,
+        },
+      });
+    }
+    return NextResponse.json({ success: true, source: "external", product: null, external: null });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : "Failed" },

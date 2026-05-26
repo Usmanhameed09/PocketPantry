@@ -47,6 +47,9 @@ export default function ScanPage() {
   const [confirmProduct, setConfirmProduct] = useState<Product | null>(null);
   const [overrideQty, setOverrideQty] = useState("");
 
+  // External lookup metadata (when we found product via UPCItemDB)
+  const [externalInfo, setExternalInfo] = useState<{ source: string; imageUrl?: string; description?: string } | null>(null);
+
   const scannerRef = useRef<{ stop: () => Promise<void>; clear: () => void } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const lastScannedAtRef = useRef<{ code: string; at: number } | null>(null);
@@ -153,12 +156,30 @@ export default function ScanPage() {
       const res = await fetch(`/api/inventory/barcode?barcode=${encodeURIComponent(barcode)}`);
       const data = await res.json();
       if (data.success && data.product) {
-        // Known product → confirm + add case_size units
+        // Known product in our DB → confirm + add case_size units
         setConfirmProduct(data.product);
+      } else if (data.success && data.external) {
+        // Found via UPCItemDB — pre-fill register form with title, brand, etc.
+        const ext = data.external;
+        setRegisterFor(barcode);
+        setDraft({
+          name: ext.name || "",
+          category: ext.category || "Snacks",
+          vendor: ext.brand || "",
+          unitCost: ext.suggestedCost != null ? String(ext.suggestedCost) : "",
+          caseSize: ext.inferredCaseSize != null ? String(ext.inferredCaseSize) : "",
+          defaultVendPrice: "",
+        });
+        setExternalInfo({
+          source: "UPCItemDB",
+          imageUrl: ext.imageUrl,
+          description: ext.description,
+        });
       } else {
-        // Unknown barcode → open register modal
+        // Unknown barcode — open empty register modal
         setRegisterFor(barcode);
         setDraft({ name: "", category: "Snacks", vendor: "", unitCost: "", caseSize: "", defaultVendPrice: "" });
+        setExternalInfo(null);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Lookup failed");
@@ -261,6 +282,7 @@ export default function ScanPage() {
       };
       setRegisterFor(null);
       setRegisterError(null);
+      setExternalInfo(null);
       await addStockForProduct(newProduct, newProduct.case_size);
     } else {
       setRegisterError(data.error || `Server error (${res!.status})`);
@@ -491,11 +513,36 @@ export default function ScanPage() {
 
       {/* Unknown barcode register modal */}
       {registerFor && (
-        <Modal onClose={() => setRegisterFor(null)} title="New product — register barcode" maxWidth={500}>
-          <p style={{ fontSize: 13, color: "#64748b", marginTop: 0 }}>
-            Barcode <code style={{ background: "#f1f5f9", padding: "2px 8px", borderRadius: 4 }}>{registerFor}</code> isn't in your catalog yet.
-            Add it once — future scans of the same barcode will be instant.
-          </p>
+        <Modal onClose={() => { setRegisterFor(null); setExternalInfo(null); }} title={externalInfo ? "Confirm product from UPC database" : "New product — register barcode"} maxWidth={520}>
+          {externalInfo ? (
+            <div style={{
+              padding: 12, marginBottom: 12, borderRadius: 10,
+              background: "#ede9fe", border: "1px solid #ddd6fe",
+              display: "flex", gap: 12, alignItems: "flex-start",
+            }}>
+              {externalInfo.imageUrl && (
+                <img
+                  src={externalInfo.imageUrl}
+                  alt={draft.name}
+                  style={{ width: 60, height: 60, objectFit: "contain", borderRadius: 6, background: "#fff", flexShrink: 0 }}
+                />
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#5b21b6", marginBottom: 4 }}>
+                  ✨ Found in {externalInfo.source}
+                </div>
+                <div style={{ fontSize: 12, color: "#475569" }}>
+                  Barcode <code style={{ background: "#fff", padding: "1px 6px", borderRadius: 4 }}>{registerFor}</code> —
+                  fields pre-filled below. Review case size + cost (we estimated when possible), then save.
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p style={{ fontSize: 13, color: "#64748b", marginTop: 0 }}>
+              Barcode <code style={{ background: "#f1f5f9", padding: "2px 8px", borderRadius: 4 }}>{registerFor}</code> isn't in your catalog or the UPC database.
+              Fill in the details — future scans will be instant.
+            </p>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
             <div style={{ gridColumn: isMobile ? "1" : "1 / -1" }}>
               <Field label="Product name" type="text" value={draft.name}
@@ -532,7 +579,7 @@ export default function ScanPage() {
           )}
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
-            <BtnSecondary onClick={() => { setRegisterFor(null); setRegisterError(null); }}>
+            <BtnSecondary onClick={() => { setRegisterFor(null); setRegisterError(null); setExternalInfo(null); }}>
               <X size={14} /> Cancel
             </BtnSecondary>
             <BtnPrimary onClick={registerNewProduct} disabled={registering || !draft.name || !draft.caseSize}>

@@ -570,9 +570,9 @@ export default function ScanPage() {
             <Select label="Category" value={draft.category}
               options={[
                 { value: "Snacks", label: "Snacks" },
+                { value: "Candy", label: "Candy" },
                 { value: "Drinks", label: "Drinks" },
                 { value: "Meals", label: "Meals" },
-                { value: "Health", label: "Health" },
               ]}
               onChange={(v) => setDraft({ ...draft, category: v })} />
             <Field label="Vendor (optional)" type="text" value={draft.vendor}

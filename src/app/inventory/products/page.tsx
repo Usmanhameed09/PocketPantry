@@ -167,9 +167,9 @@ export default function ProductsPage() {
             <Select label="Category" value={editing.category || "Snacks"}
               options={[
                 { value: "Snacks", label: "Snacks" },
+                { value: "Candy", label: "Candy" },
                 { value: "Drinks", label: "Drinks" },
                 { value: "Meals", label: "Meals" },
-                { value: "Health", label: "Health" },
               ]}
               onChange={(v) => setEditing({ ...editing, category: v })} />
             <Select label="Status" value={editing.status || "Active"}

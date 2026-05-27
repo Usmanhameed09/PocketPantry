@@ -52,10 +52,10 @@ function inferCaseSize(title: string | undefined, description: string | undefine
 function mapCategory(raw: string | undefined): string {
   const c = (raw || "").toLowerCase();
   if (!c) return "Snacks";
-  if (c.includes("beverage") || c.includes("drink") || c.includes("soda") || c.includes("water")) return "Drinks";
-  if (c.includes("snack") || c.includes("candy") || c.includes("chip") || c.includes("cookie")) return "Snacks";
-  if (c.includes("food") || c.includes("meal")) return "Meals";
-  if (c.includes("health") || c.includes("vitamin") || c.includes("supplement")) return "Health";
+  if (c.includes("beverage") || c.includes("drink") || c.includes("soda") || c.includes("water") || c.includes("juice") || c.includes("tea") || c.includes("coffee")) return "Drinks";
+  if (c.includes("candy") || c.includes("chocolate") || c.includes("gum") || c.includes("confection")) return "Candy";
+  if (c.includes("meal") || c.includes("entree") || c.includes("frozen meal") || c.includes("lunch") || c.includes("breakfast")) return "Meals";
+  if (c.includes("snack") || c.includes("chip") || c.includes("cookie") || c.includes("cracker") || c.includes("nut")) return "Snacks";
   return "Snacks";
 }
 

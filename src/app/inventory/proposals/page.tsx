@@ -141,9 +141,9 @@ export default function ProposalsPage() {
             <Select label="Category" value={form.category}
               options={[
                 { value: "Snacks", label: "Snacks" },
+                { value: "Candy", label: "Candy" },
                 { value: "Drinks", label: "Drinks" },
                 { value: "Meals", label: "Meals" },
-                { value: "Health", label: "Health" },
               ]}
               onChange={(v) => setForm({ ...form, category: v })} />
             <label style={{ display: "block" }}>

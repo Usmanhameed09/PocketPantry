@@ -3,13 +3,18 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
+import AIChatWidget from "@/components/AIChatWidget";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 const AUTH_PAGES = ["/login", "/signup"];
+// Don't double-up: hide the floating widget on the dedicated full-page
+// assistant since it'd overlap the bottom of the conversation there.
+const HIDE_WIDGET_PATHS = ["/inventory/assistant"];
 
 export default function LayoutShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isAuthPage = AUTH_PAGES.includes(pathname);
+  const showWidget = !HIDE_WIDGET_PATHS.includes(pathname);
   const [mobileOpen, setMobileOpen] = useState(false);
   const isMobile = useIsMobile();
 
@@ -32,6 +37,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         {isMobile && <MobileMenuButton onClick={() => setMobileOpen(true)} />}
         {children}
       </div>
+      {showWidget && <AIChatWidget />}
     </>
   );
 }

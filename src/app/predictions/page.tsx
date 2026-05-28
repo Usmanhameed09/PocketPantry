@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback, useRef, type ChangeEvent } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -147,7 +147,7 @@ export default function PredictionsPage() {
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(1024);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [tab, setTab] = useState<"overview" | "products" | "seasonal" | "mix" | "template">("overview");
+  const [tab, setTab] = useState<"overview" | "products" | "seasonal" | "plan">("overview");
   const [templateMachine, setTemplateMachine] = useState<string | null>(null);
   const [smartActionMachine, setSmartActionMachine] = useState<string | null>(null);
   const [data, setData] = useState<PredictionData | null>(null);
@@ -286,10 +286,9 @@ export default function PredictionsPage() {
 
   const tabItems: { key: typeof tab; label: string; icon: typeof BarChart3; count?: number }[] = [
     { key: "overview",  label: "Machine Forecast",  icon: BarChart3 },
+    { key: "plan",      label: "Machine Plan",       icon: Zap,        count: productMixRecs.length + machineTemplates.length || undefined },
     { key: "products",  label: "Product Health",     icon: Package,    count: deadProducts > 0 ? deadProducts : undefined },
     { key: "seasonal",  label: "Seasonal Trends",    icon: Sun },
-    { key: "mix",       label: "Smart Actions",      icon: Zap,        count: productMixRecs.length },
-    { key: "template",  label: "Template",           icon: Package,    count: machineTemplates.length || undefined },
   ];
 
   return (
@@ -732,7 +731,7 @@ export default function PredictionsPage() {
         )}
 
         {/* ============ TAB: SMART ACTIONS ============ */}
-        {tab === "mix" && (
+        {tab === "plan" && (
           <div>
             <div style={{
               display: "flex", alignItems: "center", gap: 10,
@@ -741,7 +740,7 @@ export default function PredictionsPage() {
             }}>
               <Zap size={16} style={{ flexShrink: 0 }} />
               <span>
-                <strong>AI-recommended actions</strong> to optimize your product mix. Each suggestion is based on sales trends across all machines and tuned to each machine&apos;s revenue tier and growth.
+                <strong>Machine Plan</strong> â€” pick a machine to see both the immediate <em>Smart Actions</em> (urgent stock changes) and the <em>Full Template</em> (target planogram). One screen, no tab-switching.
               </span>
             </div>
 
@@ -751,9 +750,12 @@ export default function PredictionsPage() {
                 if (!grouped.has(r.machine)) grouped.set(r.machine, []);
                 grouped.get(r.machine)!.push(r);
               }
-              const machineOrder = machineForecast.map(m => m.machine).filter(m => grouped.has(m));
+              const machineOrder = machineForecast.map(m => m.machine).filter(m => grouped.has(m) || machineTemplates.some(t => t.machine === m));
               for (const m of grouped.keys()) {
                 if (!machineOrder.includes(m)) machineOrder.push(m);
+              }
+              for (const t of machineTemplates) {
+                if (!machineOrder.includes(t.machine)) machineOrder.push(t.machine);
               }
 
               if (machineOrder.length === 0) {
@@ -762,96 +764,103 @@ export default function PredictionsPage() {
                     padding: 32, textAlign: "center", background: "#fff",
                     border: "1px solid #e2e8f0", borderRadius: 12, color: "#94a3b8", fontSize: 13,
                   }}>
-                    No recommendations to show right now.
+                    No plan data yet â€” retrain the model to generate.
                   </div>
                 );
               }
 
-              // Selected machine — default to "All" (null) so the operator
-              // sees everything by default, then can drill into one.
-              const selectedMachines = smartActionMachine && grouped.has(smartActionMachine)
-                ? [smartActionMachine]
-                : machineOrder;
-              const totalActions = Array.from(grouped.values()).reduce((s, arr) => s + arr.length, 0);
+              // Default to first machine so both panels populate immediately.
+              const selected = smartActionMachine && machineOrder.includes(smartActionMachine)
+                ? smartActionMachine
+                : machineOrder[0];
+              const items = grouped.get(selected) || [];
+              const template = machineTemplates.find(t => t.machine === selected) || null;
 
               return (
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  {/* Machine chip selector — horizontal scroll on mobile */}
+                  {/* Machine chip selector â€” horizontal scroll on mobile */}
                   <div style={{
                     display: "flex", gap: 6, overflowX: "auto",
                     WebkitOverflowScrolling: "touch", padding: "2px 0 4px",
                   }}>
-                    <MachineChip
-                      label="All machines"
-                      sub={`${totalActions} action${totalActions === 1 ? "" : "s"}`}
-                      active={!smartActionMachine}
-                      onClick={() => setSmartActionMachine(null)}
-                    />
-                    {machineOrder.map((m) => (
-                      <MachineChip
-                        key={m}
-                        label={m}
-                        sub={`${(grouped.get(m) || []).length} action${(grouped.get(m) || []).length === 1 ? "" : "s"}`}
-                        active={smartActionMachine === m}
-                        onClick={() => setSmartActionMachine(m)}
-                      />
-                    ))}
+                    {machineOrder.map((m) => {
+                      const actionCount = (grouped.get(m) || []).length;
+                      const tpl = machineTemplates.find(t => t.machine === m);
+                      const slotInfo = tpl ? `${tpl.filledSlots}/${tpl.totalSlots} slots` : "";
+                      const actionInfo = actionCount > 0 ? `${actionCount} action${actionCount === 1 ? "" : "s"}` : "";
+                      const sub = [actionInfo, slotInfo].filter(Boolean).join(" Â· ") || "view plan";
+                      return (
+                        <MachineChip
+                          key={m}
+                          label={m}
+                          sub={sub}
+                          active={selected === m}
+                          onClick={() => setSmartActionMachine(m)}
+                        />
+                      );
+                    })}
                   </div>
 
-                  {selectedMachines.map((machine) => {
-                    const items = grouped.get(machine) || [];
-                    if (items.length === 0) return null;
-                    return (
-                      <div key={machine} style={{
-                        background: "#fff", border: "1px solid #e2e8f0",
-                        borderRadius: 14, overflow: "hidden",
+                  {/* Side-by-side: Smart Actions (left) + Template (right) on desktop, stacked on mobile */}
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile || isTablet ? "1fr" : "1fr 1fr", gap: 16 }}>
+                    {/* LEFT: Smart Actions */}
+                    <div style={{
+                      background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, overflow: "hidden",
+                    }}>
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 10,
+                        padding: "12px 16px", background: "#ecfdf5", borderBottom: "1px solid #a7f3d0",
                       }}>
-                        <div style={{
-                          display: "flex", alignItems: "center", gap: 10,
-                          padding: "12px 18px", background: "#f8fafc",
-                          borderBottom: "1px solid #e2e8f0",
-                        }}>
-                          <Package size={16} color="#64748b" />
-                          <span style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{machine}</span>
-                          <span style={{
-                            fontSize: 11, fontWeight: 700, color: "#475569",
-                            background: "#e2e8f0", padding: "2px 8px", borderRadius: 6,
-                          }}>{items.length} action{items.length === 1 ? "" : "s"}</span>
+                        <Zap size={16} color="#059669" />
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#065f46" }}>Smart Actions</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", background: "#fff", padding: "2px 8px", borderRadius: 6 }}>
+                          {items.length} for {selected}
+                        </span>
+                      </div>
+                      {items.length === 0 ? (
+                        <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+                          No urgent actions for this machine right now.
                         </div>
+                      ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 12 }}>
+                          {(() => {
+                            const machine = selected;
+                            return null;
+                          })()}
+                          {(() => null)()}
                           {items.map((r, i) => {
                             const ac = actionConfig[r.action];
                             const AcIcon = ac.icon;
                             return (
                               <div key={i} style={{
-                                display: "flex", alignItems: "center", gap: 14,
-                                padding: "12px 14px", background: "#fff",
+                                display: "flex", alignItems: "center", gap: 12,
+                                padding: "10px 12px", background: "#fff",
                                 borderRadius: 10, border: `1px solid ${ac.border}`,
-                                flexWrap: isMobile ? "wrap" : "nowrap",
+                                flexWrap: "wrap",
                               }}>
                                 <div style={{
-                                  width: 36, height: 36, borderRadius: 9, background: ac.bg,
+                                  width: 32, height: 32, borderRadius: 8, background: ac.bg,
                                   display: "flex", alignItems: "center", justifyContent: "center",
                                   flexShrink: 0, border: `1px solid ${ac.border}`,
                                 }}>
-                                  <AcIcon size={17} color={ac.color} />
+                                  <AcIcon size={15} color={ac.color} />
                                 </div>
-                                <div style={{ flex: 1, minWidth: 150 }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <div style={{ flex: 1, minWidth: 120 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                                     <span style={{
-                                      fontSize: 11, fontWeight: 700, color: ac.color, background: ac.bg,
-                                      padding: "2px 8px", borderRadius: 6, textTransform: "uppercase", letterSpacing: 0.5,
+                                      fontSize: 10, fontWeight: 700, color: ac.color, background: ac.bg,
+                                      padding: "2px 7px", borderRadius: 5, textTransform: "uppercase", letterSpacing: 0.4,
                                     }}>{r.action}</span>
-                                    <span style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{r.product}</span>
+                                    <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{r.product}</span>
                                   </div>
-                                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 4, lineHeight: 1.4 }}>{r.reason}</div>
+                                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 3, lineHeight: 1.4 }}>{r.reason}</div>
                                 </div>
                                 <div style={{ textAlign: "right", flexShrink: 0 }}>
                                   <div style={{
-                                    fontSize: 14, fontWeight: 800,
+                                    fontSize: 13, fontWeight: 800,
                                     color: r.action === "Add" || r.action === "Increase" ? "#059669" : "#64748b",
                                   }}>{r.estimatedImpact}</div>
-                                  <div style={{ marginTop: 4 }}>
+                                  <div style={{ marginTop: 3 }}>
                                     <ConfidenceBar value={r.confidence} />
                                   </div>
                                 </div>
@@ -859,168 +868,84 @@ export default function PredictionsPage() {
                             );
                           })}
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })()}
-          </div>
-        )}
-
-        {/* ============ TAB: TEMPLATE (full machine planogram) ============ */}
-        {tab === "template" && (
-          <div>
-            <div style={{
-              display: "flex", alignItems: "center", gap: 10,
-              padding: "12px 16px", background: "#eef2ff", border: "1px solid #c7d2fe",
-              borderRadius: 10, marginBottom: 20, fontSize: 13, color: "#3730a3",
-            }}>
-              <Package size={16} style={{ flexShrink: 0 }} />
-              <span>
-                <strong>Machine Templates</strong> — the end-state planogram: what each machine should carry going forward, grouped by category. Products flagged for removal don&apos;t appear here — they live in the <strong>Smart Actions</strong> tab as <em>Remove</em> tasks. Think of Templates as the destination, Smart Actions as the changes to get there.
-              </span>
-            </div>
-
-            {(() => {
-              if (machineTemplates.length === 0) {
-                return (
-                  <div style={{
-                    padding: 32, textAlign: "center", background: "#fff",
-                    border: "1px solid #e2e8f0", borderRadius: 12, color: "#94a3b8", fontSize: 13,
-                  }}>
-                    No templates available — retrain the model to generate.
-                  </div>
-                );
-              }
-
-              const orderedMachines = machineForecast
-                .map(m => m.machine)
-                .filter(name => machineTemplates.some(t => t.machine === name));
-              for (const t of machineTemplates) {
-                if (!orderedMachines.includes(t.machine)) orderedMachines.push(t.machine);
-              }
-
-              const selected = templateMachine && machineTemplates.find(t => t.machine === templateMachine)
-                ? templateMachine
-                : orderedMachines[0];
-              const template = machineTemplates.find(t => t.machine === selected) || machineTemplates[0];
-
-              const tierColor = template.tier === "high" ? "#059669"
-                : template.tier === "medium" ? "#d97706" : "#0ea5e9";
-
-              return (
-                <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 16 }}>
-                  {/* Machine selector sidebar */}
-                  <div style={{
-                    flex: isMobile ? undefined : "0 0 240px",
-                    display: "flex", flexDirection: isMobile ? "row" : "column",
-                    gap: 6, overflowX: isMobile ? "auto" : undefined,
-                  }}>
-                    {orderedMachines.map((m) => {
-                      const t = machineTemplates.find(tt => tt.machine === m);
-                      if (!t) return null;
-                      const active = m === selected;
-                      return (
-                        <button
-                          key={m}
-                          onClick={() => setTemplateMachine(m)}
-                          style={{
-                            display: "flex", flexDirection: "column",
-                            alignItems: "flex-start", gap: 4,
-                            padding: "10px 14px", border: active ? "1px solid #6366f1" : "1px solid #e2e8f0",
-                            background: active ? "#eef2ff" : "#fff",
-                            borderRadius: 10, cursor: "pointer", textAlign: "left",
-                            minWidth: isMobile ? 200 : undefined,
-                          }}
-                        >
-                          <span style={{ fontSize: 13, fontWeight: 700, color: active ? "#3730a3" : "#0f172a" }}>{m}</span>
-                          <span style={{ fontSize: 11, color: "#64748b" }}>
-                            {t.tier} tier · {t.filledSlots}/{t.totalSlots} slots
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Template content */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      background: "#fff", border: "1px solid #e2e8f0",
-                      borderRadius: 14, padding: "16px 20px", marginBottom: 14,
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      flexWrap: "wrap", gap: 12,
-                    }}>
-                      <div>
-                        <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a" }}>{template.machine}</div>
-                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-                          Recommended planogram — {template.filledSlots} of {template.totalSlots} slots
-                        </div>
-                      </div>
-                      <span style={{
-                        fontSize: 11, fontWeight: 700, padding: "4px 10px",
-                        borderRadius: 6, textTransform: "uppercase", letterSpacing: 0.5,
-                        background: tierColor + "22", color: tierColor,
-                      }}>{template.tier} tier</span>
+                      )}
                     </div>
 
-                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                      {template.categories.map((cat) => (
-                        <div key={cat.name} style={{
-                          background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12,
-                          overflow: "hidden",
-                        }}>
-                          <div style={{
-                            display: "flex", alignItems: "center", justifyContent: "space-between",
-                            padding: "12px 16px", background: "#f8fafc",
-                            borderBottom: "1px solid #e2e8f0",
-                          }}>
-                            <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{cat.name}</span>
-                            <span style={{
-                              fontSize: 11, fontWeight: 700, padding: "2px 8px",
-                              borderRadius: 6, background: "#e2e8f0", color: "#475569",
-                            }}>{cat.actualCount} / {cat.targetCount} slots</span>
-                          </div>
-                          <div style={{ padding: 8 }}>
-                            {cat.items.map((it, i) => {
-                              const statusColor = it.status === "Keep" ? "#059669"
-                                : it.status === "Add" ? "#3b82f6"
-                                : it.status === "Watch" ? "#d97706"
-                                : "#dc2626";
-                              const statusBg = it.status === "Keep" ? "#ecfdf5"
-                                : it.status === "Add" ? "#eff6ff"
-                                : it.status === "Watch" ? "#fffbeb"
-                                : "#fef2f2";
-                              const trendArrow = it.fleetTrend === "up" ? "↗" : it.fleetTrend === "down" ? "↘" : "→";
-                              const trendColor = it.fleetTrend === "up" ? "#059669"
-                                : it.fleetTrend === "down" ? "#dc2626" : "#94a3b8";
-                              return (
-                                <div key={i} style={{
-                                  display: "flex", alignItems: "center", gap: 10,
-                                  padding: "8px 10px", borderRadius: 8,
-                                  background: i % 2 === 0 ? "transparent" : "#fafbfc",
-                                  flexWrap: isMobile ? "wrap" : "nowrap",
-                                }}>
-                                  <span style={{
-                                    flexShrink: 0,
-                                    fontSize: 10, fontWeight: 700, padding: "3px 8px",
-                                    borderRadius: 5, background: statusBg, color: statusColor,
-                                    textTransform: "uppercase", letterSpacing: 0.4,
-                                    minWidth: 48, textAlign: "center",
-                                  }}>{it.status}</span>
-                                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: "#0f172a", minWidth: 150 }}>{it.product}</span>
-                                  <span style={{ fontSize: 11, color: trendColor, fontWeight: 700, minWidth: 50 }}>
-                                    {trendArrow} {it.fleetTrendPct > 0 ? "+" : ""}{it.fleetTrendPct}%
-                                  </span>
-                                  <span style={{ fontSize: 11, color: "#64748b", minWidth: 80, textAlign: "right" }}>
-                                    {it.machineDailyRate !== null ? `${it.machineDailyRate.toFixed(1)}/day` : "—"}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
+                    {/* RIGHT: Full Template */}
+                    <div style={{
+                      background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, overflow: "hidden",
+                    }}>
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 10,
+                        padding: "12px 16px", background: "#eef2ff", borderBottom: "1px solid #c7d2fe",
+                      }}>
+                        <Package size={16} color="#6366f1" />
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#3730a3" }}>Full Template</span>
+                        {template && (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", background: "#fff", padding: "2px 8px", borderRadius: 6 }}>
+                            {template.filledSlots}/{template.totalSlots} slots Â· {template.tier} tier
+                          </span>
+                        )}
+                      </div>
+                      {!template ? (
+                        <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+                          No template available for this machine yet.
                         </div>
-                      ))}
+                      ) : (
+                        <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                          {template.categories.map((cat) => (
+                            <div key={cat.name} style={{
+                              border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden",
+                            }}>
+                              <div style={{
+                                display: "flex", alignItems: "center", justifyContent: "space-between",
+                                padding: "8px 12px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0",
+                              }}>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{cat.name}</span>
+                                <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: "#e2e8f0", color: "#475569" }}>
+                                  {cat.actualCount}/{cat.targetCount}
+                                </span>
+                              </div>
+                              <div style={{ padding: 6 }}>
+                                {cat.items.map((it, i) => {
+                                  const statusColor = it.status === "Keep" ? "#059669"
+                                    : it.status === "Add" ? "#3b82f6"
+                                    : it.status === "Watch" ? "#d97706"
+                                    : "#dc2626";
+                                  const statusBg = it.status === "Keep" ? "#ecfdf5"
+                                    : it.status === "Add" ? "#eff6ff"
+                                    : it.status === "Watch" ? "#fffbeb"
+                                    : "#fef2f2";
+                                  const trendArrow = it.fleetTrend === "up" ? "â†—" : it.fleetTrend === "down" ? "â†˜" : "â†’";
+                                  const trendColor = it.fleetTrend === "up" ? "#059669" : it.fleetTrend === "down" ? "#dc2626" : "#94a3b8";
+                                  return (
+                                    <div key={i} style={{
+                                      display: "flex", alignItems: "center", gap: 8,
+                                      padding: "6px 8px", borderRadius: 6,
+                                      background: i % 2 === 0 ? "transparent" : "#fafbfc",
+                                      flexWrap: "wrap",
+                                    }}>
+                                      <span style={{
+                                        flexShrink: 0, fontSize: 9, fontWeight: 700, padding: "2px 6px",
+                                        borderRadius: 4, background: statusBg, color: statusColor,
+                                        textTransform: "uppercase", letterSpacing: 0.4,
+                                        minWidth: 40, textAlign: "center",
+                                      }}>{it.status}</span>
+                                      <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: "#0f172a", minWidth: 100 }}>{it.product}</span>
+                                      <span style={{ fontSize: 10, color: trendColor, fontWeight: 700, minWidth: 44 }}>
+                                        {trendArrow} {it.fleetTrendPct > 0 ? "+" : ""}{it.fleetTrendPct}%
+                                      </span>
+                                      <span style={{ fontSize: 10, color: "#64748b", minWidth: 60, textAlign: "right" }}>
+                                        {it.machineDailyRate !== null ? `${it.machineDailyRate.toFixed(1)}/d` : "â€”"}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1129,9 +1054,9 @@ function SeasonalCalendar({ trends, isMobile }: { trends: SeasonalTrend[]; isMob
       }}>
         <span style={{ fontWeight: 600, color: "#374151" }}>Legend:</span>
         <LegendSwatch color="#059669" label="Peak (>30% above avg)" />
-        <LegendSwatch color="#34d399" label="Hot (+10–30%)" />
+        <LegendSwatch color="#34d399" label="Hot (+10â€“30%)" />
         <LegendSwatch color="#ecfdf5" label="Average" textColor="#065f46" />
-        <LegendSwatch color="#bfdbfe" label="Cool (-20–40%)" textColor="#1e3a8a" />
+        <LegendSwatch color="#bfdbfe" label="Cool (-20â€“40%)" textColor="#1e3a8a" />
         <LegendSwatch color="#3b82f6" label="Cold (-40%+)" />
         <LegendSwatch color="#f1f5f9" label="No data" textColor="#94a3b8" />
       </div>
@@ -1188,10 +1113,10 @@ function SeasonalCalendar({ trends, isMobile }: { trends: SeasonalTrend[]; isMob
                       {t.product}
                     </div>
                     <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>
-                      Peak <strong style={{ color: "#059669" }}>{t.peakMonth}</strong> · Low <strong style={{ color: "#1e40af" }}>{t.lowMonth}</strong>
+                      Peak <strong style={{ color: "#059669" }}>{t.peakMonth}</strong> Â· Low <strong style={{ color: "#1e40af" }}>{t.lowMonth}</strong>
                     </div>
                     <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
-                      Lifetime: ${Math.round(t.totalRevenue).toLocaleString()} · Swing {Math.round(((t as unknown as { swing?: number }).swing) ?? 0)}%
+                      Lifetime: ${Math.round(t.totalRevenue).toLocaleString()} Â· Swing {Math.round(((t as unknown as { swing?: number }).swing) ?? 0)}%
                     </div>
                   </div>
                   {Array.from({ length: 12 }, (_, i) => {
@@ -1216,7 +1141,7 @@ function SeasonalCalendar({ trends, isMobile }: { trends: SeasonalTrend[]; isMob
                         }}
                       >
                         <div style={{ fontSize: 11, lineHeight: 1 }}>
-                          {rev > 0 ? `$${rev >= 1000 ? `${(rev/1000).toFixed(1)}k` : Math.round(rev)}` : "—"}
+                          {rev > 0 ? `$${rev >= 1000 ? `${(rev/1000).toFixed(1)}k` : Math.round(rev)}` : "â€”"}
                         </div>
                         {idx > 0 && (
                           <div style={{ fontSize: 9, opacity: 0.75, marginTop: 2 }}>

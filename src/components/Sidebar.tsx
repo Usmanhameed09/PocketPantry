@@ -14,6 +14,7 @@ import {
   BarChart3,
   UserCircle,
   Brain,
+  Target,
   X,
 } from "lucide-react";
 
@@ -24,8 +25,8 @@ const navItems = [
   { name: "Pricing", href: "/pricing", icon: DollarSign },
   { name: "Predictions", href: "/predictions", icon: Brain },
   { name: "Pipeline", href: "/pipeline", icon: GitBranch },
-  { name: "Pipeline v2", href: "/pipeline/v2", icon: GitBranch },
   { name: "Email Pipeline", href: "/email-pipeline", icon: Mail },
+  { name: "Lead Dashboard", href: "/pipeline/v2", icon: Target },
   { name: "Advertising", href: "/advertising", icon: Megaphone },
   { name: "Reports", href: "/reports", icon: BarChart3 },
 ];

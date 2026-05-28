@@ -38,11 +38,15 @@ import {
 type Stage =
   | "New Lead"
   | "Contacted"
+  | "Qualified"
   | "Interested"
   | "Not Interested"
   | "Callback"
   | "Site Visit Requested"
-  | "Proposal Requested";
+  | "Proposal Requested"
+  | "Meeting Booked"
+  | "Won"
+  | "Installed";
 
 type ContactMethod = "Call" | "Email" | "Call + Email";
 type LeadSource = "Manual" | "Excel Import" | "Google Maps";
@@ -177,16 +181,19 @@ interface ExcelLeadCandidate {
 const stageConfig: Record<string, { color: string; bg: string; border: string }> = {
   "New Lead":              { color: "#64748b", bg: "#f9fafb", border: "#e5e7eb" },
   "Contacted":             { color: "#7c3aed", bg: "#ede9fe", border: "#ddd6fe" },
+  "Qualified":             { color: "#0284c7", bg: "#e0f2fe", border: "#bae6fd" },
   "Interested":            { color: "#059669", bg: "#d1fae5", border: "#a7f3d0" },
   "Callback":              { color: "#d97706", bg: "#fef3c7", border: "#fde68a" },
   "Site Visit Requested":  { color: "#16a34a", bg: "#dcfce7", border: "#bbf7d0" },
-  "Not Interested":        { color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
   "Proposal Requested":    { color: "#ea580c", bg: "#fff7ed", border: "#fed7aa" },
+  "Meeting Booked":        { color: "#0d9488", bg: "#ccfbf1", border: "#99f6e4" },
+  "Won":                   { color: "#15803d", bg: "#bbf7d0", border: "#86efac" },
+  "Installed":             { color: "#166534", bg: "#86efac", border: "#4ade80" },
+  "Not Interested":        { color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
   // Legacy names that might still exist in old data
   "Emailed":               { color: "#7c3aed", bg: "#ede9fe", border: "#ddd6fe" },
   "Replied":               { color: "#2563eb", bg: "#dbeafe", border: "#bfdbfe" },
   "Nurturing":             { color: "#d97706", bg: "#fef3c7", border: "#fde68a" },
-  "Meeting Booked":        { color: "#16a34a", bg: "#dcfce7", border: "#bbf7d0" },
   "Opted Out":             { color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
   "Unsubscribed":          { color: "#6b7280", bg: "#f3f4f6", border: "#d1d5db" },
 };
@@ -194,7 +201,8 @@ const stageConfig: Record<string, { color: string; bg: string; border: string }>
 const fallbackStageStyle = { color: "#64748b", bg: "#f9fafb", border: "#e5e7eb" };
 
 const kanbanStages: Stage[] = [
-  "New Lead", "Contacted", "Interested", "Site Visit Requested", "Not Interested",
+  "New Lead", "Contacted", "Qualified", "Interested",
+  "Site Visit Requested", "Meeting Booked", "Won", "Installed", "Not Interested",
 ];
 
 const EASTERN_TIMEZONE = "America/New_York";

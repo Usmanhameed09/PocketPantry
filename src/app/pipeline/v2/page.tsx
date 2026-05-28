@@ -150,7 +150,7 @@ export default function PipelineV2Page() {
           </p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <Link href="/pipeline" style={btn("ghost")}>← Kanban view</Link>
+          <Link href="/email-pipeline" style={btn("ghost")}>← Email pipeline</Link>
           <Link href="/pipeline/scoring" style={btn("ghost")}>Scoring config</Link>
           <button onClick={bulkRescore} disabled={bulkBusy} style={btn("primary")}>
             {bulkBusy ? "Re-scoring…" : "Re-score all leads"}
@@ -235,7 +235,7 @@ export default function PipelineV2Page() {
                     </div>
                   </div>
                   <div style={{ fontSize: 11, color: "#94a3b8" }}>P{t.priority}</div>
-                  <Link href={`/pipeline?lead=${t.leadId}`} style={btn("ghost-sm")}>Open</Link>
+                  <Link href={`/email-pipeline?lead=${t.leadId}`} style={btn("ghost-sm")}>Open</Link>
                 </div>
               );
             })}
@@ -339,7 +339,7 @@ export default function PipelineV2Page() {
                     <input type="checkbox" checked={selectedIds.has(lead.id)} onChange={() => toggle(lead.id)} />
                   </td>
                   <td style={{ ...td, fontWeight: 600, color: "#0f172a" }}>
-                    <Link href={`/pipeline?lead=${lead.id}`} style={{ color: "#0f172a", textDecoration: "none" }}>
+                    <Link href={`/email-pipeline?lead=${lead.id}`} style={{ color: "#0f172a", textDecoration: "none" }}>
                       {lead.business}
                     </Link>
                     {lead.vertical && (

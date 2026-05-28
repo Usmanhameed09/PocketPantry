@@ -38,10 +38,14 @@ import {
 type Stage =
   | "New Lead"
   | "Contacted"
+  | "Qualified"
   | "Interested"
   | "Not Interested"
   | "Site Visit Requested"
   | "Proposal Requested"
+  | "Meeting Booked"
+  | "Won"
+  | "Installed"
   | "Callback";
 
 type ContactMethod = "Call" | "Email" | "Call + Email";
@@ -177,11 +181,15 @@ interface ExcelLeadCandidate {
 const stageConfig: Record<Stage, { color: string; bg: string; border: string }> = {
   "New Lead":              { color: "#64748b", bg: "#f9fafb", border: "#e5e7eb" },
   "Contacted":             { color: "#7c3aed", bg: "#ede9fe", border: "#ddd6fe" },
+  "Qualified":             { color: "#0284c7", bg: "#e0f2fe", border: "#bae6fd" },
   "Interested":            { color: "#059669", bg: "#d1fae5", border: "#a7f3d0" },
   "Not Interested":        { color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
   "Callback":              { color: "#d97706", bg: "#fef3c7", border: "#fde68a" },
   "Site Visit Requested":  { color: "#16a34a", bg: "#dcfce7", border: "#bfdbfe" },
   "Proposal Requested":    { color: "#ea580c", bg: "#fff7ed", border: "#fed7aa" },
+  "Meeting Booked":        { color: "#0d9488", bg: "#ccfbf1", border: "#99f6e4" },
+  "Won":                   { color: "#15803d", bg: "#bbf7d0", border: "#86efac" },
+  "Installed":             { color: "#166534", bg: "#86efac", border: "#4ade80" },
 };
 
 const kanbanStages: Stage[] = [

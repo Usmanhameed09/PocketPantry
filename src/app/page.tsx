@@ -26,6 +26,7 @@ type DashboardData = {
     todayRevenue: number; todayUnits: number; todayTransactions: number;
     yesterdayRevenue: number; wowPct: number; avgSale: number;
     thisWeekUnits: number; priorWeekUnits: number; weekWoWPct: number;
+    lastSaleDate: string | null; todayHasData: boolean;
   };
   machines: { total: number; active: number; offline: number; offlineList: Array<{ name: string; status: string }>; };
   alerts: { total: number; high: number; topAlerts: Array<{ message: string; severity: string; kind: string }>; };
@@ -126,12 +127,15 @@ export default function Dashboard() {
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: isMobile ? 10 : 16 }}>
           <StatCard
             icon={<TrendingUp size={20} color="#16a34a" />} iconBg="#dcfce7"
-            label="Today's Revenue" value={`$${sales.todayRevenue.toFixed(2)}`}
+            label={sales.todayHasData ? "Today's Revenue" : `Last data ${sales.lastSaleDate || "—"}`}
+            value={`$${sales.todayRevenue.toFixed(2)}`}
             tag={
-              sales.wowPct === 0 ? <span style={{ color: "#64748b", fontSize: 12 }}>vs yesterday</span>
-              : sales.wowPct > 0
-                ? <span style={{ color: "#059669", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 2 }}><ArrowUpRight size={14} /> {sales.wowPct}% vs yesterday</span>
-                : <span style={{ color: "#dc2626", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 2 }}><ArrowDownRight size={14} /> {Math.abs(sales.wowPct)}% vs yesterday</span>
+              !sales.todayHasData
+                ? <span style={{ color: "#94a3b8", fontSize: 12 }}>today not synced yet</span>
+                : sales.wowPct === 0 ? <span style={{ color: "#64748b", fontSize: 12 }}>vs yesterday</span>
+                : sales.wowPct > 0
+                  ? <span style={{ color: "#059669", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 2 }}><ArrowUpRight size={14} /> {sales.wowPct}% vs yesterday</span>
+                  : <span style={{ color: "#dc2626", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 2 }}><ArrowDownRight size={14} /> {Math.abs(sales.wowPct)}% vs yesterday</span>
             }
           />
           <StatCard
@@ -334,7 +338,9 @@ export default function Dashboard() {
             </div>
             <div style={cardBody}>
               <div style={{ textAlign: "center", padding: "8px 0 16px" }}>
-                <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 4 }}>Today&apos;s Revenue</div>
+                <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 4 }}>
+                  {sales.todayHasData ? "Today's Revenue" : `Most recent day with data${sales.lastSaleDate ? ` — ${sales.lastSaleDate}` : ""}`}
+                </div>
                 <div style={{ fontSize: 36, fontWeight: 800, color: "#0f172a", letterSpacing: -1 }}>${sales.todayRevenue.toFixed(2)}</div>
                 {sales.wowPct !== 0 && (
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, marginTop: 4 }}>

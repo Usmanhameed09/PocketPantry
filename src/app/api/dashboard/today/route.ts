@@ -52,6 +52,11 @@ export async function GET() {
     const machineInv = machineInvRes.data || [];
     const warehouse = warehouseRes.data || [];
 
+    // Also fetch scraper-api machine status — Nayax has its own offline signal
+    // (no orders in >3 days) that's independent of our 24h-no-sync detector.
+    // The Machines page uses the merged view, so we should too.
+    const scraperOfflineNames = await fetchScraperOfflineMachines();
+
     // ─── Today's revenue ───────────────────────────────────────────────
     const todayUnits = todayRows.reduce((s, r) => s + (r.units_sold as number), 0);
     const todayRevenue = todayRows.reduce((s, r) => s + ((r.revenue as number) || 0), 0);
@@ -62,6 +67,18 @@ export async function GET() {
       : 0;
     const avgSale = todayTransactions > 0 ? todayRevenue / todayTransactions : 0;
 
+    // What's the most recent date that actually has sales data? Useful so the
+    // UI can show "Yesterday" or "Last data: May 26" instead of misleading $0
+    const { data: lastSaleRow } = await supabase
+      .from("daily_sales")
+      .select("sale_date")
+      .order("sale_date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const lastSaleDate = (lastSaleRow?.sale_date as string | null) || null;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayHasData = lastSaleDate === todayStr;
+
     // Weekly comparison (for spikes shown on the page)
     const thisWeekUnits = thisWeekRows.reduce((s, r) => s + (r.units_sold as number), 0);
     const priorWeekUnits = priorWeekRows.reduce((s, r) => s + (r.units_sold as number), 0);
@@ -69,8 +86,13 @@ export async function GET() {
       ? Math.round(((thisWeekUnits - priorWeekUnits) / priorWeekUnits) * 100)
       : 0;
 
-    // ─── Machines status ───────────────────────────────────────────────
-    const offlineMachines = machines.filter((m) => (m.status as string) === "offline");
+    // ─── Machines status (merge DB + scraper-api signals) ──────────────
+    const dbOffline = new Set(
+      machines.filter((m) => (m.status as string) === "offline").map((m) => m.name as string)
+    );
+    // Combine: a machine is offline if EITHER our DB OR scraper-api says so
+    const offlineNames = new Set<string>([...dbOffline, ...scraperOfflineNames]);
+    const offlineMachines = machines.filter((m) => offlineNames.has(m.name as string));
     const activeMachines = machines.length - offlineMachines.length;
 
     // ─── Refill stops (top 3 machines with lowest estimated_remaining) ─
@@ -125,8 +147,26 @@ export async function GET() {
     }
 
     // ─── Pricing suggestions ───────────────────────────────────────────
+    // Filter to actionable changes:
+    //  - real cost basis (cost > 0, otherwise the suggestion is meaningless)
+    //  - real suggested price
+    //  - product name doesn't contain garbled/non-printable characters
+    //  - sort by price-increase magnitude (cents added per unit) so the top
+    //    3 are the highest-impact opportunities, not random
+    function isPrintable(s: string): boolean {
+      // Strip whitespace; require all remaining chars to be common printable
+      const trimmed = s.replace(/\s+/g, "");
+      return trimmed.length > 0 && /^[\x20-\x7E]+$/.test(trimmed);
+    }
     const priceChanges = Object.values(analyses)
-      .filter((a) => a.status === "Pending Approval" && a.suggestedPrice > 0)
+      .filter((a) =>
+        a.status === "Pending Approval" &&
+        a.suggestedPrice > 0 &&
+        a.cost > 0 &&
+        a.scrapedProduct &&
+        isPrintable(a.scrapedProduct)
+      )
+      .sort((a, b) => (b.suggestedPrice - b.cost) - (a.suggestedPrice - a.cost))
       .slice(0, 3)
       .map((a) => ({
         product: a.scrapedProduct || a.productId,
@@ -155,6 +195,8 @@ export async function GET() {
         thisWeekUnits,
         priorWeekUnits,
         weekWoWPct,
+        lastSaleDate,
+        todayHasData,
       },
       machines: {
         total: machines.length,
@@ -215,6 +257,23 @@ async function fetchDailySalesRange(
     .gte("sale_date", fromDate.toISOString().slice(0, 10))
     .lt("sale_date", toDate.toISOString().slice(0, 10));
   return data || [];
+}
+
+async function fetchScraperOfflineMachines(): Promise<Set<string>> {
+  // Call our own /api/machines proxy which merges scraper + DB statuses.
+  // We can't import the route directly server-side, so fetch.
+  try {
+    const url = `${process.env.NEXT_PUBLIC_APP_URL || "https://pocketpantry.vercel.app"}/api/machines`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return new Set();
+    const data = await res.json();
+    const ms = (data.machines || []) as Array<{ name?: string; status?: string }>;
+    return new Set(
+      ms.filter((m) => (m.status || "").toLowerCase() === "offline").map((m) => m.name || "")
+    );
+  } catch {
+    return new Set();
+  }
 }
 
 async function fetchRecentReplies(supabase: ReturnType<typeof createServerClient>) {

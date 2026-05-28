@@ -8,9 +8,13 @@ export type UnifiedLeadEnrichment = {
   provider: LeadEnrichmentProvider;
   email?: string;
   phone?: string;
+  mobile?: string;          // Apollo-only — used to populate apollo_mobile for the caller
   contactName?: string;
   contactTitle?: string;
   domain?: string;
+  employeeCount?: number;   // Apollo-only — feeds tier scoring
+  industry?: string;
+  companyName?: string;
   warnings?: string[];
 };
 
@@ -37,9 +41,13 @@ function fromApollo(enrichment: ApolloLeadEnrichment): UnifiedLeadEnrichment {
     provider: "apollo",
     email: enrichment.email,
     phone: enrichment.phone,
+    mobile: enrichment.mobile,
     contactName: enrichment.contactName,
     contactTitle: enrichment.contactTitle,
     domain: enrichment.domain,
+    employeeCount: enrichment.employeeCount,
+    industry: enrichment.industry,
+    companyName: enrichment.companyName,
     warnings: enrichment.warnings,
   };
 }

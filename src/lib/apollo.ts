@@ -35,6 +35,10 @@ type ApolloMatchResponse = {
 };
 
 export type ApolloLeadEnrichment = {
+  mobile?: string;             // Apollo's mobile number (best for cold calling)
+  employeeCount?: number;      // Company size — feeds the tier scoring
+  industry?: string;           // Apollo industry classification
+  companyName?: string;
   provider: "apollo";
   email?: string;
   phone?: string;
@@ -232,13 +236,24 @@ export async function findApolloContact(params: { website?: string; company?: st
     }
   }
 
+  const enrichedOrg = (enrichedPerson as ApolloPerson & {
+    organization?: { primary_domain?: string; estimated_num_employees?: number; industry?: string; name?: string }
+  }).organization;
+  // Pull mobile separately from the main phone fallback — mobile is the
+  // most useful for cold outreach (direct vs gatekeeper-screened main line).
+  const mobileOnly = enrichedPerson.mobile_phone || enrichedPerson.direct_phone || undefined;
+
   return {
     provider: "apollo",
     email: pickBestApolloEmail(enrichedPerson),
     phone: pickBestApolloPhone(enrichedPerson),
+    mobile: mobileOnly,
     contactName: buildPersonName(enrichedPerson),
     contactTitle: enrichedPerson.title || undefined,
-    domain: enrichedPerson.organization?.primary_domain || domain,
+    domain: enrichedOrg?.primary_domain || domain,
+    employeeCount: enrichedOrg?.estimated_num_employees,
+    industry: enrichedOrg?.industry,
+    companyName: enrichedOrg?.name,
     warnings,
   } satisfies ApolloLeadEnrichment;
 }

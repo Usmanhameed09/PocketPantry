@@ -5,10 +5,26 @@
 
 import { createServerClient } from "./supabase";
 import { isSystemLeadId } from "./system-records";
+import { createTask, nextTaskForOutcome } from "./lead-tasks";
 
 // ----------------------------------------------------------------
 // Types
 // ----------------------------------------------------------------
+
+export type LeadStage =
+  | "New Lead"
+  | "Contacted"
+  | "Qualified"
+  | "Interested"
+  | "Not Interested"
+  | "Site Visit Requested"
+  | "Proposal Requested"
+  | "Meeting Booked"
+  | "Won"
+  | "Installed"
+  | "Callback";
+
+export type LeadTier = "A" | "B" | "C";
 
 export interface Lead {
   id: string;
@@ -20,7 +36,7 @@ export interface Lead {
   distance: string;
   businessType: string;
   source: "Manual" | "Excel Import" | "Google Maps";
-  stage: "New Lead" | "Contacted" | "Interested" | "Not Interested" | "Site Visit Requested" | "Proposal Requested" | "Callback";
+  stage: LeadStage;
   contactMethod: "Call" | "Email" | "Call + Email";
   callLogs: CallLog[];
   emailLogs: EmailLog[];
@@ -30,24 +46,38 @@ export interface Lead {
   vapiCallId?: string;
   callbackDate?: string;
   callbackTime?: string;
-  // Extended fields (Doc 1 lead form)
   contactTitle?: string;
   employeeCount?: string;
   currentVendingStatus?: string;
   currentVendorName?: string;
   productPreferences?: string;
   painPoints?: string[];
-  // Gatekeeper referral (Doc 2)
   decisionMakerName?: string;
   decisionMakerPhone?: string;
   decisionMakerEmail?: string;
-  // Visit scheduling
   visitDate?: string;
   visitTime?: string;
-  // Email follow-up tracking (Doc 3)
   emailSent?: boolean;
   followUp1Sent?: boolean;
   followUp2Sent?: boolean;
+  // ─── Pipeline v2 fields ────────────────────────────────────────
+  tier?: LeadTier;
+  tierReason?: string;
+  tierScore?: number;
+  owner?: string;
+  vertical?: string;
+  employeeCountNumeric?: number;
+  footTrafficScore?: number;
+  website?: string;
+  apolloMobile?: string;
+  apolloTitle?: string;
+  apolloLastEnrichedAt?: string;
+  maxCallAttempts?: number;
+  nextAction?: string;
+  nextActionAt?: string;
+  notInterestedReason?: string;
+  isCallReady?: boolean;
+  lastTouchAt?: string;
 }
 
 export interface CallLog {
@@ -122,6 +152,23 @@ function dbToLead(row: Record<string, unknown>, callLogs: CallLog[], emailLogs: 
     emailSent: (row.email_sent as boolean) || false,
     followUp1Sent: (row.follow_up_1_sent as boolean) || false,
     followUp2Sent: (row.follow_up_2_sent as boolean) || false,
+    tier: (row.tier as LeadTier) || undefined,
+    tierReason: (row.tier_reason as string) || undefined,
+    tierScore: (row.tier_score as number) ?? undefined,
+    owner: (row.owner as string) || undefined,
+    vertical: (row.vertical as string) || undefined,
+    employeeCountNumeric: (row.employee_count as number) ?? undefined,
+    footTrafficScore: (row.foot_traffic_score as number) ?? undefined,
+    website: (row.website as string) || undefined,
+    apolloMobile: (row.apollo_mobile as string) || undefined,
+    apolloTitle: (row.apollo_title as string) || undefined,
+    apolloLastEnrichedAt: (row.apollo_last_enriched_at as string) || undefined,
+    maxCallAttempts: (row.max_call_attempts as number) ?? undefined,
+    nextAction: (row.next_action as string) || undefined,
+    nextActionAt: (row.next_action_at as string) || undefined,
+    notInterestedReason: (row.not_interested_reason as string) || undefined,
+    isCallReady: (row.is_call_ready as boolean) || false,
+    lastTouchAt: (row.last_touch_at as string) || undefined,
   };
 }
 
@@ -303,12 +350,16 @@ export async function updateLead(
     decisionMakerName: string; decisionMakerPhone: string; decisionMakerEmail: string;
     visitDate: string; visitTime: string;
     emailSent: boolean; followUp1Sent: boolean; followUp2Sent: boolean;
+    tier: LeadTier; tierReason: string; tierScore: number;
+    owner: string; vertical: string; employeeCountNumeric: number; footTrafficScore: number;
+    website: string; apolloMobile: string; apolloTitle: string; apolloLastEnrichedAt: string;
+    maxCallAttempts: number; nextAction: string; nextActionAt: string;
+    notInterestedReason: string; isCallReady: boolean; lastTouchAt: string;
   }>
 ): Promise<boolean> {
   const supabase = createServerClient();
   const db: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
-  // Map camelCase → snake_case
   const map: Record<string, string> = {
     business: "business", businessType: "business_type", contact: "contact", phone: "phone", email: "email",
     address: "address", stage: "stage", vapiCallId: "vapi_call_id",
@@ -320,6 +371,14 @@ export async function updateLead(
     decisionMakerPhone: "decision_maker_phone", decisionMakerEmail: "decision_maker_email",
     visitDate: "visit_date", visitTime: "visit_time",
     emailSent: "email_sent", followUp1Sent: "follow_up_1_sent", followUp2Sent: "follow_up_2_sent",
+    tier: "tier", tierReason: "tier_reason", tierScore: "tier_score",
+    owner: "owner", vertical: "vertical",
+    footTrafficScore: "foot_traffic_score",
+    website: "website", apolloMobile: "apollo_mobile", apolloTitle: "apollo_title",
+    apolloLastEnrichedAt: "apollo_last_enriched_at", maxCallAttempts: "max_call_attempts",
+    nextAction: "next_action", nextActionAt: "next_action_at",
+    notInterestedReason: "not_interested_reason", isCallReady: "is_call_ready",
+    lastTouchAt: "last_touch_at",
   };
 
   for (const [key, dbKey] of Object.entries(map)) {
@@ -348,14 +407,61 @@ export async function addCallLogAndUpdateStage(
   const stage = stageForOutcome(outcome);
 
   const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  await supabase.from("leads").update({
+
+  // Pull max_call_attempts + callback fields so we can compute next_action.
+  const { data: leadRow } = await supabase.from("leads")
+    .select("max_call_attempts, callback_date, callback_time")
+    .eq("id", leadId).maybeSingle();
+  const maxAttempts = (leadRow?.max_call_attempts as number) ?? 6;
+  const cbDate = (leadRow?.callback_date as string) || undefined;
+  const cbTime = (leadRow?.callback_time as string) || undefined;
+
+  const next = nextTaskForOutcome({
+    outcome,
+    attempts: callLog.attempt,
+    maxAttempts,
+    callbackDate: cbDate,
+    callbackTime: cbTime,
+  });
+
+  // Build the update with next-action + last_touch fields. Wrapped in try/catch
+  // for the v2 columns so we still work pre-migration.
+  const baseUpdate: Record<string, unknown> = {
     stage, call_attempts: callLog.attempt,
-    last_activity: `Call ${outcome} — ${dateStr}`, updated_at: new Date().toISOString(),
-  }).eq("id", leadId);
+    last_activity: `Call ${outcome} — ${dateStr}`,
+    updated_at: new Date().toISOString(),
+  };
+  const v2Update: Record<string, unknown> = {
+    last_touch_at: new Date().toISOString(),
+    next_action: next ? `${next.taskType === "call" ? "Call" : "Email"} — ${next.reason}` : null,
+    next_action_at: next ? next.scheduledFor.toISOString() : null,
+  };
+  if (outcome === "not_interested") {
+    v2Update.not_interested_reason = (callLog.summary || "marked not interested").slice(0, 200);
+  }
+  let { error: updErr } = await supabase.from("leads").update({ ...baseUpdate, ...v2Update }).eq("id", leadId);
+  if (updErr) {
+    // pre-v2 fallback
+    updErr = (await supabase.from("leads").update(baseUpdate).eq("id", leadId)).error;
+  }
+
+  // Create the next task in lead_tasks (best-effort — if the table isn't there
+  // yet we silently skip)
+  if (next) {
+    try {
+      await createTask({
+        leadId,
+        taskType: next.taskType,
+        scheduledFor: next.scheduledFor,
+        priority: next.priority,
+        reason: next.reason,
+      });
+    } catch { /* table may not exist yet */ }
+  }
 
   await supabase.from("outreach_log").insert({
     lead_id: leadId, action_type: "call",
-    action_data: { outcome, summary: callLog.summary, duration: callLog.duration },
+    action_data: { outcome, summary: callLog.summary, duration: callLog.duration, next_action: next?.reason || null },
   });
 
   return true;

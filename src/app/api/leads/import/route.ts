@@ -12,7 +12,19 @@ type ImportLeadInput = {
   businessType?: string;
   source?: "Excel Import";
   contactMethod?: "Call" | "Email" | "Call + Email";
+  // v2 fields
+  website?: string;
+  vertical?: string;
+  employeeCount?: string;
+  owner?: string;
+  apolloMobile?: string;
 };
+
+function extractDomain(value: string | undefined): string {
+  if (!value) return "";
+  const match = value.toLowerCase().match(/(?:https?:\/\/)?(?:www\.)?([^/?#\s]+)/);
+  return match ? match[1].trim() : "";
+}
 
 function parseLeadNumber(id: string | undefined) {
   if (!id) return 0;
@@ -32,8 +44,17 @@ function isDuplicateLead(input: ImportLeadInput, existing: ImportLeadInput[]) {
   const business = normalizeText(input.business);
   const phone = normalizePhone(input.phone);
   const address = normalizeText(input.address);
+  const domain = extractDomain(input.website);
+  const email = normalizeText(input.email);
 
   return existing.some((lead) => {
+    // 1. Same domain → duplicate (catches "Joe's Pizza Inc" vs "Joe's Pizza LLC" with same website)
+    if (domain && extractDomain(lead.website) === domain) return true;
+    // 2. Same phone → duplicate regardless of business name (saves re-imports of same number)
+    if (phone && phone.length >= 7 && normalizePhone(lead.phone) === phone) return true;
+    // 3. Same email → duplicate
+    if (email && normalizeText(lead.email) === email) return true;
+    // 4. Same business name + (same address OR same phone) — original rule, kept as fallback
     const sameBusiness = normalizeText(lead.business) === business;
     const samePhone = phone && normalizePhone(lead.phone) === phone;
     const sameAddress = address && normalizeText(lead.address) === address;
@@ -58,7 +79,7 @@ async function insertLead(entry: ImportLeadInput) {
     (idRows || []).reduce((max, row) => Math.max(max, parseLeadNumber(row.id as string | undefined)), 0) + 1;
   const id = `L-${String(nextNumber).padStart(3, "0")}`;
 
-  const { error } = await supabase.from("leads").insert({
+  const payload: Record<string, unknown> = {
     id,
     business: entry.business,
     contact: entry.contact,
@@ -73,7 +94,29 @@ async function insertLead(entry: ImportLeadInput) {
     call_attempts: 0,
     added_date: dateStr,
     last_activity: `Added ${dateStr}`,
-  });
+  };
+  // v2 fields (only set if provided so we don't write empty strings)
+  if (entry.website?.trim()) payload.website = entry.website.trim();
+  if (entry.vertical?.trim()) payload.vertical = entry.vertical.trim();
+  if (entry.employeeCount?.trim()) payload.employee_count = entry.employeeCount.trim();
+  if (entry.owner?.trim()) payload.owner = entry.owner.trim();
+  if (entry.apolloMobile?.trim()) payload.apollo_mobile = entry.apolloMobile.trim();
+
+  let { error } = await supabase.from("leads").insert(payload);
+  if (error) {
+    // If the deployed DB hasn't run 004_pipeline_v2.sql yet, the v2 columns
+    // don't exist. Retry with only the base columns so import still works.
+    const msg = `${error.message || ""} ${(error as { details?: string }).details || ""}`.toLowerCase();
+    const v2ColumnMissing = ["website", "vertical", "employee_count", "owner", "apollo_mobile"]
+      .some((c) => msg.includes(c));
+    if (v2ColumnMissing) {
+      const stripped = { ...payload };
+      delete stripped.website; delete stripped.vertical; delete stripped.employee_count;
+      delete stripped.owner; delete stripped.apollo_mobile;
+      const retry = await supabase.from("leads").insert(stripped);
+      error = retry.error;
+    }
+  }
 
   if (error) {
     throw error;
@@ -102,6 +145,7 @@ export async function POST(request: NextRequest) {
       businessType: lead.businessType,
       source: "Excel Import",
       contactMethod: "Call",
+      website: lead.website,
     }));
 
     const imported: { id: string; business: string }[] = [];

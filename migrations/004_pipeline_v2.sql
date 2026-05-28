@@ -37,6 +37,28 @@ END $$;
 -- Ensure uuid-ossp is available for uuid_generate_v4() default below.
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- ─── Stage CHECK constraint — allow the new stages ──────────────
+-- The deployed leads table has a CHECK constraint that whitelists the old
+-- stage values. Without dropping + re-adding it, transitions to Qualified /
+-- Meeting Booked / Won / Installed fail with "violates check constraint".
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.constraint_column_usage
+    WHERE table_name = 'leads' AND constraint_name = 'leads_stage_check'
+  ) THEN
+    ALTER TABLE leads DROP CONSTRAINT leads_stage_check;
+  END IF;
+END $$;
+
+ALTER TABLE leads ADD CONSTRAINT leads_stage_check CHECK (stage IN (
+  'New Lead', 'Contacted', 'Qualified', 'Interested', 'Not Interested',
+  'Site Visit Requested', 'Proposal Requested', 'Meeting Booked',
+  'Won', 'Installed', 'Callback',
+  -- Legacy values that might still exist in old rows
+  'Emailed', 'Replied', 'Nurturing', 'Opted Out', 'Unsubscribed'
+));
+
 -- ─── Lead enrichment fields ──────────────────────────────────────
 
 DO $$ BEGIN

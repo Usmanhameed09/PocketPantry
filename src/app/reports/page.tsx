@@ -43,8 +43,21 @@ const PIE_COLORS = ["#16a34a", "#059669", "#d97706", "#6366f1", "#dc2626"];
 
 export default function ReportsPage() {
   const [tab, setTab] = useState<ReportTab>("Overview");
+  const [preset, setPreset] = useState<"7d" | "30d" | "90d" | "month" | "custom">("30d");
   const [days, setDays] = useState(30);
+  const [customFrom, setCustomFrom] = useState<string>("");
+  const [customTo, setCustomTo] = useState<string>("");
   const [machineId, setMachineId] = useState<string>("");
+
+  // "Last month" = previous calendar month (e.g. on May 28 → April 1 to April 30)
+  function lastMonthRange(): { from: string; to: string } {
+    const today = new Date();
+    const firstOfThis = new Date(today.getFullYear(), today.getMonth(), 1);
+    const lastOfPrev = new Date(firstOfThis.getTime() - 86400000);
+    const firstOfPrev = new Date(lastOfPrev.getFullYear(), lastOfPrev.getMonth(), 1);
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return { from: fmt(firstOfPrev), to: fmt(lastOfPrev) };
+  }
   const [data, setData] = useState<ReportsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +68,16 @@ export default function ReportsPage() {
     setLoading(true);
     setError(null);
     try {
-      const qs = new URLSearchParams({ days: String(days) });
+      const qs = new URLSearchParams();
+      // Preset → translate into the right query params for /api/reports
+      if (preset === "month") {
+        const { from, to } = lastMonthRange();
+        qs.set("from", from); qs.set("to", to);
+      } else if (preset === "custom" && customFrom && customTo) {
+        qs.set("from", customFrom); qs.set("to", customTo);
+      } else {
+        qs.set("days", String(days));
+      }
       if (machineId) qs.set("machineId", machineId);
       const res = await fetch(`/api/reports?${qs}`, { cache: "no-store" });
       const json = await res.json();
@@ -66,7 +88,7 @@ export default function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [days, machineId]);
+  }, [preset, days, customFrom, customTo, machineId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -134,17 +156,48 @@ export default function ReportsPage() {
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <select
-              value={days}
-              onChange={(e) => setDays(Number(e.target.value))}
+              value={preset}
+              onChange={(e) => {
+                const v = e.target.value as typeof preset;
+                setPreset(v);
+                if (v === "7d") setDays(7);
+                else if (v === "30d") setDays(30);
+                else if (v === "90d") setDays(90);
+              }}
               style={{
                 padding: "8px 14px", fontSize: 13, fontWeight: 500, color: "#374151",
                 background: "#fff", border: "1px solid #d5d9e2", borderRadius: 8, cursor: "pointer", outline: "none",
               }}
             >
-              <option value={7}>Last 7 Days</option>
-              <option value={30}>Last 30 Days</option>
-              <option value={90}>Last 90 Days</option>
+              <option value="7d">Last 7 Days</option>
+              <option value="30d">Last 30 Days</option>
+              <option value="90d">Last 90 Days</option>
+              <option value="month">Last Month</option>
+              <option value="custom">Custom range…</option>
             </select>
+            {preset === "custom" && (
+              <>
+                <input
+                  type="date"
+                  value={customFrom}
+                  onChange={(e) => setCustomFrom(e.target.value)}
+                  style={{
+                    padding: "7px 10px", fontSize: 13, color: "#374151",
+                    background: "#fff", border: "1px solid #d5d9e2", borderRadius: 8, outline: "none",
+                  }}
+                />
+                <span style={{ fontSize: 12, color: "#64748b" }}>to</span>
+                <input
+                  type="date"
+                  value={customTo}
+                  onChange={(e) => setCustomTo(e.target.value)}
+                  style={{
+                    padding: "7px 10px", fontSize: 13, color: "#374151",
+                    background: "#fff", border: "1px solid #d5d9e2", borderRadius: 8, outline: "none",
+                  }}
+                />
+              </>
+            )}
             <select
               value={machineId}
               onChange={(e) => setMachineId(e.target.value)}
@@ -202,7 +255,7 @@ export default function ReportsPage() {
             sub="After fees & supplier cost" subColor="#059669" />
           <BigStat icon={<CreditCard size={20} color="#d97706" />} iconBg="#fef3c7"
             label="Processing Fees" value={`$${stats.processingFees.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
-            sub={`~3.5% on $${stats.cardRevenue.toFixed(0)} card`} />
+            sub={`5.95% on $${stats.cardRevenue.toFixed(0)} card`} />
           <BigStat icon={<Percent size={20} color="#6366f1" />} iconBg="#ede9fe"
             label="Avg. Margin" value={`${stats.avgMargin.toFixed(1)}%`}
             sub="Revenue minus supplier cost" />
@@ -230,22 +283,34 @@ export default function ReportsPage() {
               </div>
             ) : (
               <>
-                {/* Revenue Trend */}
+                {/* Revenue Trend — horizontally scrollable on mobile so long
+                    date ranges don't squash. Width grows with the number of
+                    data points; outer div is overflow-x:auto. */}
                 <div style={{ ...cardStyle, gridColumn: "1 / -1", padding: 20 }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Revenue Trend</div>
                   <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2, marginBottom: 16 }}>
                     Daily revenue from Nayax · {data.range.fromDate} to {data.range.toDate}
+                    {isMobile && revenueByDay.length > 10 && <span style={{ marginLeft: 6, color: "#0d9488" }}>· swipe ←→</span>}
                   </div>
-                  <ResponsiveContainer width="100%" height={260}>
-                    <LineChart data={revenueByDay}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#94a3b8" }} tickLine={false} axisLine={{ stroke: "#d5d9e2" }} />
-                      <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
-                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #d5d9e2" }}
-                        formatter={(value) => [`$${Number(value).toFixed(2)}`, "Revenue"]} />
-                      <Line type="monotone" dataKey="revenue" stroke="#16a34a" strokeWidth={2.5} dot={false} activeDot={{ r: 5, fill: "#16a34a" }} />
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                    <div style={{
+                      minWidth: isMobile
+                        ? `${Math.max(360, revenueByDay.length * 36)}px`
+                        : "100%",
+                      height: 260,
+                    }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={revenueByDay}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                          <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#94a3b8" }} tickLine={false} axisLine={{ stroke: "#d5d9e2" }} />
+                          <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
+                          <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #d5d9e2" }}
+                            formatter={(value) => [`$${Number(value).toFixed(2)}`, "Revenue"]} />
+                          <Line type="monotone" dataKey="revenue" stroke="#16a34a" strokeWidth={2.5} dot={false} activeDot={{ r: 5, fill: "#16a34a" }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Top SKUs */}
@@ -546,7 +611,7 @@ export default function ReportsPage() {
                 <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 20 }}>Nayax card processing</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <FeeRow label="Card Transactions" amount={`$${stats.cardRevenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                  <FeeRow label="Processing Rate" amount="~3.5%" />
+                  <FeeRow label="Processing Rate" amount="5.95%" />
                   <FeeRow label="Total Fees" amount={`$${stats.processingFees.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} bold />
                   <div style={{ height: 1, background: "#d5d9e2" }} />
                   <FeeRow label="Revenue After Fees" amount={`$${(stats.totalRevenue - stats.processingFees).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} bold color="#059669" />
@@ -555,7 +620,7 @@ export default function ReportsPage() {
                 {(() => {
                   const cashEntry = paymentSplit.find((p) => p.name.toLowerCase() === "cash");
                   if (!cashEntry) return null;
-                  const cashFeesSaved = cashEntry.amount * 0.035;
+                  const cashFeesSaved = cashEntry.amount * 0.0595;
                   return (
                     <div style={{
                       marginTop: 16, padding: "10px 14px", background: "#fef3c7",
@@ -577,7 +642,7 @@ export default function ReportsPage() {
         }}>
           <strong>Live data:</strong> Revenue and units from <code>daily_sales</code> (synced from Nayax).
           Supplier costs from <code>products.unit_cost</code>. Payment-method split fetched live from Nayax via scraper-api.
-          Processing fees calculated at ~3.5% of card revenue. Inventory turns annualised from period COGS ÷ current warehouse value.
+          Processing fees calculated at 5.95% of card revenue. Inventory turns annualised from period COGS ÷ current warehouse value.
         </div>
       </div>
     </div>

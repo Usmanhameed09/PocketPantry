@@ -27,6 +27,7 @@ import {
   BarChart3,
   Info,
   Calendar,
+  X,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -156,6 +157,30 @@ export default function PredictionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  // Locally-dismissed Product Health items (e.g. operator already removed
+  // the product from the machine and doesn't want it shown anymore).
+  // Persisted in localStorage so the dismissal survives page reloads.
+  const [dismissedProducts, setDismissedProducts] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("dismissedProductHealth");
+      if (raw) setDismissedProducts(new Set(JSON.parse(raw)));
+    } catch { /* localStorage unavailable */ }
+  }, []);
+
+  function dismissProduct(productKey: string) {
+    setDismissedProducts((prev) => {
+      const next = new Set(prev);
+      next.add(productKey);
+      try { localStorage.setItem("dismissedProductHealth", JSON.stringify(Array.from(next))); } catch {}
+      return next;
+    });
+  }
+  function restoreAllProducts() {
+    setDismissedProducts(new Set());
+    try { localStorage.removeItem("dismissedProductHealth"); } catch {}
+  }
 
   const fetchPredictions = useCallback(async () => {
     try {
@@ -615,19 +640,34 @@ export default function PredictionsPage() {
         {tab === "products" && (
           <div>
             <div style={{
-              display: "flex", alignItems: "center", gap: 10,
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
               padding: "12px 16px", background: "#fef2f2", border: "1px solid #fecaca",
               borderRadius: 10, marginBottom: 20, fontSize: 13, color: "#991b1b",
+              flexWrap: "wrap",
             }}>
-              <AlertCircle size={16} style={{ flexShrink: 0 }} />
-              <span>
-                <strong>{deadProducts} products flagged for removal</strong> &mdash; these are consistently underperforming
-                and taking up valuable machine slots.
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <AlertCircle size={16} style={{ flexShrink: 0 }} />
+                <span>
+                  <strong>{deadProducts} products flagged for removal</strong> &mdash; these are consistently underperforming
+                  and taking up valuable machine slots.
+                </span>
               </span>
+              {dismissedProducts.size > 0 && (
+                <button
+                  onClick={restoreAllProducts}
+                  style={{
+                    padding: "4px 10px", fontSize: 12, fontWeight: 600,
+                    background: "#fff", color: "#991b1b",
+                    border: "1px solid #fecaca", borderRadius: 6, cursor: "pointer",
+                  }}
+                >
+                  Restore {dismissedProducts.size} hidden
+                </button>
+              )}
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {productPerformance.map((p, i) => {
+              {productPerformance.filter((p) => !dismissedProducts.has(p.product)).map((p, i) => {
                 const rec = p.recommendation ? actionConfig[p.recommendation] : null;
                 const RecIcon = rec?.icon || Package;
                 const maxRev = Math.max(...productPerformance.map(pp => pp.totalRevenue));
@@ -703,10 +743,38 @@ export default function PredictionsPage() {
                           <span style={{ fontSize: 12, color: "#94a3b8" }}>{p.reason}</span>
                         )}
                       </div>
+
+                      {/* Dismiss button — operator already took the action, hide
+                          from the list. Persists in localStorage. */}
+                      <button
+                        onClick={() => dismissProduct(p.product)}
+                        title="Mark as done & hide"
+                        style={{
+                          flexShrink: 0,
+                          width: 32, height: 32, borderRadius: 8,
+                          background: "#fff", border: "1px solid #e2e8f0",
+                          cursor: "pointer", color: "#94a3b8",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}
+                      >
+                        <X size={16} />
+                      </button>
                     </div>
                   </div>
                 );
               })}
+              {productPerformance.filter((p) => !dismissedProducts.has(p.product)).length === 0 && (
+                <div style={{
+                  padding: 32, textAlign: "center", fontSize: 13, color: "#64748b",
+                  background: "#fff", borderRadius: 12, border: "1px solid #e2e8f0",
+                }}>
+                  All products dismissed.{" "}
+                  <button onClick={restoreAllProducts} style={{
+                    background: "none", border: "none", color: "#0d9488",
+                    fontWeight: 600, cursor: "pointer", textDecoration: "underline",
+                  }}>Restore all</button>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -740,7 +808,7 @@ export default function PredictionsPage() {
             }}>
               <Zap size={16} style={{ flexShrink: 0 }} />
               <span>
-                <strong>Machine Plan</strong> â€” pick a machine to see both the immediate <em>Smart Actions</em> (urgent stock changes) and the <em>Full Template</em> (target planogram). One screen, no tab-switching.
+                <strong>Machine Plan</strong> &mdash; pick a machine to see both the immediate <em>Smart Actions</em> (urgent stock changes) and the <em>Full Template</em> (target planogram). One screen, no tab-switching.
               </span>
             </div>
 
@@ -764,7 +832,7 @@ export default function PredictionsPage() {
                     padding: 32, textAlign: "center", background: "#fff",
                     border: "1px solid #e2e8f0", borderRadius: 12, color: "#94a3b8", fontSize: 13,
                   }}>
-                    No plan data yet â€” retrain the model to generate.
+                    No plan data yet &mdash; retrain the model to generate.
                   </div>
                 );
               }
@@ -778,7 +846,7 @@ export default function PredictionsPage() {
 
               return (
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  {/* Machine chip selector â€” horizontal scroll on mobile */}
+                  {/* Machine chip selector — horizontal scroll on mobile */}
                   <div style={{
                     display: "flex", gap: 6, overflowX: "auto",
                     WebkitOverflowScrolling: "touch", padding: "2px 0 4px",
@@ -916,7 +984,8 @@ export default function PredictionsPage() {
                                     : it.status === "Add" ? "#eff6ff"
                                     : it.status === "Watch" ? "#fffbeb"
                                     : "#fef2f2";
-                                  const trendArrow = it.fleetTrend === "up" ? "â†—" : it.fleetTrend === "down" ? "â†˜" : "â†’";
+                                  // Plain ASCII to avoid mojibake regressions on file resave
+                                  const trendArrow = it.fleetTrend === "up" ? "+" : it.fleetTrend === "down" ? "-" : "~";
                                   const trendColor = it.fleetTrend === "up" ? "#059669" : it.fleetTrend === "down" ? "#dc2626" : "#94a3b8";
                                   return (
                                     <div key={i} style={{
@@ -936,7 +1005,7 @@ export default function PredictionsPage() {
                                         {trendArrow} {it.fleetTrendPct > 0 ? "+" : ""}{it.fleetTrendPct}%
                                       </span>
                                       <span style={{ fontSize: 10, color: "#64748b", minWidth: 60, textAlign: "right" }}>
-                                        {it.machineDailyRate !== null ? `${it.machineDailyRate.toFixed(1)}/d` : "â€”"}
+                                        {it.machineDailyRate !== null ? `${it.machineDailyRate.toFixed(1)}/d` : "—"}
                                       </span>
                                     </div>
                                   );
@@ -1054,9 +1123,9 @@ function SeasonalCalendar({ trends, isMobile }: { trends: SeasonalTrend[]; isMob
       }}>
         <span style={{ fontWeight: 600, color: "#374151" }}>Legend:</span>
         <LegendSwatch color="#059669" label="Peak (>30% above avg)" />
-        <LegendSwatch color="#34d399" label="Hot (+10â€“30%)" />
+        <LegendSwatch color="#34d399" label="Hot (+10 to 30%)" />
         <LegendSwatch color="#ecfdf5" label="Average" textColor="#065f46" />
-        <LegendSwatch color="#bfdbfe" label="Cool (-20â€“40%)" textColor="#1e3a8a" />
+        <LegendSwatch color="#bfdbfe" label="Cool (-20 to -40%)" textColor="#1e3a8a" />
         <LegendSwatch color="#3b82f6" label="Cold (-40%+)" />
         <LegendSwatch color="#f1f5f9" label="No data" textColor="#94a3b8" />
       </div>
@@ -1076,9 +1145,15 @@ function SeasonalCalendar({ trends, isMobile }: { trends: SeasonalTrend[]; isMob
               padding: "12px 14px 8px",
               background: "#f8fafc",
               borderBottom: "1px solid #e2e8f0",
-              position: "sticky", top: 0, zIndex: 1,
+              position: "sticky", top: 0, zIndex: 2,
             }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.8 }}>
+              {/* Product header — sticky to LEFT so it stays visible during horizontal scroll */}
+              <div style={{
+                fontSize: 11, fontWeight: 700, color: "#64748b",
+                textTransform: "uppercase", letterSpacing: 0.8,
+                position: "sticky", left: 0, background: "#f8fafc",
+                paddingLeft: 4, paddingRight: 8, zIndex: 3,
+              }}>
                 Product
               </div>
               {MONTH_SHORT.map((m, idx) => (
@@ -1107,16 +1182,22 @@ function SeasonalCalendar({ trends, isMobile }: { trends: SeasonalTrend[]; isMob
                   padding: "10px 14px",
                   borderBottom: "1px solid #f1f5f9",
                   alignItems: "center",
+                  background: "#fff",
                 }}>
-                  <div style={{ paddingRight: 8 }}>
+                  {/* Product cell sticks to LEFT — readable while month columns scroll */}
+                  <div style={{
+                    paddingRight: 8, paddingLeft: 4,
+                    position: "sticky", left: 0, background: "#fff",
+                    zIndex: 1, boxShadow: "2px 0 4px -2px rgba(15,23,42,0.06)",
+                  }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", lineHeight: 1.25 }}>
                       {t.product}
                     </div>
                     <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>
-                      Peak <strong style={{ color: "#059669" }}>{t.peakMonth}</strong> Â· Low <strong style={{ color: "#1e40af" }}>{t.lowMonth}</strong>
+                      Peak <strong style={{ color: "#059669" }}>{t.peakMonth}</strong> · Low <strong style={{ color: "#1e40af" }}>{t.lowMonth}</strong>
                     </div>
                     <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
-                      Lifetime: ${Math.round(t.totalRevenue).toLocaleString()} Â· Swing {Math.round(((t as unknown as { swing?: number }).swing) ?? 0)}%
+                      Lifetime: ${Math.round(t.totalRevenue).toLocaleString()} · Swing {Math.round(((t as unknown as { swing?: number }).swing) ?? 0)}%
                     </div>
                   </div>
                   {Array.from({ length: 12 }, (_, i) => {
@@ -1141,7 +1222,7 @@ function SeasonalCalendar({ trends, isMobile }: { trends: SeasonalTrend[]; isMob
                         }}
                       >
                         <div style={{ fontSize: 11, lineHeight: 1 }}>
-                          {rev > 0 ? `$${rev >= 1000 ? `${(rev/1000).toFixed(1)}k` : Math.round(rev)}` : "â€”"}
+                          {rev > 0 ? `$${rev >= 1000 ? `${(rev/1000).toFixed(1)}k` : Math.round(rev)}` : "—"}
                         </div>
                         {idx > 0 && (
                           <div style={{ fontSize: 9, opacity: 0.75, marginTop: 2 }}>

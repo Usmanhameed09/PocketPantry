@@ -238,7 +238,7 @@ function buildLeadInsertPayload(
     phone: data.phone,
     email: data.email || "",
     address: data.address || "",
-    distance: data.distance || "â€”",
+    distance: data.distance || "—",
     business_type: data.businessType || "",
     source: data.source || "Manual",
     stage: "New Lead",
@@ -542,7 +542,7 @@ export async function updateCallLogByConversationId(params: {
       .from("leads")
       .update({
         stage: stageForOutcome(params.outcome),
-        last_activity: `Call ${params.outcome} â€” ${dateStr}`,
+        last_activity: `Call ${params.outcome} — ${dateStr}`,
         updated_at: new Date().toISOString(),
       })
       .eq("id", params.leadId);

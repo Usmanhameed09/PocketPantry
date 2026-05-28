@@ -19,7 +19,7 @@ import { readEnv } from "@/lib/runtime-env";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const NAYAX_PROCESSING_FEE_RATE = 0.035; // ~3.5% on card transactions
+const NAYAX_PROCESSING_FEE_RATE = 0.0595; // 5.95% on card transactions (per Nayax statement)
 
 type DailySaleRow = {
   product_id: string;
@@ -32,7 +32,15 @@ type DailySaleRow = {
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const days = Math.max(1, Math.min(90, Number(searchParams.get("days")) || 30));
+    // Accept either ?days=N (preset) or ?from=YYYY-MM-DD&to=YYYY-MM-DD (custom range).
+    // Custom range wins if both are valid; days is the fallback.
+    const fromParam = searchParams.get("from");
+    const toParam = searchParams.get("to");
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    const isoFrom = fromParam && dateRegex.test(fromParam) ? fromParam : null;
+    const isoTo = toParam && dateRegex.test(toParam) ? toParam : null;
+
+    const days = Math.max(1, Math.min(366, Number(searchParams.get("days")) || 30));
     const machineFilter = searchParams.get("machineId") || null;
 
     const companyId = await ensureDefaultCompany();
@@ -40,8 +48,8 @@ export async function GET(req: Request) {
 
     // Date range in the operator's timezone (Eastern by default) so the
     // Reports page numbers line up with Nayax's live dashboard.
-    const fromStr = dateNDaysAgoInOperatorTz(days);
-    const toStr = todayInOperatorTz();
+    const fromStr = isoFrom || dateNDaysAgoInOperatorTz(days);
+    const toStr = isoTo || todayInOperatorTz();
 
     // ─── 1. Fetch daily_sales rows in range ───────────────────────────
     let dailyQuery = supabase

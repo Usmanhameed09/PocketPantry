@@ -92,7 +92,17 @@ ANSWER STYLE
 - For recommendations, briefly explain the reasoning using snapshot data.
 - For machine-specific questions, look up machines[name] first.
 - If asked to "predict" or "forecast" specific future numbers, say you only have
-  current 30-day averages — for future predictions point to the Predictions page.`;
+  current 30-day averages — for future predictions point to the Predictions page.
+
+═══════════════════════════════════════════════════════════════════
+WHEN ASKED "BEST X CATEGORY FOR MACHINE Y" (READ CAREFULLY)
+═══════════════════════════════════════════════════════════════════
+
+1. Open machines[].products[] for machine Y in the snapshot.
+2. Filter that array to entries whose .category EQUALS the asked category exactly (Snacks / Candy / Drinks / Meals).
+3. If the filtered list is EMPTY, say so: "Machine Y has no <category> products currently selling. Snapshot's machines[].products[] for Y shows only [list the categories that ARE present]." Do NOT invent a product.
+4. If the filtered list has entries, pick the highest machineMonthlyUnits and report that number EXACTLY as it appears in the snapshot.
+5. NEVER carry a number from a DIFFERENT product into your answer. If M&Ms Peanut shows machineMonthlyUnits: 3, do not write "9" because some other product had 9.`;
 
 export async function POST(req: Request) {
   const apiKey = process.env.OPENAI_API_KEY;

@@ -324,7 +324,10 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       // 30d total = raw units summed across all products on this machine
       // over the same 30-day window the Reports page uses.
       machineMonthlyUnits: total30d,
-      products: items.slice(0, 15).map((x) => ({
+      // No slice cap — the AI was hallucinating numbers when asked about
+      // products outside the cap. Snapshot is a few KB larger but the AI
+      // can now find every actual product on the machine.
+      products: items.map((x) => ({
         name: x.name, category: x.category,
         // machineDailyUnits = average daily rate (units30d / 30)
         machineDailyUnits: Math.round(x.rate * 100) / 100,

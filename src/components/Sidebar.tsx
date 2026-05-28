@@ -15,11 +15,13 @@ import {
   UserCircle,
   Brain,
   Target,
+  MessageCircle,
   X,
 } from "lucide-react";
 
 const navItems = [
   { name: "Today", href: "/", icon: LayoutDashboard },
+  { name: "AI Assistant", href: "/inventory/assistant", icon: MessageCircle },
   { name: "Machines", href: "/machines", icon: Monitor },
   { name: "Inventory", href: "/inventory", icon: Package },
   { name: "Pricing", href: "/pricing", icon: DollarSign },

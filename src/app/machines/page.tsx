@@ -101,38 +101,14 @@ export default function MachinesPage() {
   // Low-stock machine IDs from inventory data
   const [lowStockMachineIds, setLowStockMachineIds] = useState<Set<string>>(new Set());
 
-  // All-time totals from daily_sales — single source of truth for revenue.
-  // Other pages (Today, Reports) read the same table so numbers stay
-  // consistent and the figure can't decrease mid-day (rolling Nayax window
-  // bug, see /api/machines/totals docstring).
-  const [totals30d, setTotals30d] = useState<{
-    total: { revenue: number; orders: number; units: number };
-    perMachine: Record<string, { revenue: number; orders: number; units: number }>;
-    fromDate: string; toDate: string;
-  } | null>(null);
-
   const fetchMachines = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     else setLoading(true);
     try {
-      const [machinesRes, totalsRes] = await Promise.all([
-        fetch("/api/machines"),
-        // days=all → lifetime totals (since the first sale ever recorded).
-        // The label below shows the actual date range so the operator knows.
-        fetch("/api/machines/totals?days=all"),
-      ]);
-      const data = await machinesRes.json();
+      const res = await fetch("/api/machines");
+      const data = await res.json();
       if (data.success && data.machines) {
         setMachines(data.machines);
-      }
-      const totalsData = await totalsRes.json();
-      if (totalsData.ok) {
-        setTotals30d({
-          total: totalsData.total,
-          perMachine: totalsData.perMachine,
-          fromDate: totalsData.fromDate,
-          toDate: totalsData.toDate,
-        });
       }
     } catch {
       // keep existing data
@@ -224,22 +200,12 @@ export default function MachinesPage() {
     offline: machines.filter((m) => m.status === "Offline").length,
   };
 
-  // Aggregate stats — prefer the 30-day total from daily_sales (stable, can't
-  // decrease, matches Today + Reports for the same window). Fall back to the
-  // scraper's rolling-window sum only if the endpoint hasn't responded yet,
-  // so the page still renders during initial load.
-  const totalRevenue = totals30d
-    ? totals30d.total.revenue
-    : machines.reduce((s, m) => s + m.totalRevenue, 0);
-  const totalOrders = totals30d
-    ? totals30d.total.orders
-    : machines.reduce((s, m) => s + m.paidOrders, 0);
-  const totalItems = totals30d
-    ? totals30d.total.units
-    : machines.reduce((s, m) => s + m.totalItemsSold, 0);
-  // Weekly is still from the scraper card (rolling 7d). Acceptable because it
-  // doesn't appear as a standalone "Total" tile, just a subtitle.
+  // Aggregate stats — sum across the per-machine numbers the scraper returns
+  // so the tile updates as new live sales come in from Nayax.
+  const totalRevenue = machines.reduce((s, m) => s + m.totalRevenue, 0);
   const weeklyRevenue = machines.reduce((s, m) => s + m.weeklyRevenue, 0);
+  const totalOrders = machines.reduce((s, m) => s + m.paidOrders, 0);
+  const totalItems = machines.reduce((s, m) => s + m.totalItemsSold, 0);
   const paidMachineOrders = machineOrders.filter((order) => (order.status || "").toLowerCase() === "paid");
   const modalRevenue = paidMachineOrders.reduce((sum, order) => sum + Number(order.amount || 0), 0);
   const modalItemsSold = machineOrders.reduce((sum, order) => sum + Number(order.totalItems || 0), 0);
@@ -279,8 +245,8 @@ export default function MachinesPage() {
             gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
             gap: 14, marginBottom: 22,
           }}>
-            <StatCard icon={<DollarSign size={16} color="#059669" />} label="Total Revenue" value={`$${totalRevenue.toFixed(2)}`} sub={totals30d ? `Since ${totals30d.fromDate}` : `$${weeklyRevenue.toFixed(2)} this week`} />
-            <StatCard icon={<ShoppingCart size={16} color="#3b82f6" />} label="Total Orders" value={String(totalOrders)} sub={`${totalItems} items sold`} />
+            <StatCard icon={<DollarSign size={16} color="#059669" />} label="Total Revenue" value={`$${totalRevenue.toFixed(2)}`} sub={`$${weeklyRevenue.toFixed(2)} this week`} />
+            <StatCard icon={<ShoppingCart size={16} color="#3b82f6" />} label="Paid Orders" value={String(totalOrders)} sub={`${totalItems} items sold`} />
             <StatCard icon={<Package size={16} color="#8b5cf6" />} label="Machines" value={String(counts.total)} sub={`${counts.healthy} healthy`} />
             <StatCard icon={<CheckCircle2 size={16} color="#f59e0b" />} label="Avg / Machine" value={counts.total ? `$${(totalRevenue / counts.total).toFixed(2)}` : "--"} sub={counts.total ? `${Math.round(totalOrders / counts.total)} orders avg` : ""} />
           </div>
@@ -461,9 +427,9 @@ export default function MachinesPage() {
                     display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8,
                     background: "#f8fafc", borderRadius: 10, padding: "10px 12px",
                   }}>
-                    <MobileMiniStat label="Revenue" value={`$${(totals30d?.perMachine[m.id]?.revenue ?? m.totalRevenue).toFixed(0)}`} />
-                    <MobileMiniStat label="Orders" value={String(totals30d?.perMachine[m.id]?.orders ?? m.paidOrders)} />
-                    <MobileMiniStat label="Items" value={String(totals30d?.perMachine[m.id]?.units ?? m.totalItemsSold)} />
+                    <MobileMiniStat label="Revenue" value={`$${m.totalRevenue.toFixed(0)}`} />
+                    <MobileMiniStat label="Orders" value={String(m.paidOrders)} />
+                    <MobileMiniStat label="Items" value={String(m.totalItemsSold)} />
                   </div>
 
                   {/* Top SKU */}
@@ -560,23 +526,23 @@ export default function MachinesPage() {
                       </div>
                     </div>
 
-                    {/* Revenue — 30-day window from daily_sales, matches Today + Reports */}
+                    {/* Revenue */}
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
-                        ${(totals30d?.perMachine[m.id]?.revenue ?? m.totalRevenue).toFixed(2)}
+                        ${m.totalRevenue.toFixed(2)}
                       </div>
                       <div style={{ fontSize: 11, color: "#94a3b8" }}>
-                        {totals30d ? "all time" : `$${m.weeklyRevenue.toFixed(2)}/wk`}
+                        ${m.weeklyRevenue.toFixed(2)}/wk
                       </div>
                     </div>
 
                     {/* Orders */}
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>
-                        {totals30d?.perMachine[m.id]?.orders ?? m.paidOrders}
+                        {m.paidOrders}
                       </div>
                       <div style={{ fontSize: 11, color: "#94a3b8" }}>
-                        {totals30d?.perMachine[m.id]?.units ?? m.totalItemsSold} items
+                        {m.totalItemsSold} items
                       </div>
                     </div>
 

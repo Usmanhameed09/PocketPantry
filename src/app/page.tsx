@@ -27,6 +27,7 @@ type DashboardData = {
     yesterdayRevenue: number; wowPct: number; avgSale: number;
     thisWeekUnits: number; priorWeekUnits: number; weekWoWPct: number;
     lastSaleDate: string | null; todayHasData: boolean;
+    liveDataAt: string | null;
   };
   machines: { total: number; active: number; offline: number; offlineList: Array<{ name: string; status: string }>; };
   alerts: { total: number; high: number; topAlerts: Array<{ message: string; severity: string; kind: string }>; };
@@ -127,10 +128,14 @@ export default function Dashboard() {
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: isMobile ? 10 : 16 }}>
           <StatCard
             icon={<TrendingUp size={20} color="#16a34a" />} iconBg="#dcfce7"
-            label={sales.todayHasData ? "Today's Revenue" : `Last data ${sales.lastSaleDate || "—"}`}
+            label={
+              sales.liveDataAt
+                ? "Today's Revenue · LIVE"
+                : sales.todayHasData ? "Today's Revenue" : `Last data ${sales.lastSaleDate || "—"}`
+            }
             value={`$${sales.todayRevenue.toFixed(2)}`}
             tag={
-              !sales.todayHasData
+              !sales.todayHasData && !sales.liveDataAt
                 ? <span style={{ color: "#94a3b8", fontSize: 12 }}>today not synced yet</span>
                 : sales.wowPct === 0 ? <span style={{ color: "#64748b", fontSize: 12 }}>vs yesterday</span>
                 : sales.wowPct > 0

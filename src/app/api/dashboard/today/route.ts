@@ -59,10 +59,27 @@ export async function GET() {
     const scraperOfflineNames = await fetchScraperOfflineMachines();
 
     // ─── Today's revenue ───────────────────────────────────────────────
-    const todayUnits = todayRows.reduce((s, r) => s + (r.units_sold as number), 0);
-    const todayRevenue = todayRows.reduce((s, r) => s + ((r.revenue as number) || 0), 0);
+    // 1. First read what's in daily_sales (whatever the last sync wrote)
+    let todayUnits = todayRows.reduce((s, r) => s + (r.units_sold as number), 0);
+    let todayRevenue = todayRows.reduce((s, r) => s + ((r.revenue as number) || 0), 0);
+    let todayTransactions = todayRows.length;
     const yesterdayRevenue = yesterdayRows.reduce((s, r) => s + ((r.revenue as number) || 0), 0);
-    const todayTransactions = todayRows.length;
+
+    // 2. Now try to OVERRIDE with truly live numbers from Nayax. The cron
+    //    only runs once a day, so daily_sales is up to 24h stale. Live
+    //    Nayax — via the scraper-api — has the real-time count. If the
+    //    scraper times out (>20s) we keep the cached number rather than
+    //    fail the whole dashboard.
+    let liveDataAt: string | null = null;
+    try {
+      const live = await fetchLiveTodayTotals(todayInOperatorTz());
+      if (live) {
+        todayUnits = live.units;
+        todayRevenue = live.revenue;
+        todayTransactions = live.transactions;
+        liveDataAt = live.fetchedAt;
+      }
+    } catch { /* fall through, keep cached values */ }
     const wowPct = yesterdayRevenue > 0
       ? Math.round(((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100)
       : 0;
@@ -203,6 +220,10 @@ export async function GET() {
         weekWoWPct,
         lastSaleDate,
         todayHasData,
+        // Non-null = today's numbers above came LIVE from Nayax on this request.
+        // Null = scraper timed out / unavailable, you're seeing the last
+        // daily_sales sync (could be hours stale).
+        liveDataAt,
       },
       machines: {
         total: machines.length,
@@ -260,6 +281,66 @@ async function fetchDailySalesRange(
     .gte("sale_date", dateNDaysAgoInOperatorTz(fromDaysAgo))
     .lt("sale_date", dateNDaysAgoInOperatorTz(toDaysAgo));
   return data || [];
+}
+
+/**
+ * Pulls TODAY's revenue + units + transaction count straight from Nayax
+ * (via the scraper-api's inventory-status endpoint). The scraper returns a
+ * per-product daily_breakdown keyed by date — we sum the entries for the
+ * operator's "today" date and return totals.
+ *
+ * Why this exists: the cron-driven daily_sales table can be 24h stale.
+ * Calling this on every page load makes the Today tile match Nayax LIVE
+ * within seconds. Cost: 5-15s added to page load on first hit (Vercel
+ * Data Cache + s-maxage will serve subsequent requests instantly for ~60s).
+ *
+ * Returns null on any failure so the caller falls back to the cached number.
+ */
+async function fetchLiveTodayTotals(todayDateStr: string): Promise<
+  { revenue: number; units: number; transactions: number; fetchedAt: string } | null
+> {
+  const url = process.env.SCRAPER_API_URL;
+  const key = process.env.SCRAPER_BACKEND_KEY || process.env.API_KEY || "";
+  if (!url) return null;
+
+  // 15s hard cap so a slow scraper doesn't hold the whole page hostage.
+  // Vercel's data cache also memoizes for 30s so most refreshes within
+  // that window are instant — only one user per 30s pays the round-trip.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(`${url}/api/machines/inventory-status`, {
+      headers: { "x-api-key": key },
+      next: { revalidate: 30 },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      machines?: Array<{
+        products?: Array<{
+          daily_breakdown?: Record<string, number>;
+          daily_revenue?: Record<string, number>;
+        }>;
+      }>;
+    };
+    let units = 0;
+    let revenue = 0;
+    let transactions = 0;
+    for (const m of data.machines || []) {
+      for (const p of m.products || []) {
+        const u = p.daily_breakdown?.[todayDateStr] || 0;
+        const r = p.daily_revenue?.[todayDateStr] || 0;
+        units += u;
+        revenue += r;
+        if (u > 0) transactions += u; // 1 unit ≈ 1 tx in vending
+      }
+    }
+    return { revenue, units, transactions, fetchedAt: new Date().toISOString() };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function fetchScraperOfflineMachines(): Promise<Set<string>> {

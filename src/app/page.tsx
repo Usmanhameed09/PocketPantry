@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Header from "@/components/Header";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useRouter } from "next/navigation";
@@ -12,308 +13,317 @@ import {
   TrendingUp,
   AlertTriangle,
   ArrowUpRight,
-  Clock,
+  ArrowDownRight,
   CheckCircle2,
+  Loader2,
+  Bot,
 } from "lucide-react";
 
-/* ------------------------------------------------------------------ */
-/*  Reusable style objects                                             */
-/* ------------------------------------------------------------------ */
+/* ────── Types ────── */
+type DashboardData = {
+  generatedAt: string;
+  sales: {
+    todayRevenue: number; todayUnits: number; todayTransactions: number;
+    yesterdayRevenue: number; wowPct: number; avgSale: number;
+    thisWeekUnits: number; priorWeekUnits: number; weekWoWPct: number;
+  };
+  machines: { total: number; active: number; offline: number; offlineList: Array<{ name: string; status: string }>; };
+  alerts: { total: number; high: number; topAlerts: Array<{ message: string; severity: string; kind: string }>; };
+  refillStops: Array<{ machine: string; items: number; color: string }>;
+  warehouse: { value: number; itemsBelowThreshold: number; restockCost: number; buyListItems: number; };
+  priceChanges: Array<{ product: string; suggestedPrice: number; cost: number }>;
+  recentReply: { from: string; summary: string; intent: string; receivedAt: string } | null;
+};
 
+/* ────── Style helpers ────── */
 const card: React.CSSProperties = {
-  background: "#fff",
-  borderRadius: 14,
-  border: "1px solid #d5d9e2",
+  background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
   boxShadow: "0 2px 6px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04)",
-  display: "flex",
-  flexDirection: "column",
-  overflow: "hidden",
+  display: "flex", flexDirection: "column", overflow: "hidden",
 };
-
-const cardHeader: React.CSSProperties = {
-  padding: "20px 22px 12px",
-  display: "flex",
-  alignItems: "center",
-  gap: 14,
-};
-
-const cardBody: React.CSSProperties = {
-  padding: "0 22px",
-  flex: 1,
-};
-
-const cardFooter: React.CSSProperties = {
-  padding: "16px 22px 20px",
-};
-
+const cardHeader: React.CSSProperties = { padding: "20px 22px 12px", display: "flex", alignItems: "center", gap: 14 };
+const cardBody: React.CSSProperties = { padding: "0 22px", flex: 1 };
+const cardFooter: React.CSSProperties = { padding: "16px 22px 20px" };
 const iconBox = (bg: string): React.CSSProperties => ({
-  width: 42,
-  height: 42,
-  borderRadius: 12,
-  background: bg,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  flexShrink: 0,
+  width: 42, height: 42, borderRadius: 12, background: bg,
+  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
 });
-
 const btnBase: React.CSSProperties = {
-  width: "100%",
-  padding: "11px 0",
-  borderRadius: 10,
-  border: "none",
-  fontSize: 13,
-  fontWeight: 600,
-  cursor: "pointer",
-  letterSpacing: 0.2,
-  transition: "opacity 0.15s",
+  width: "100%", padding: "11px 0", borderRadius: 10, border: "none",
+  fontSize: 13, fontWeight: 600, cursor: "pointer", letterSpacing: 0.2,
 };
-
 const greenBtn: React.CSSProperties = { ...btnBase, background: "#059669", color: "#fff" };
 const blueBtn: React.CSSProperties = { ...btnBase, background: "#16a34a", color: "#fff" };
 const redBtn: React.CSSProperties = { ...btnBase, background: "#dc2626", color: "#fff" };
-
 const listRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  padding: "10px 14px",
-  background: "#f1f5f9",
-  borderRadius: 10,
+  display: "flex", alignItems: "center", justifyContent: "space-between",
+  padding: "10px 14px", background: "#f1f5f9", borderRadius: 10,
 };
-
 const badge = (bg: string, color: string): React.CSSProperties => ({
-  fontSize: 11,
-  fontWeight: 600,
-  background: bg,
-  color: color,
-  padding: "3px 9px",
-  borderRadius: 20,
-  whiteSpace: "nowrap",
+  fontSize: 11, fontWeight: 600, background: bg, color, padding: "3px 9px",
+  borderRadius: 20, whiteSpace: "nowrap",
 });
-
-/* ------------------------------------------------------------------ */
-/*  Test Data                                                          */
-/* ------------------------------------------------------------------ */
-
-const refillStops = [
-  { machine: "Baker Nissan Sales", location: "12090 Katy Fwy", items: 8, color: "#dc2626" },
-  { machine: "B4 Lumber", location: "6815 Airline Dr", items: 5, color: "#d97706" },
-  { machine: "Reynolds Nationwide", location: "3411 Richmond Ave", items: 3, color: "#059669" },
-];
-
-const priceChanges = [
-  { product: "Celsius Tropical Vibe", from: "$2.50", to: "$2.75", pct: "+10%" },
-  { product: "Monster Energy", from: "$3.00", to: "$3.25", pct: "+8%" },
-  { product: "Bai Coconut", from: "$2.00", to: "$2.25", pct: "+12%" },
-];
-
-const machineAlerts = [
-  { machine: "Machine 5", status: "Offline", note: "No Sales in 6 Hours", critical: true },
-  { machine: "Machine 2", status: "Connection Issue", note: "Intermittent for 2 Hours", critical: false },
-];
-
-/* ------------------------------------------------------------------ */
-/*  Page                                                               */
-/* ------------------------------------------------------------------ */
 
 export default function Dashboard() {
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(1024);
   const router = useRouter();
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/dashboard/today", { cache: "no-store" });
+        const json = await res.json();
+        if (cancelled) return;
+        if (!json.success) throw new Error(json.error || "Failed to load");
+        setData(json);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ minHeight: "100vh" }}>
+        <Header title="Today" />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 400 }}>
+          <Loader2 size={32} color="#16a34a" style={{ animation: "spin 1s linear infinite" }} />
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div style={{ minHeight: "100vh" }}>
+        <Header title="Today" />
+        <div style={{ padding: 40 }}>
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 20, color: "#dc2626" }}>
+            Could not load dashboard data: {error || "Unknown error"}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const { sales, machines, alerts, refillStops, warehouse, priceChanges, recentReply } = data;
+
   return (
     <div style={{ minHeight: "100vh" }}>
-      <Header title="Today" subtitle="Tuesday, April 30" />
+      <Header title="Today" />
 
-      {/* ---- Quick Stats ---- */}
+      {/* ─── Quick Stats (real numbers) ─── */}
       <div style={{ padding: isMobile ? "16px 16px 0" : "24px 32px 0" }}>
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: isMobile ? 10 : 16 }}>
-          <StatCard icon={<TrendingUp size={20} color="#16a34a" />} iconBg="#dcfce7"
-            label="Today's Revenue" value="$145.80"
-            tag={<span style={{ color: "#059669", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 2 }}><ArrowUpRight size={14} /> 12% vs yesterday</span>} />
-          <StatCard icon={<CheckCircle2 size={20} color="#059669" />} iconBg="#dcfce7"
-            label="Machines Active" value="6 / 8"
-            tag={<span style={{ color: "#d97706", fontSize: 12, fontWeight: 500 }}>2 need attention</span>} />
-          <StatCard icon={<AlertTriangle size={20} color="#d97706" />} iconBg="#fef3c7"
-            label="Pending Actions" value="7"
-            tag={<span style={{ color: "#dc2626", fontSize: 12, fontWeight: 500 }}>3 urgent</span>} />
-          <StatCard icon={<Clock size={20} color="#6366f1" />} iconBg="#fef9c3"
-            label="Route ETA" value="2h 15m"
-            tag={<span style={{ color: "#64748b", fontSize: 12, fontWeight: 500 }}>3 stops planned</span>} />
+          <StatCard
+            icon={<TrendingUp size={20} color="#16a34a" />} iconBg="#dcfce7"
+            label="Today's Revenue" value={`$${sales.todayRevenue.toFixed(2)}`}
+            tag={
+              sales.wowPct === 0 ? <span style={{ color: "#64748b", fontSize: 12 }}>vs yesterday</span>
+              : sales.wowPct > 0
+                ? <span style={{ color: "#059669", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 2 }}><ArrowUpRight size={14} /> {sales.wowPct}% vs yesterday</span>
+                : <span style={{ color: "#dc2626", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 2 }}><ArrowDownRight size={14} /> {Math.abs(sales.wowPct)}% vs yesterday</span>
+            }
+          />
+          <StatCard
+            icon={<CheckCircle2 size={20} color="#059669" />} iconBg="#dcfce7"
+            label="Machines Active" value={`${machines.active} / ${machines.total}`}
+            tag={machines.offline > 0
+              ? <span style={{ color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{machines.offline} offline</span>
+              : <span style={{ color: "#059669", fontSize: 12, fontWeight: 500 }}>all healthy</span>
+            }
+          />
+          <StatCard
+            icon={<AlertTriangle size={20} color="#d97706" />} iconBg="#fef3c7"
+            label="Open Alerts" value={String(alerts.total)}
+            tag={alerts.high > 0
+              ? <span style={{ color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{alerts.high} high severity</span>
+              : <span style={{ color: "#64748b", fontSize: 12, fontWeight: 500 }}>nothing critical</span>
+            }
+          />
+          <StatCard
+            icon={<DollarSign size={20} color="#6366f1" />} iconBg="#ede9fe"
+            label="Warehouse Value" value={`$${warehouse.value.toFixed(2)}`}
+            tag={<span style={{ color: "#64748b", fontSize: 12 }}>{warehouse.itemsBelowThreshold} items low</span>}
+          />
         </div>
       </div>
 
-      {/* ---- Main Cards Grid ---- */}
+      {/* ─── Main Cards ─── */}
       <div style={{ padding: isMobile ? 16 : "24px 32px 32px" }}>
         <div style={{ display: "grid", gridTemplateColumns: isTablet ? "1fr" : "repeat(3, 1fr)", gap: isMobile ? 16 : 20 }}>
 
-          {/* --- Card 1: Refill Stops --- */}
+          {/* Card 1: Refill Stops */}
           <div style={card}>
             <div style={cardHeader}>
               <div style={iconBox("#16a34a")}><Truck size={20} color="#fff" /></div>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Today&apos;s Refill Stops</div>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-                  <span style={{ fontWeight: 600, color: "#16a34a" }}>3</span> Machines Need Refill
+                  <span style={{ fontWeight: 600, color: "#16a34a" }}>{refillStops.length}</span> machines need refill
                 </div>
               </div>
             </div>
             <div style={cardBody}>
-              <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 10 }}>Route Ready · Click to Start</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {refillStops.map((s, i) => (
-                  <div key={i} style={listRow}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
-                      <div>
+              {refillStops.length === 0 ? (
+                <EmptyHint message="All machines stocked — no refills needed yet" />
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {refillStops.map((s, i) => (
+                    <div key={i} style={listRow}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{s.machine}</div>
-                        <div style={{ fontSize: 11, color: "#94a3b8" }}>{s.location}</div>
                       </div>
+                      <span style={badge("#fff", "#4b5563")}>{s.items} low items</span>
                     </div>
-                    <span style={badge("#fff", "#4b5563")}>{s.items} items</span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/machines")}>Start Route</button></div>
+            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/inventory")}>View Inventory</button></div>
           </div>
 
-          {/* --- Card 2: Low Inventory --- */}
+          {/* Card 2: Low Inventory Alert */}
           <div style={card}>
             <div style={cardHeader}>
               <div style={iconBox("#d97706")}><PackageX size={20} color="#fff" /></div>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Low Inventory Alert</div>
-                <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>Low Stock in Warehouse</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Warehouse Restock</div>
+                <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>Buy-list summary</div>
               </div>
             </div>
             <div style={cardBody}>
-              <div style={{
-                background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 10,
-                padding: "14px 16px", marginBottom: 14,
-              }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>Order Needed</div>
-                <div style={{ fontSize: 12, color: "#b45309", marginTop: 4 }}>Chips, Celsius, Granola Bars</div>
-              </div>
+              {warehouse.buyListItems > 0 ? (
+                <div style={{ background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>Order Recommended</div>
+                  <div style={{ fontSize: 12, color: "#b45309", marginTop: 4 }}>
+                    {warehouse.buyListItems} products across active vendors
+                  </div>
+                </div>
+              ) : (
+                <EmptyHint message="No restock needed — stock is healthy" />
+              )}
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <InfoRow label="Warehouse Value" value="$2,420.75" />
-                <InfoRow label="Items Below Threshold" value="8 products" valueColor="#d97706" />
-                <InfoRow label="Estimated Restock Cost" value="$689.00" />
+                <InfoRow label="Warehouse Value" value={`$${warehouse.value.toFixed(2)}`} />
+                <InfoRow label="Items Below Threshold" value={`${warehouse.itemsBelowThreshold} products`} valueColor={warehouse.itemsBelowThreshold > 0 ? "#d97706" : "#059669"} />
+                <InfoRow label="Estimated Restock Cost" value={`$${warehouse.restockCost.toFixed(2)}`} />
               </div>
             </div>
-            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/inventory")}>View Order</button></div>
+            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/inventory/buy-list")}>Open Buy List</button></div>
           </div>
 
-          {/* --- Card 3: Price Change --- */}
+          {/* Card 3: Price Change Review */}
           <div style={card}>
             <div style={cardHeader}>
               <div style={iconBox("#059669")}><DollarSign size={20} color="#fff" /></div>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Price Change Review</div>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-                  <span style={{ fontWeight: 600, color: "#16a34a" }}>3</span> Price Updates Suggested
+                  <span style={{ fontWeight: 600, color: "#16a34a" }}>{priceChanges.length}</span> suggested
                 </div>
               </div>
             </div>
             <div style={cardBody}>
-              <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 10 }}>Approve New Pricing Updates</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {priceChanges.map((p, i) => (
-                  <div key={i} style={listRow}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{p.product}</div>
-                      <div style={{ fontSize: 11, color: "#94a3b8" }}>{p.from} → {p.to}</div>
+              {priceChanges.length === 0 ? (
+                <EmptyHint message="No pending price changes — margins are healthy" />
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {priceChanges.map((p, i) => (
+                    <div key={i} style={listRow}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.product}</div>
+                        <div style={{ fontSize: 11, color: "#94a3b8" }}>cost ${p.cost.toFixed(2)} → suggest ${p.suggestedPrice.toFixed(2)}</div>
+                      </div>
                     </div>
-                    <span style={badge("#d1fae5", "#059669")}>{p.pct}</span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div style={cardFooter}><button style={blueBtn} onClick={() => router.push("/pricing")}>Review Prices</button></div>
+            <div style={cardFooter}><button style={blueBtn} onClick={() => router.push("/pricing")}>Review Pricing</button></div>
           </div>
 
-          {/* --- Card 4: New Location Reply --- */}
+          {/* Card 4: New Reply (recent email) */}
           <div style={card}>
             <div style={cardHeader}>
               <div style={iconBox("#eab308")}><MapPin size={20} color="#fff" /></div>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>New Location Reply</div>
-                <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>1 new response</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Recent Lead Reply</div>
+                <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
+                  {recentReply ? "1 new response" : "No new replies"}
+                </div>
               </div>
             </div>
             <div style={cardBody}>
-              <div style={{
-                background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 10,
-                padding: "16px", marginBottom: 14,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                  <div style={{
-                    width: 36, height: 36, borderRadius: "50%", background: "#eab308",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    color: "#fff", fontSize: 12, fontWeight: 700,
-                  }}>JT</div>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Johnson Tech</div>
-                    <div style={{ fontSize: 11, color: "#64748b" }}>Replied today</div>
+              {recentReply ? (
+                <div style={{ background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 10, padding: 16, marginBottom: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#eab308", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 12, fontWeight: 700 }}>
+                      {(recentReply.from || "?").slice(0, 2).toUpperCase()}
+                    </div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{recentReply.from}</div>
+                      <div style={{ fontSize: 11, color: "#64748b" }}>{new Date(recentReply.receivedAt).toLocaleDateString()}</div>
+                    </div>
                   </div>
+                  {recentReply.intent && (
+                    <div style={{ fontSize: 13, color: "#a16207", fontWeight: 600, marginBottom: 4 }}>{recentReply.intent}</div>
+                  )}
+                  {recentReply.summary && (
+                    <div style={{ fontSize: 12, color: "#475569" }}>{recentReply.summary.slice(0, 120)}</div>
+                  )}
                 </div>
-                <div style={{ fontSize: 13, color: "#a16207", fontWeight: 600 }}>Interested in a Meeting</div>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#64748b" }}>
-                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#059669" }} />
-                  Pipeline: 3 active prospects
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#64748b" }}>
-                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#16a34a" }} />
-                  2 follow-ups scheduled this week
-                </div>
-              </div>
+              ) : (
+                <EmptyHint message="Inbox is quiet — no new lead replies" />
+              )}
             </div>
-            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/pipeline")}>View Reply</button></div>
+            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/pipeline")}>Open Pipeline</button></div>
           </div>
 
-          {/* --- Card 5: Machine Alert --- */}
+          {/* Card 5: Machine Alerts */}
           <div style={card}>
             <div style={cardHeader}>
               <div style={iconBox("#dc2626")}><WifiOff size={20} color="#fff" /></div>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Machine Alert</div>
-                <div style={{ fontSize: 12, color: "#dc2626", fontWeight: 500, marginTop: 2 }}>2 machines need attention</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Machine Alerts</div>
+                <div style={{ fontSize: 12, color: machines.offline > 0 ? "#dc2626" : "#64748b", fontWeight: 500, marginTop: 2 }}>
+                  {machines.offline > 0 ? `${machines.offline} need attention` : "All machines healthy"}
+                </div>
               </div>
             </div>
             <div style={cardBody}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {machineAlerts.map((a, i) => (
-                  <div key={i} style={{
-                    padding: "14px 16px",
-                    borderRadius: 10,
-                    background: a.critical ? "#fee2e2" : "#fef3c7",
-                    border: `1px solid ${a.critical ? "#fecaca" : "#fde68a"}`,
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <div style={{
-                          width: 8, height: 8, borderRadius: "50%",
-                          background: a.critical ? "#dc2626" : "#d97706",
-                          animation: "pulse 2s infinite",
-                        }} />
-                        <span style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{a.machine}</span>
+              {machines.offline === 0 ? (
+                <EmptyHint message="No offline machines — all sending data" />
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {machines.offlineList.map((m, i) => (
+                    <div key={i} style={{ padding: "14px 16px", borderRadius: 10, background: "#fee2e2", border: "1px solid #fecaca" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#dc2626", animation: "pulse 2s infinite" }} />
+                          <span style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{m.name}</span>
+                        </div>
+                        <span style={badge("#fee2e2", "#dc2626")}>{m.status}</span>
                       </div>
-                      <span style={badge(
-                        a.critical ? "#fee2e2" : "#fef3c7",
-                        a.critical ? "#dc2626" : "#d97706",
-                      )}>{a.status}</span>
+                      <div style={{ fontSize: 12, color: "#64748b", paddingLeft: 16 }}>No data for &gt;24 hours</div>
                     </div>
-                    <div style={{ fontSize: 12, color: "#64748b", paddingLeft: 16 }}>{a.note}</div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div style={cardFooter}><button style={redBtn} onClick={() => router.push("/machines")}>Check Status</button></div>
+            <div style={cardFooter}><button style={machines.offline > 0 ? redBtn : greenBtn} onClick={() => router.push("/machines")}>Check Machines</button></div>
           </div>
 
-          {/* --- Card 6: Sales Summary --- */}
+          {/* Card 6: Sales Summary */}
           <div style={card}>
             <div style={cardHeader}>
               <div style={iconBox("#059669")}><TrendingUp size={20} color="#fff" /></div>
@@ -325,40 +335,36 @@ export default function Dashboard() {
             <div style={cardBody}>
               <div style={{ textAlign: "center", padding: "8px 0 16px" }}>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 4 }}>Today&apos;s Revenue</div>
-                <div style={{ fontSize: 36, fontWeight: 800, color: "#0f172a", letterSpacing: -1 }}>$145.80</div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, marginTop: 4 }}>
-                  <ArrowUpRight size={14} color="#059669" />
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "#059669" }}>Up 12%</span>
-                  <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 2 }}>vs. Yesterday</span>
-                </div>
+                <div style={{ fontSize: 36, fontWeight: 800, color: "#0f172a", letterSpacing: -1 }}>${sales.todayRevenue.toFixed(2)}</div>
+                {sales.wowPct !== 0 && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, marginTop: 4 }}>
+                    {sales.wowPct > 0
+                      ? <><ArrowUpRight size={14} color="#059669" /><span style={{ fontSize: 13, fontWeight: 600, color: "#059669" }}>Up {sales.wowPct}%</span></>
+                      : <><ArrowDownRight size={14} color="#dc2626" /><span style={{ fontSize: 13, fontWeight: 600, color: "#dc2626" }}>Down {Math.abs(sales.wowPct)}%</span></>
+                    }
+                    <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 2 }}>vs. yesterday</span>
+                  </div>
+                )}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <MiniStat label="Transactions" value="47" sub="+8" positive />
-                <MiniStat label="Avg. Sale" value="$3.10" sub="+$0.15" positive />
-                <MiniStat label="Card %" value="78%" sub="+3%" positive />
-                <MiniStat label="Cash" value="$32.10" sub="-5%" positive={false} />
+                <MiniStat label="Transactions" value={String(sales.todayTransactions)} />
+                <MiniStat label="Avg. Sale" value={`$${sales.avgSale.toFixed(2)}`} />
+                <MiniStat label="Units sold today" value={String(sales.todayUnits)} />
+                <MiniStat label="Week vs prior" value={`${sales.weekWoWPct >= 0 ? "+" : ""}${sales.weekWoWPct}%`} positive={sales.weekWoWPct >= 0} />
               </div>
             </div>
-            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/reports")}>View Report</button></div>
+            <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/inventory/assistant")}><Bot size={14} style={{ display: "inline", verticalAlign: "middle", marginRight: 6 }} />Ask AI for insights</button></div>
           </div>
 
         </div>
       </div>
 
-      {/* Pulse animation */}
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.4; }
-        }
-      `}</style>
+      <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } } @keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Small Components                                                   */
-/* ------------------------------------------------------------------ */
+/* ────── Small components ────── */
 
 function StatCard({ icon, iconBg, label, value, tag }: {
   icon: React.ReactNode; iconBg: string; label: string; value: string; tag: React.ReactNode;
@@ -373,7 +379,7 @@ function StatCard({ icon, iconBg, label, value, tag }: {
         width: 44, height: 44, borderRadius: 12, background: iconBg,
         display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
       }}>{icon}</div>
-      <div>
+      <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 500, marginBottom: 2 }}>{label}</div>
         <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", lineHeight: 1.1 }}>{value}</div>
         <div style={{ marginTop: 2 }}>{tag}</div>
@@ -391,14 +397,24 @@ function InfoRow({ label, value, valueColor }: { label: string; value: string; v
   );
 }
 
-function MiniStat({ label, value, sub, positive }: {
-  label: string; value: string; sub: string; positive: boolean;
+function MiniStat({ label, value, positive }: {
+  label: string; value: string; positive?: boolean;
 }) {
   return (
     <div style={{ background: "#f1f5f9", borderRadius: 10, padding: "12px 14px" }}>
       <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>{value}</div>
-      <div style={{ fontSize: 11, fontWeight: 600, color: positive ? "#059669" : "#dc2626", marginTop: 1 }}>{sub}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: positive === false ? "#dc2626" : positive === true ? "#059669" : "#0f172a" }}>{value}</div>
+    </div>
+  );
+}
+
+function EmptyHint({ message }: { message: string }) {
+  return (
+    <div style={{
+      padding: "20px 14px", textAlign: "center", color: "#94a3b8",
+      fontSize: 13, background: "#f8fafc", borderRadius: 10, border: "1px dashed #d5d9e2",
+    }}>
+      {message}
     </div>
   );
 }

@@ -100,6 +100,22 @@ interface Lead {
   emailSent?: boolean;
   followUp1Sent?: boolean;
   followUp2Sent?: boolean;
+  // Pipeline v2 fields — populated by /api/leads/score, the SLA cron, and
+  // disposition automation. All optional so legacy leads still render.
+  tier?: "A" | "B" | "C";
+  tierScore?: number;
+  tierReason?: string;
+  owner?: string;
+  vertical?: string;
+  website?: string;
+  apolloMobile?: string;
+  apolloTitle?: string;
+  footTrafficScore?: number;
+  nextAction?: string;
+  nextActionAt?: string;
+  notInterestedReason?: string;
+  isCallReady?: boolean;
+  lastTouchAt?: string;
 }
 
 interface CapturedLeadData {
@@ -1278,6 +1294,7 @@ export default function EmailPipelinePage() {
                         selected={selectedLeadIds.includes(lead.id)}
                         onSelect={() => toggleLeadSelection(lead.id)}
                         onEdit={() => setEditingLead(lead)}
+                        onBooked={fetchLeads}
                       />
                     ))}
                     {stageLeads.length === 0 && (
@@ -1698,6 +1715,13 @@ function AddLeadModal({
     distance: lead?.distance || "",
     businessType: lead?.businessType || "",
     contactMethod: (lead?.contactMethod || "Call") as ContactMethod,
+    // v2 fields — populated by Apollo enrich or set manually
+    owner: lead?.owner || "",
+    vertical: lead?.vertical || "",
+    website: lead?.website || "",
+    employeeCount: lead?.employeeCount || "",
+    footTrafficScore: lead?.footTrafficScore?.toString() || "",
+    apolloMobile: lead?.apolloMobile || "",
   });
 
   const update = (field: string, value: string) => {
@@ -1713,14 +1737,19 @@ function AddLeadModal({
     setSaving(true);
     setError("");
     try {
+      // Coerce numeric v2 fields. Empty strings → undefined so we don't
+      // overwrite existing data with blanks.
+      const footTraffic = form.footTrafficScore.trim();
+      const payload: Record<string, unknown> = {
+        ...(lead ? { id: lead.id } : {}),
+        ...form,
+        footTrafficScore: footTraffic ? Number(footTraffic) : undefined,
+        source: lead?.source || "Manual",
+      };
       const res = await fetch("/api/leads", {
         method: lead ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...(lead ? { id: lead.id } : {}),
-          ...form,
-          source: lead?.source || "Manual",
-        }),
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
         onAdded();
@@ -1826,6 +1855,65 @@ function AddLeadModal({
             <div>
               <label style={labelStyle}>Distance</label>
               <input style={inputStyle} placeholder="e.g., 8 mi" value={form.distance} onChange={(e) => update("distance", e.target.value)} />
+            </div>
+          </div>
+
+          {/* ── Pipeline v2 fields ─────────────────────────────────────
+              Owner / vertical drive ownership + tier scoring.
+              Website lets Apollo enrichment find the company.
+              Foot traffic + employee count feed the A/B/C tier engine. */}
+          <div style={{
+            marginBottom: 14, padding: 10, borderRadius: 8,
+            border: "1px solid #e0f2fe", background: "#f0f9ff",
+            fontSize: 11, color: "#0369a1", fontWeight: 600,
+          }}>
+            Qualification data (used by tier scoring)
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+            <div>
+              <label style={labelStyle}>Owner</label>
+              <input style={inputStyle} placeholder="Assign to caller / SDR" value={form.owner} onChange={(e) => update("owner", e.target.value)} />
+            </div>
+            <div>
+              <label style={labelStyle}>Vertical</label>
+              <select style={inputStyle} value={form.vertical} onChange={(e) => update("vertical", e.target.value)}>
+                <option value="">— Select —</option>
+                <option value="Auto Dealership">Auto Dealership</option>
+                <option value="Construction Supply">Construction Supply</option>
+                <option value="Manufacturing">Manufacturing</option>
+                <option value="Warehousing">Warehousing</option>
+                <option value="Office Park">Office Park</option>
+                <option value="Call Center">Call Center</option>
+                <option value="Gym">Gym</option>
+                <option value="Hospital">Hospital</option>
+                <option value="Hotel">Hotel</option>
+                <option value="School">School</option>
+                <option value="Car Wash">Car Wash</option>
+                <option value="Apartments">Apartments</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+            <div>
+              <label style={labelStyle}>Website</label>
+              <input style={inputStyle} placeholder="e.g., abclogistics.com" value={form.website} onChange={(e) => update("website", e.target.value)} />
+            </div>
+            <div>
+              <label style={labelStyle}>Apollo mobile</label>
+              <input style={inputStyle} placeholder="DM mobile (vs main line)" value={form.apolloMobile} onChange={(e) => update("apolloMobile", e.target.value)} />
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+            <div>
+              <label style={labelStyle}>Employee count</label>
+              <input style={inputStyle} type="number" placeholder="e.g., 75" value={form.employeeCount} onChange={(e) => update("employeeCount", e.target.value)} />
+            </div>
+            <div>
+              <label style={labelStyle}>Foot traffic score (Thomasnet)</label>
+              <input style={inputStyle} type="number" placeholder="0-100" value={form.footTrafficScore} onChange={(e) => update("footTrafficScore", e.target.value)} />
             </div>
           </div>
 
@@ -3371,15 +3459,41 @@ function GoogleMapsModal({
 /*  Kanban Card                                                        */
 /* ------------------------------------------------------------------ */
 
-function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalling, selected = false, onSelect, onEdit }: {
+function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalling, selected = false, onSelect, onEdit, onBooked }: {
   lead: Lead; expanded: boolean; onToggle: () => void;
   onTriggerCall: () => void; onDelete: () => void; isCalling: boolean;
   selected?: boolean;
   onSelect?: () => void;
   onEdit?: () => void;
+  onBooked?: () => void;
 }) {
   const emailTrackingLabel = getEmailTrackingLabel(lead);
   const callbackLabel = formatLeadSchedule(lead.callbackDate, lead.callbackTime);
+  const [bookingOpen, setBookingOpen] = useState(false);
+  const [bookDate, setBookDate] = useState("");
+  const [bookTime, setBookTime] = useState("10:00");
+  const [bookNotes, setBookNotes] = useState("");
+  const [bookBusy, setBookBusy] = useState(false);
+  const [bookError, setBookError] = useState<string | null>(null);
+
+  async function submitBooking() {
+    if (!bookDate || !bookTime) { setBookError("Pick date and time"); return; }
+    setBookBusy(true); setBookError(null);
+    try {
+      const r = await fetch("/api/leads/book-meeting", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id, date: bookDate, time: bookTime, notes: bookNotes || undefined }),
+      }).then((x) => x.json());
+      if (!r.ok) throw new Error(r.error || "Booking failed");
+      setBookingOpen(false);
+      setBookDate(""); setBookTime("10:00"); setBookNotes("");
+      onBooked?.();
+    } catch (e) {
+      setBookError(e instanceof Error ? e.message : "Booking failed");
+    } finally {
+      setBookBusy(false);
+    }
+  }
 
   return (
     <div
@@ -3442,19 +3556,79 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalli
           <Pencil size={12} />
         </button>
       </div>
-      <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6 }}>
-        {lead.businessType} · {lead.distance}
+      <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        {lead.tier && (
+          <span style={{
+            display: "inline-block", padding: "1px 6px", borderRadius: 4,
+            fontSize: 10, fontWeight: 700, color: "#fff",
+            background: lead.tier === "A" ? "#16a34a" : lead.tier === "B" ? "#eab308" : "#94a3b8",
+            letterSpacing: 0.3,
+          }} title={lead.tierReason || ""}>
+            {lead.tier}{lead.tierScore !== undefined ? ` · ${lead.tierScore}` : ""}
+          </span>
+        )}
+        {lead.isCallReady && (
+          <span style={{
+            display: "inline-block", padding: "1px 6px", borderRadius: 4,
+            fontSize: 10, fontWeight: 700, color: "#9a3412", background: "#ffedd5",
+          }} title="Hot — call ready">HOT</span>
+        )}
+        <span>{lead.businessType}{lead.vertical && lead.vertical !== lead.businessType ? ` · ${lead.vertical}` : ""} · {lead.distance}</span>
       </div>
+
+      {/* Owner */}
+      {lead.owner && (
+        <div style={{ fontSize: 11, color: "#475569", marginBottom: 4, fontWeight: 600 }}>
+          Owner: {lead.owner}
+        </div>
+      )}
 
       {/* Contact */}
       <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-        <User size={10} /> {lead.contact}
+        <User size={10} /> {lead.contact}{lead.apolloTitle ? ` · ${lead.apolloTitle}` : ""}
       </div>
 
-      {/* Phone */}
+      {/* Phone — prefer Apollo mobile if we have it (more likely to reach DM) */}
       <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-        <Phone size={10} /> {lead.phone}
+        <Phone size={10} />
+        {lead.apolloMobile ? (
+          <span><strong style={{ color: "#15803d" }}>{lead.apolloMobile}</strong> <span style={{ fontSize: 10, color: "#94a3b8" }}>(mobile)</span></span>
+        ) : (
+          <span>{lead.phone}</span>
+        )}
       </div>
+
+      {/* Next action — what should happen next on this lead */}
+      {lead.nextAction && (
+        <div style={{
+          fontSize: 11, color: "#1e40af", marginBottom: 4,
+          background: "#dbeafe", padding: "4px 6px", borderRadius: 4,
+        }} title={lead.nextActionAt ? `Scheduled ${new Date(lead.nextActionAt).toLocaleString()}` : ""}>
+          → {lead.nextAction}
+          {lead.nextActionAt && (
+            <span style={{ color: "#64748b", marginLeft: 4 }}>
+              ({new Date(lead.nextActionAt).toLocaleDateString()})
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Last touch */}
+      {lead.lastTouchAt && (
+        <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 4 }}>
+          Last touch: {new Date(lead.lastTouchAt).toLocaleDateString()}
+        </div>
+      )}
+
+      {/* Not interested reason — visible only on Not Interested stage */}
+      {lead.stage === "Not Interested" && lead.notInterestedReason && (
+        <div style={{
+          fontSize: 10, color: "#991b1b", marginBottom: 4,
+          background: "#fee2e2", padding: "3px 6px", borderRadius: 4,
+        }}>
+          Reason: {lead.notInterestedReason}
+        </div>
+      )}
 
       {/* Saved email */}
       {lead.email && (
@@ -3514,6 +3688,70 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalli
           <><Mail size={12} /> Send Email</>
         )}
       </button>
+
+      {/* Book Meeting button — handles Sprint 5 calendar handoff. Visible on
+          all stages where a meeting makes sense (basically anything that's not
+          already booked, won, installed, or not interested). */}
+      {!["Meeting Booked", "Won", "Installed", "Not Interested"].includes(lead.stage) && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setBookingOpen((v) => !v); }}
+          style={{
+            width: "100%", marginTop: 6, padding: "6px 12px",
+            background: bookingOpen ? "#fef3c7" : "#fff",
+            color: "#0d9488",
+            border: "1px solid #99f6e4",
+            borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer",
+          }}
+        >
+          {bookingOpen ? "Cancel" : "📅 Book Meeting"}
+        </button>
+      )}
+
+      {bookingOpen && (
+        <div onClick={(e) => e.stopPropagation()} style={{
+          marginTop: 8, padding: 10, background: "#f0fdfa",
+          border: "1px solid #99f6e4", borderRadius: 8,
+          display: "flex", flexDirection: "column", gap: 6,
+        }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              type="date"
+              value={bookDate}
+              onChange={(e) => setBookDate(e.target.value)}
+              style={{ flex: 1, padding: "4px 8px", fontSize: 11, border: "1px solid #cbd5e1", borderRadius: 4 }}
+            />
+            <input
+              type="time"
+              value={bookTime}
+              onChange={(e) => setBookTime(e.target.value)}
+              style={{ flex: 1, padding: "4px 8px", fontSize: 11, border: "1px solid #cbd5e1", borderRadius: 4 }}
+            />
+          </div>
+          <input
+            type="text"
+            placeholder="Notes (optional)"
+            value={bookNotes}
+            onChange={(e) => setBookNotes(e.target.value)}
+            style={{ flex: 1, padding: "4px 8px", fontSize: 11, border: "1px solid #cbd5e1", borderRadius: 4 }}
+          />
+          {bookError && (
+            <div style={{ fontSize: 11, color: "#991b1b", background: "#fee2e2", padding: 4, borderRadius: 4 }}>
+              {bookError}
+            </div>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); void submitBooking(); }}
+            disabled={bookBusy}
+            style={{
+              width: "100%", padding: "6px 12px",
+              background: "#0d9488", color: "#fff", border: "none",
+              borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
+            }}
+          >
+            {bookBusy ? "Booking…" : "Confirm booking"}
+          </button>
+        </div>
+      )}
 
       {/* Last activity summary (when expanded) */}
       {expanded && lead.lastActivity && (

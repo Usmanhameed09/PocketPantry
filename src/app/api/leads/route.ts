@@ -16,6 +16,13 @@ type LeadInsertInput = {
   decisionMakerName?: string;
   decisionMakerPhone?: string;
   decisionMakerEmail?: string;
+  // v2 fields
+  owner?: string;
+  vertical?: string;
+  website?: string;
+  employeeCount?: string;
+  footTrafficScore?: number;
+  apolloMobile?: string;
 };
 
 function parseLeadNumber(id: string | undefined) {
@@ -47,6 +54,14 @@ function buildLeadInsertPayload(data: LeadInsertInput, id: string, dateStr: stri
   if (data.decisionMakerPhone?.trim()) payload.decision_maker_phone = data.decisionMakerPhone.trim();
   if (data.decisionMakerEmail?.trim()) payload.decision_maker_email = data.decisionMakerEmail.trim();
 
+  // v2 fields — only set when non-empty so we don't write blanks into NOT NULL columns
+  if (data.owner?.trim()) payload.owner = data.owner.trim();
+  if (data.vertical?.trim()) payload.vertical = data.vertical.trim();
+  if (data.website?.trim()) payload.website = data.website.trim();
+  if (data.employeeCount?.trim()) payload.employee_count = data.employeeCount.trim();
+  if (data.footTrafficScore !== undefined && !isNaN(data.footTrafficScore)) payload.foot_traffic_score = data.footTrafficScore;
+  if (data.apolloMobile?.trim()) payload.apollo_mobile = data.apolloMobile.trim();
+
   return payload;
 }
 
@@ -75,7 +90,15 @@ async function insertLeadWithSafeId(data: LeadInsertInput) {
       message.includes("contact_title") ||
       message.includes("decision_maker_name") ||
       message.includes("decision_maker_phone") ||
-      message.includes("decision_maker_email");
+      message.includes("decision_maker_email") ||
+      // v2 columns — added by 004_pipeline_v2.sql. If the migration hasn't
+      // run yet, fall back to inserting without them.
+      message.includes("owner") ||
+      message.includes("vertical") ||
+      message.includes("website") ||
+      message.includes("employee_count") ||
+      message.includes("foot_traffic_score") ||
+      message.includes("apollo_mobile");
 
     if (optionalColumnIssue) {
       result = await supabase.from("leads").insert(
@@ -86,6 +109,12 @@ async function insertLeadWithSafeId(data: LeadInsertInput) {
             decisionMakerName: "",
             decisionMakerPhone: "",
             decisionMakerEmail: "",
+            owner: "",
+            vertical: "",
+            website: "",
+            employeeCount: "",
+            footTrafficScore: undefined,
+            apolloMobile: "",
           },
           id,
           dateStr
@@ -154,6 +183,13 @@ export async function POST(request: NextRequest) {
       decisionMakerName: body.decisionMakerName || "",
       decisionMakerPhone: body.decisionMakerPhone || "",
       decisionMakerEmail: body.decisionMakerEmail || "",
+      // v2 fields — set on the Lead Dashboard / Add Lead form
+      owner: body.owner || "",
+      vertical: body.vertical || "",
+      website: body.website || "",
+      employeeCount: typeof body.employeeCount === "string" ? body.employeeCount : "",
+      footTrafficScore: typeof body.footTrafficScore === "number" ? body.footTrafficScore : undefined,
+      apolloMobile: body.apolloMobile || "",
     });
 
     if (!lead) {

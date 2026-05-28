@@ -361,8 +361,93 @@ export default function MachinesPage() {
                 : "Add your API credentials in the backend .env to connect machine platforms."}
             </div>
           </div>
+        ) : isMobile ? (
+          /* MOBILE: full-width cards, one per machine, easy to tap */
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {filtered.map((m) => {
+              const sc = statusConfig[m.status] || statusConfig["Healthy"];
+              const StatusIcon = sc.icon;
+              return (
+                <div
+                  key={m.id}
+                  onClick={() => viewMachineOrders(m)}
+                  style={{
+                    background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+                    padding: "14px 16px", cursor: "pointer",
+                    display: "flex", flexDirection: "column", gap: 10,
+                  }}
+                >
+                  {/* Top row: name + status */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", lineHeight: 1.25 }}>
+                        {m.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+                        Last activity: {m.lastSync || "—"}
+                      </div>
+                    </div>
+                    <span style={{
+                      display: "inline-flex", alignItems: "center", gap: 4,
+                      fontSize: 11, fontWeight: 700, color: sc.color,
+                      background: sc.bg, padding: "4px 10px", borderRadius: 999,
+                      flexShrink: 0,
+                    }}>
+                      <StatusIcon size={11} />
+                      {m.status}
+                    </span>
+                  </div>
+
+                  {/* Badges row */}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <span style={{
+                      fontSize: 10, fontWeight: 600,
+                      color: m.type === "chinese" ? "#7c3aed" : "#0369a1",
+                      background: m.type === "chinese" ? "#ede9fe" : "#e0f2fe",
+                      padding: "3px 8px", borderRadius: 999,
+                    }}>
+                      {m.type === "chinese" ? "HAHA" : "Nayax"}
+                    </span>
+                    {lowStockMachineIds.has(m.id) && (
+                      <span style={{
+                        display: "inline-flex", alignItems: "center", gap: 3,
+                        fontSize: 10, fontWeight: 600, color: "#d97706",
+                        background: "#fef3c7", padding: "3px 8px", borderRadius: 999,
+                      }}>
+                        <AlertTriangle size={10} />
+                        Low Stock
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Stats row */}
+                  <div style={{
+                    display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8,
+                    background: "#f8fafc", borderRadius: 10, padding: "10px 12px",
+                  }}>
+                    <MobileMiniStat label="Revenue" value={`$${m.totalRevenue.toFixed(0)}`} />
+                    <MobileMiniStat label="Orders" value={String(m.paidOrders)} />
+                    <MobileMiniStat label="Items" value={String(m.totalItemsSold)} />
+                  </div>
+
+                  {/* Top SKU */}
+                  <div style={{ fontSize: 12, color: "#475569", display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
+                    <span style={{ fontWeight: 600, color: "#94a3b8", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>Top:</span>
+                    <span style={{ fontWeight: 500 }}>{m.topSku}</span>
+                    {m.topSkuQty > 0 && <span style={{ color: "#94a3b8" }}>({m.topSkuQty})</span>}
+                  </div>
+                </div>
+              );
+            })}
+            {filtered.length === 0 && (
+              <div style={{ padding: "40px 0", textAlign: "center", color: "#94a3b8", fontSize: 14 }}>
+                No machines found matching your search.
+              </div>
+            )}
+          </div>
         ) : (
-          /* Machine Table */
+          /* DESKTOP: table view */
           <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
             <div style={{
               background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
@@ -879,4 +964,17 @@ function formatMachineOrderDate(value: string | null | undefined) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function MobileMiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ textAlign: "center" }}>
+      <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", marginTop: 2 }}>
+        {value}
+      </div>
+    </div>
+  );
 }

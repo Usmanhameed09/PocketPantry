@@ -45,8 +45,14 @@ export default function ReportsPage() {
   const [tab, setTab] = useState<ReportTab>("Overview");
   const [preset, setPreset] = useState<"7d" | "30d" | "90d" | "month" | "custom">("30d");
   const [days, setDays] = useState(30);
+  // Two copies: customFrom/customTo are what the operator is typing into
+  // the date pickers. appliedFrom/appliedTo are what we actually fetch on
+  // — only updated when the operator clicks "Apply". Otherwise every
+  // keystroke would refetch and the page reloaded "again and again".
   const [customFrom, setCustomFrom] = useState<string>("");
   const [customTo, setCustomTo] = useState<string>("");
+  const [appliedFrom, setAppliedFrom] = useState<string>("");
+  const [appliedTo, setAppliedTo] = useState<string>("");
   const [machineId, setMachineId] = useState<string>("");
 
   // "Last month" = previous calendar month (e.g. on May 28 → April 1 to April 30)
@@ -69,12 +75,15 @@ export default function ReportsPage() {
     setError(null);
     try {
       const qs = new URLSearchParams();
-      // Preset → translate into the right query params for /api/reports
+      // Preset → translate into the right query params for /api/reports.
+      // Note: we read appliedFrom/appliedTo (set on Apply click), NOT
+      // customFrom/customTo (typed-in values), so we don't refetch on
+      // every date picker keystroke.
       if (preset === "month") {
         const { from, to } = lastMonthRange();
         qs.set("from", from); qs.set("to", to);
-      } else if (preset === "custom" && customFrom && customTo) {
-        qs.set("from", customFrom); qs.set("to", customTo);
+      } else if (preset === "custom" && appliedFrom && appliedTo) {
+        qs.set("from", appliedFrom); qs.set("to", appliedTo);
       } else {
         qs.set("days", String(days));
       }
@@ -88,7 +97,7 @@ export default function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [preset, days, customFrom, customTo, machineId]);
+  }, [preset, days, appliedFrom, appliedTo, machineId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -196,6 +205,22 @@ export default function ReportsPage() {
                     background: "#fff", border: "1px solid #d5d9e2", borderRadius: 8, outline: "none",
                   }}
                 />
+                <button
+                  type="button"
+                  disabled={!customFrom || !customTo || (customFrom === appliedFrom && customTo === appliedTo)}
+                  onClick={() => {
+                    // Only refetch when the operator explicitly applies — keystrokes
+                    // in the date pickers shouldn't trigger anything.
+                    setAppliedFrom(customFrom);
+                    setAppliedTo(customTo);
+                  }}
+                  style={{
+                    padding: "7px 14px", fontSize: 13, fontWeight: 600, color: "#fff",
+                    background: (!customFrom || !customTo) ? "#94a3b8" : "#16a34a",
+                    border: "none", borderRadius: 8,
+                    cursor: (!customFrom || !customTo) ? "not-allowed" : "pointer",
+                  }}
+                >Apply</button>
               </>
             )}
             <select

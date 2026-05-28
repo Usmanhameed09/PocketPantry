@@ -26,8 +26,13 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const days = Math.max(1, Math.min(366, Number(searchParams.get("days")) || 30));
-    const fromDate = dateNDaysAgoInOperatorTz(days);
+    const daysParam = searchParams.get("days");
+    // "all" means lifetime total — no lower bound on sale_date, just upper
+    // bound at today (so future-dated rows don't sneak in). days=N applies
+    // the rolling window from N days ago through today.
+    const isAllTime = daysParam === "all";
+    const days = isAllTime ? 0 : Math.max(1, Math.min(366, Number(daysParam) || 30));
+    const fromDate = isAllTime ? "1970-01-01" : dateNDaysAgoInOperatorTz(days);
     const toDate = todayInOperatorTz();
 
     const supabase = createServerClient();
@@ -89,10 +94,20 @@ export async function GET(req: Request) {
       }
     }
 
+    // For all-time, report the actual earliest sale date so the UI can show
+    // "Total since YYYY-MM-DD" instead of an arbitrary 1970 lower bound.
+    let earliestSaleDate: string | null = null;
+    if (isAllTime) {
+      const { data: earliest } = await supabase
+        .from("daily_sales").select("sale_date")
+        .order("sale_date", { ascending: true }).limit(1).maybeSingle();
+      earliestSaleDate = (earliest?.sale_date as string) || null;
+    }
+
     return NextResponse.json({
       ok: true,
-      days,
-      fromDate,
+      days: isAllTime ? "all" : days,
+      fromDate: earliestSaleDate || fromDate,
       toDate,
       total: {
         revenue: Math.round(totalRevenue * 100) / 100,

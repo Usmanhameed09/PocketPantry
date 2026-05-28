@@ -101,9 +101,10 @@ export default function MachinesPage() {
   // Low-stock machine IDs from inventory data
   const [lowStockMachineIds, setLowStockMachineIds] = useState<Set<string>>(new Set());
 
-  // 30-day totals from daily_sales — the single source of truth for revenue,
-  // so the Machines page never disagrees with Today or Reports for the same
-  // window, and the number can't go backwards mid-day.
+  // All-time totals from daily_sales — single source of truth for revenue.
+  // Other pages (Today, Reports) read the same table so numbers stay
+  // consistent and the figure can't decrease mid-day (rolling Nayax window
+  // bug, see /api/machines/totals docstring).
   const [totals30d, setTotals30d] = useState<{
     total: { revenue: number; orders: number; units: number };
     perMachine: Record<string, { revenue: number; orders: number; units: number }>;
@@ -116,7 +117,9 @@ export default function MachinesPage() {
     try {
       const [machinesRes, totalsRes] = await Promise.all([
         fetch("/api/machines"),
-        fetch("/api/machines/totals?days=30"),
+        // days=all → lifetime totals (since the first sale ever recorded).
+        // The label below shows the actual date range so the operator knows.
+        fetch("/api/machines/totals?days=all"),
       ]);
       const data = await machinesRes.json();
       if (data.success && data.machines) {
@@ -276,8 +279,8 @@ export default function MachinesPage() {
             gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
             gap: 14, marginBottom: 22,
           }}>
-            <StatCard icon={<DollarSign size={16} color="#059669" />} label="Revenue (last 30 days)" value={`$${totalRevenue.toFixed(2)}`} sub={totals30d ? `${totals30d.fromDate} to ${totals30d.toDate}` : `$${weeklyRevenue.toFixed(2)} this week`} />
-            <StatCard icon={<ShoppingCart size={16} color="#3b82f6" />} label="Orders (last 30 days)" value={String(totalOrders)} sub={`${totalItems} items sold`} />
+            <StatCard icon={<DollarSign size={16} color="#059669" />} label="Total Revenue" value={`$${totalRevenue.toFixed(2)}`} sub={totals30d ? `Since ${totals30d.fromDate}` : `$${weeklyRevenue.toFixed(2)} this week`} />
+            <StatCard icon={<ShoppingCart size={16} color="#3b82f6" />} label="Total Orders" value={String(totalOrders)} sub={`${totalItems} items sold`} />
             <StatCard icon={<Package size={16} color="#8b5cf6" />} label="Machines" value={String(counts.total)} sub={`${counts.healthy} healthy`} />
             <StatCard icon={<CheckCircle2 size={16} color="#f59e0b" />} label="Avg / Machine" value={counts.total ? `$${(totalRevenue / counts.total).toFixed(2)}` : "--"} sub={counts.total ? `${Math.round(totalOrders / counts.total)} orders avg` : ""} />
           </div>
@@ -458,7 +461,7 @@ export default function MachinesPage() {
                     display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8,
                     background: "#f8fafc", borderRadius: 10, padding: "10px 12px",
                   }}>
-                    <MobileMiniStat label="Rev (30d)" value={`$${(totals30d?.perMachine[m.id]?.revenue ?? m.totalRevenue).toFixed(0)}`} />
+                    <MobileMiniStat label="Revenue" value={`$${(totals30d?.perMachine[m.id]?.revenue ?? m.totalRevenue).toFixed(0)}`} />
                     <MobileMiniStat label="Orders" value={String(totals30d?.perMachine[m.id]?.orders ?? m.paidOrders)} />
                     <MobileMiniStat label="Items" value={String(totals30d?.perMachine[m.id]?.units ?? m.totalItemsSold)} />
                   </div>
@@ -563,7 +566,7 @@ export default function MachinesPage() {
                         ${(totals30d?.perMachine[m.id]?.revenue ?? m.totalRevenue).toFixed(2)}
                       </div>
                       <div style={{ fontSize: 11, color: "#94a3b8" }}>
-                        {totals30d ? "30d window" : `$${m.weeklyRevenue.toFixed(2)}/wk`}
+                        {totals30d ? "all time" : `$${m.weeklyRevenue.toFixed(2)}/wk`}
                       </div>
                     </div>
 

@@ -52,11 +52,14 @@ export async function GET(req: Request) {
     const toStr = isoTo || todayInOperatorTz();
 
     // ─── 1. Fetch daily_sales rows in range ───────────────────────────
+    // .range(0, 49999) overrides Supabase's default 1000-row cap; otherwise
+    // any window past ~30 days silently truncated and the totals were wrong.
     let dailyQuery = supabase
       .from("daily_sales")
       .select("product_id, machine_id, sale_date, units_sold, revenue")
       .gte("sale_date", fromStr)
-      .lte("sale_date", toStr);
+      .lte("sale_date", toStr)
+      .range(0, 49999);
     if (machineFilter) dailyQuery = dailyQuery.eq("machine_id", machineFilter);
 
     const { data: dailySales, error: dsErr } = await dailyQuery;

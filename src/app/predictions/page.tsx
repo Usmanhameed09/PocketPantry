@@ -149,6 +149,7 @@ export default function PredictionsPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [tab, setTab] = useState<"overview" | "products" | "seasonal" | "mix" | "template">("overview");
   const [templateMachine, setTemplateMachine] = useState<string | null>(null);
+  const [smartActionMachine, setSmartActionMachine] = useState<string | null>(null);
   const [data, setData] = useState<PredictionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [retraining, setRetraining] = useState(false);
@@ -766,9 +767,38 @@ export default function PredictionsPage() {
                 );
               }
 
+              // Selected machine — default to "All" (null) so the operator
+              // sees everything by default, then can drill into one.
+              const selectedMachines = smartActionMachine && grouped.has(smartActionMachine)
+                ? [smartActionMachine]
+                : machineOrder;
+              const totalActions = Array.from(grouped.values()).reduce((s, arr) => s + arr.length, 0);
+
               return (
-                <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-                  {machineOrder.map((machine) => {
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {/* Machine chip selector — horizontal scroll on mobile */}
+                  <div style={{
+                    display: "flex", gap: 6, overflowX: "auto",
+                    WebkitOverflowScrolling: "touch", padding: "2px 0 4px",
+                  }}>
+                    <MachineChip
+                      label="All machines"
+                      sub={`${totalActions} action${totalActions === 1 ? "" : "s"}`}
+                      active={!smartActionMachine}
+                      onClick={() => setSmartActionMachine(null)}
+                    />
+                    {machineOrder.map((m) => (
+                      <MachineChip
+                        key={m}
+                        label={m}
+                        sub={`${(grouped.get(m) || []).length} action${(grouped.get(m) || []).length === 1 ? "" : "s"}`}
+                        active={smartActionMachine === m}
+                        onClick={() => setSmartActionMachine(m)}
+                      />
+                    ))}
+                  </div>
+
+                  {selectedMachines.map((machine) => {
                     const items = grouped.get(machine) || [];
                     if (items.length === 0) return null;
                     return (
@@ -1215,5 +1245,33 @@ function LegendSwatch({ color, label, textColor }: { color: string; label: strin
       }} />
       <span style={{ color: textColor || "#64748b" }}>{label}</span>
     </span>
+  );
+}
+
+function MachineChip({ label, sub, active, onClick }: {
+  label: string; sub: string; active: boolean; onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        flexShrink: 0,
+        display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2,
+        padding: "8px 14px",
+        border: `1px solid ${active ? "#16a34a" : "#e2e8f0"}`,
+        background: active ? "#16a34a" : "#fff",
+        color: active ? "#fff" : "#0f172a",
+        borderRadius: 10, cursor: "pointer", textAlign: "left",
+        minWidth: 140, transition: "all 0.15s",
+        boxShadow: active ? "0 2px 6px rgba(22,163,74,0.25)" : "none",
+      }}
+    >
+      <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 200 }}>
+        {label}
+      </span>
+      <span style={{ fontSize: 10, fontWeight: 600, color: active ? "rgba(255,255,255,0.85)" : "#94a3b8" }}>
+        {sub}
+      </span>
+    </button>
   );
 }

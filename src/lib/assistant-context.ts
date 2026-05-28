@@ -267,29 +267,18 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     .select("product_id, machine_id, sale_date, units_sold")
     .gte("sale_date", dsSinceStr);
 
-  // Find actual span (days between first and last observed sale for each
-  // (machine, product) — better than dividing by 30 if data is sparse)
-  type Agg = { units: number; firstDate: string; lastDate: string };
-  const aggByMP = new Map<string, Agg>();
+  // Aggregate units sold over the full 30-day window (same denominator the
+  // Reports page uses). We deliberately DON'T project — if a product sold 3
+  // units in our 30 days of data, monthly = 3. No extrapolation.
+  const REPORTS_WINDOW_DAYS = 30;
+  const aggByMP = new Map<string, { units: number }>();
   for (const r of dailySalesRows || []) {
     const key = `${r.machine_id}|${r.product_id}`;
-    const e = aggByMP.get(key) || { units: 0, firstDate: r.sale_date as string, lastDate: r.sale_date as string };
+    const e = aggByMP.get(key) || { units: 0 };
     e.units += (r.units_sold as number) || 0;
-    const d = r.sale_date as string;
-    if (d < e.firstDate) e.firstDate = d;
-    if (d > e.lastDate) e.lastDate = d;
     aggByMP.set(key, e);
   }
-  // Determine the actual span of daily_sales data we have (so we don't divide
-  // 5 days of data by 30 and underestimate).
-  let dataSpanDays = 30;
-  if (dailySalesRows && dailySalesRows.length > 0) {
-    const dates = (dailySalesRows as Array<{ sale_date: string }>).map((r) => r.sale_date);
-    const minD = dates.reduce((a, b) => (a < b ? a : b));
-    const maxD = dates.reduce((a, b) => (a > b ? a : b));
-    const span = (new Date(maxD).getTime() - new Date(minD).getTime()) / 86400000 + 1;
-    dataSpanDays = Math.max(1, Math.min(30, span));
-  }
+  const dataSpanDays = REPORTS_WINDOW_DAYS;
 
   // Resolve product metadata for these IDs
   const dsProductIds = [...new Set(Array.from(aggByMP.keys()).map((k) => k.split("|")[1]))];
@@ -301,14 +290,16 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     { name: (p.name as string) || "?", category: (p.category as string) || "Snacks" },
   ]));
 
-  const byMachine = new Map<string, Array<{ name: string; category: string; rate: number }>>();
+  const byMachine = new Map<string, Array<{ name: string; category: string; rate: number; units30d: number }>>();
   for (const [key, agg] of aggByMP) {
     const [machineId, productId] = key.split("|");
     const meta = dsProductMeta.get(productId);
     if (!meta) continue;
-    const rate = agg.units / dataSpanDays;
+    // rate = actual units sold over the last 30 days ÷ 30; matches what the
+    // Reports page shows when you divide its units column by 30 days.
+    const rate = agg.units / REPORTS_WINDOW_DAYS;
     const arr = byMachine.get(machineId) || [];
-    arr.push({ name: meta.name, category: meta.category, rate });
+    arr.push({ name: meta.name, category: meta.category, rate, units30d: agg.units });
     byMachine.set(machineId, arr);
   }
 
@@ -316,26 +307,29 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
   // implementation in case we need fleet-wide machine_inventory access later.
   void machineInv;
   const machineRows = machines.map((m) => {
-    const items = (byMachine.get(m.id as string) || []).filter((x) => x.rate > 0).sort((a, b) => b.rate - a.rate);
+    const items = (byMachine.get(m.id as string) || [])
+      .filter((x) => x.units30d > 0)
+      .sort((a, b) => b.units30d - a.units30d);
     const categoryMix: Record<string, number> = {};
-    let dailyUnits = 0;
+    let total30d = 0;
     for (const it of items) {
-      categoryMix[it.category] = (categoryMix[it.category] || 0) + it.rate;
-      dailyUnits += it.rate;
+      categoryMix[it.category] = (categoryMix[it.category] || 0) + it.units30d;
+      total30d += it.units30d;
     }
-    for (const k of Object.keys(categoryMix)) categoryMix[k] = Math.round(categoryMix[k] * 10) / 10;
     return {
       name: m.name as string,
       status: m.status as string,
       productCount: items.length,
-      machineDailyUnits: Math.round(dailyUnits * 10) / 10,
-      machineMonthlyUnits: Math.round(dailyUnits * 30),
-      // Limit to top 12 products per machine — covers the bestsellers and
-      // any meaningful sellers; long tail (0.01/day items) bloats tokens.
-      products: items.slice(0, 12).map((x) => ({
+      machineDailyUnits: Math.round((total30d / dataSpanDays) * 10) / 10,
+      // 30d total = raw units summed across all products on this machine
+      // over the same 30-day window the Reports page uses.
+      machineMonthlyUnits: total30d,
+      products: items.slice(0, 15).map((x) => ({
         name: x.name, category: x.category,
+        // machineDailyUnits = average daily rate (units30d / 30)
         machineDailyUnits: Math.round(x.rate * 100) / 100,
-        machineMonthlyUnits: Math.round(x.rate * 30),
+        // machineMonthlyUnits = ACTUAL units sold over last 30 days (matches Reports)
+        machineMonthlyUnits: x.units30d,
       })),
       categoryMix,
     };
@@ -486,8 +480,8 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
   return {
     generatedAt: new Date().toISOString(),
     dataWindow:
-      `Per-machine product rates are computed from daily_sales transaction log over the last ${Math.round(dataSpanDays)} days of data we have. ` +
-      `Fleet topSellers velocity uses Nayax's own 30-day rolling average from machine_inventory.daily_sales_rate. ` +
+      `machineMonthlyUnits values are ACTUAL units sold in the last 30 days (raw count from daily_sales — same source as the Reports page). ` +
+      `Fleet topSellersFleetWide.fleetMonthlyUnits is projected from Nayax's 30-day rolling average. ` +
       (weeklyTrends.available
         ? `Weekly trends from daily_sales (last ${weeklyTrends.daysOfData} days).`
         : "Weekly trends not yet available."),

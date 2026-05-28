@@ -31,6 +31,12 @@ type ReportsData = {
   }>;
   paymentSplit: Array<{ name: string; value: number; amount: number; sales: number }> | null;
   inventoryTurns: number | null;
+  inventoryNote: string | null;
+  dataQuality: {
+    flaggedCostProducts: number;
+    sampleFlagged: Array<{ product: string; storedCost: number; avgRevenue: number }>;
+    paymentSplitWindowNote: string | null;
+  };
 };
 
 const PIE_COLORS = ["#16a34a", "#059669", "#d97706", "#6366f1", "#dc2626"];
@@ -89,7 +95,7 @@ export default function ReportsPage() {
     );
   }
 
-  const { stats, revenueByDay, topSkus, revenueByMachine, machineReport, paymentSplit, inventoryTurns } = data;
+  const { stats, revenueByDay, topSkus, revenueByMachine, machineReport, paymentSplit, inventoryTurns, inventoryNote, dataQuality } = data;
   const totalSkuRevenue = topSkus.reduce((s, x) => s + x.revenue, 0);
 
   function exportCsv() {
@@ -165,6 +171,26 @@ export default function ReportsPage() {
             }} title="Coming soon"><Calendar size={14} /> Schedule Report</button>
           </div>
         </div>
+
+        {/* Data quality banner */}
+        {dataQuality.flaggedCostProducts > 0 && (
+          <div style={{
+            marginBottom: 16, padding: "12px 16px", background: "#fef3c7",
+            border: "1px solid #fcd34d", borderRadius: 10, fontSize: 13, color: "#92400e",
+          }}>
+            ⚠️ <strong>{dataQuality.flaggedCostProducts} product{dataQuality.flaggedCostProducts === 1 ? "" : "s"} have suspicious cost data</strong>
+            {" "}(stored unit cost &gt; average sell price — likely scraped from a case price by mistake).
+            Margins for these are estimated using 90% of revenue instead of the bad cost so totals stay sensible.
+            {dataQuality.sampleFlagged.length > 0 && (
+              <span style={{ display: "block", marginTop: 6, fontSize: 12 }}>
+                Examples: {dataQuality.sampleFlagged.slice(0, 3).map((f) => `${f.product} ($${f.storedCost} stored vs $${f.avgRevenue} sold)`).join(" · ")}
+              </span>
+            )}
+            <span style={{ display: "block", marginTop: 4, fontSize: 12 }}>
+              Fix: open the product on the Inventory → Products page and update its cost.
+            </span>
+          </div>
+        )}
 
         {/* Stat Cards */}
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
@@ -297,8 +323,8 @@ export default function ReportsPage() {
                       </span>
                     </div>
                     {inventoryTurns === null && (
-                      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 12 }}>
-                        Needs warehouse stock + COGS data to compute
+                      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 12, padding: "0 8px" }}>
+                        {inventoryNote || "Needs warehouse stock + COGS data to compute"}
                       </div>
                     )}
                   </div>
@@ -476,7 +502,14 @@ export default function ReportsPage() {
               {/* Method pie */}
               <div style={{ ...cardStyle, padding: 24 }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Payment Method Split</div>
-                <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 20 }}>From Nayax payment data</div>
+                <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 20 }}>
+                  From Nayax payment data
+                  {dataQuality.paymentSplitWindowNote && (
+                    <span style={{ display: "block", marginTop: 4, fontSize: 11, color: "#d97706" }}>
+                      ⓘ {dataQuality.paymentSplitWindowNote}
+                    </span>
+                  )}
+                </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 30, flexWrap: "wrap" }}>
                   <ResponsiveContainer width={180} height={180}>
                     <PieChart>

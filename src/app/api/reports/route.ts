@@ -80,10 +80,41 @@ export async function GET(req: Request) {
     );
 
     // ─── 3. Aggregate per-day revenue + units ─────────────────────────
+    // Sanity check: if a product's stored unit_cost is > the average unit
+    // revenue it sold for, the cost is almost certainly bad data (we got
+    // case-price scraped as unit-price). Clamp it to the revenue so margin
+    // shows 0% instead of a huge negative number that misleads everyone.
     const dayBucket = new Map<string, { revenue: number; units: number }>();
     let totalRevenue = 0;
     let totalUnits = 0;
     let totalCost = 0;
+    const flaggedCosts: Array<{ product: string; storedCost: number; avgRevenue: number }> = [];
+    // Compute effective cost per product (clamped to avg revenue)
+    const effectiveCostById = new Map<string, number>();
+    {
+      const aggByProduct = new Map<string, { units: number; revenue: number }>();
+      for (const r of rows) {
+        const e = aggByProduct.get(r.product_id) || { units: 0, revenue: 0 };
+        e.units += r.units_sold || 0;
+        e.revenue += r.revenue || 0;
+        aggByProduct.set(r.product_id, e);
+      }
+      for (const [pid, agg] of aggByProduct) {
+        const storedCost = productById.get(pid)?.cost || 0;
+        const avgUnitRev = agg.units > 0 ? agg.revenue / agg.units : 0;
+        if (storedCost > 0 && avgUnitRev > 0 && storedCost > avgUnitRev * 1.2) {
+          // Bad cost data — log + clamp to 90% of avg revenue
+          flaggedCosts.push({
+            product: productById.get(pid)?.name || pid,
+            storedCost: Math.round(storedCost * 100) / 100,
+            avgRevenue: Math.round(avgUnitRev * 100) / 100,
+          });
+          effectiveCostById.set(pid, avgUnitRev * 0.9);
+        } else {
+          effectiveCostById.set(pid, storedCost);
+        }
+      }
+    }
     for (const r of rows) {
       const e = dayBucket.get(r.sale_date) || { revenue: 0, units: 0 };
       e.revenue += r.revenue || 0;
@@ -91,7 +122,7 @@ export async function GET(req: Request) {
       dayBucket.set(r.sale_date, e);
       totalRevenue += r.revenue || 0;
       totalUnits += r.units_sold || 0;
-      totalCost += (r.units_sold || 0) * (productById.get(r.product_id)?.cost || 0);
+      totalCost += (r.units_sold || 0) * (effectiveCostById.get(r.product_id) || 0);
     }
     const revenueByDay = Array.from(dayBucket.entries())
       .sort(([a], [b]) => a.localeCompare(b))
@@ -107,7 +138,7 @@ export async function GET(req: Request) {
       const e = skuMap.get(r.product_id) || { units: 0, revenue: 0, cost: 0 };
       e.units += r.units_sold || 0;
       e.revenue += r.revenue || 0;
-      e.cost += (r.units_sold || 0) * (productById.get(r.product_id)?.cost || 0);
+      e.cost += (r.units_sold || 0) * (effectiveCostById.get(r.product_id) || 0);
       skuMap.set(r.product_id, e);
     }
     const topSkus = Array.from(skuMap.entries())
@@ -132,7 +163,7 @@ export async function GET(req: Request) {
       };
       e.revenue += r.revenue || 0;
       e.units += r.units_sold || 0;
-      e.cost += (r.units_sold || 0) * (productById.get(r.product_id)?.cost || 0);
+      e.cost += (r.units_sold || 0) * (effectiveCostById.get(r.product_id) || 0);
       e.productSales.set(
         r.product_id,
         (e.productSales.get(r.product_id) || 0) + (r.units_sold || 0)
@@ -184,6 +215,7 @@ export async function GET(req: Request) {
     // ─── 8. Inventory turns (rough) ───────────────────────────────────
     // = (cost of goods sold over period) / (current warehouse inventory value)
     let inventoryTurns: number | null = null;
+    let inventoryNote: string | null = null;
     if (!machineFilter) {
       const { data: warehouseRows } = await supabase
         .from("warehouse_inventory")
@@ -191,13 +223,23 @@ export async function GET(req: Request) {
         .eq("company_id", companyId);
       let inventoryValue = 0;
       for (const w of warehouseRows || []) {
-        const cost = productById.get(w.product_id as string)?.cost || 0;
+        const cost = effectiveCostById.get(w.product_id as string)
+          ?? (productById.get(w.product_id as string)?.cost || 0);
         inventoryValue += ((w.on_hand as number) || 0) * cost;
       }
-      if (inventoryValue > 0 && totalCost > 0) {
-        // annualize: COGS for period × (365/days) ÷ avg inventory
+      if (inventoryValue > 50 && totalCost > 0) {
         const annualisedCogs = totalCost * (365 / days);
-        inventoryTurns = Math.round((annualisedCogs / inventoryValue) * 10) / 10;
+        const raw = annualisedCogs / inventoryValue;
+        if (raw > 100) {
+          // Likely a data-quality issue — warehouse is essentially empty,
+          // makes the ratio meaningless. Show null with note.
+          inventoryTurns = null;
+          inventoryNote = "Warehouse stock too low to compute meaningful turns";
+        } else {
+          inventoryTurns = Math.round(raw * 10) / 10;
+        }
+      } else {
+        inventoryNote = "Warehouse value too small — log opening stock or receive a PO first";
       }
     }
 
@@ -223,6 +265,14 @@ export async function GET(req: Request) {
         : null,
       paymentBreakdown: paymentSplit,
       inventoryTurns,
+      inventoryNote,
+      dataQuality: {
+        flaggedCostProducts: flaggedCosts.length,
+        sampleFlagged: flaggedCosts.slice(0, 5),
+        paymentSplitWindowNote: paymentSplit
+          ? "Payment split is from Nayax's last-sales window — may cover a slightly different period than the revenue total above."
+          : null,
+      },
     });
   } catch (error) {
     return NextResponse.json(

@@ -102,7 +102,15 @@ WHEN ASKED "BEST X CATEGORY FOR MACHINE Y" (READ CAREFULLY)
 2. Filter that array to entries whose .category EQUALS the asked category exactly (Snacks / Candy / Drinks / Meals).
 3. If the filtered list is EMPTY, say so: "Machine Y has no <category> products currently selling. Snapshot's machines[].products[] for Y shows only [list the categories that ARE present]." Do NOT invent a product.
 4. If the filtered list has entries, pick the highest machineMonthlyUnits and report that number EXACTLY as it appears in the snapshot.
-5. NEVER carry a number from a DIFFERENT product into your answer. If M&Ms Peanut shows machineMonthlyUnits: 3, do not write "9" because some other product had 9.`;
+5. NEVER carry a number from a DIFFERENT product into your answer. If M&Ms Peanut shows machineMonthlyUnits: 3, do not write "9" because some other product had 9.
+
+═══════════════════════════════════════════════════════════════════
+ABSOLUTE NUMBER-LOOKUP RULE
+═══════════════════════════════════════════════════════════════════
+
+Every numeric value you output (units, dollars, percentage, count, anything) must be IDENTICAL to a value that exists somewhere in the snapshot JSON. Before you write any number, mentally verify: "Can I copy this digit-for-digit from a specific field in the snapshot?" If not, you are not allowed to write it.
+
+To verify your own answer before sending: re-read each number you wrote and trace it back to its snapshot key. If you can't, replace the number with "I don't have that value in the snapshot."`;
 
 export async function POST(req: Request) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -140,11 +148,14 @@ export async function POST(req: Request) {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        // gpt-4o-mini: same quality for structured-data Q&A, ~10× cheaper per
-        // token + much higher per-minute throughput than gpt-4o. Important
-        // because we send the full snapshot every turn (~10–15k tokens).
-        model: "gpt-4o-mini",
-        temperature: 0.3,
+        // gpt-4o (full model, not mini) — empirically more reliable at copying
+        // exact numbers out of a JSON snapshot. mini was hallucinating values
+        // for products not in the visible top-N, even when asked about specific
+        // items. Slightly more expensive but worth it for numeric accuracy.
+        model: "gpt-4o",
+        // Temperature 0 — we want the SAME answer to the same question every
+        // time. Any creativity here is a footgun: it's data lookup, not prose.
+        temperature: 0,
         max_tokens: 700,
         messages: apiMessages,
       }),

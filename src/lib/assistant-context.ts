@@ -14,6 +14,7 @@ import { listAlerts } from "@/lib/alerts-engine";
 export type AssistantContext = {
   generatedAt: string;
   dataWindow: string;
+  metricsGlossary: string;
   totals: {
     products: number;
     machines: number;
@@ -21,18 +22,36 @@ export type AssistantContext = {
     openAlerts: number;
     underperformers: number;
   };
-  topSellers: Array<{
-    name: string; category: string; velocityPerDay: number;
-    monthlyProjection: number; margin: number | null; activeMachines: number;
+  // Fleet-wide top sellers: numbers are SUMS across all machines.
+  topSellersFleetWide: Array<{
+    name: string;
+    category: string;
+    fleetVelocityPerDay: number;        // sum across all machines
+    fleetMonthlyUnits: number;          // ≈ fleetVelocityPerDay × 30
+    avgPerMachinePerDay: number;        // = fleetVelocity / activeMachines (rough)
+    activeMachines: number;             // how many machines sell this
+    margin: number | null;
   }>;
   underperformers: Array<{
-    name: string; category: string; monthlyUnits: number; margin: number | null; reason: string;
+    name: string; category: string; fleetMonthlyUnits: number; margin: number | null; reason: string;
   }>;
   alerts: Array<{ severity: string; message: string }>;
-  categoryBreakdown: Array<{ category: string; count: number; totalDailyVelocity: number; monthlyUnits: number }>;
+  categoryBreakdownFleetWide: Array<{
+    category: string; count: number;
+    fleetDailyVelocity: number; fleetMonthlyUnits: number;
+  }>;
   machines: Array<{
-    name: string; status: string; productCount: number; dailySales: number;
-    topProducts: string[]; categoryMix: Record<string, number>;
+    name: string; status: string; productCount: number;
+    machineDailyRevenue?: number;
+    machineDailyUnits: number;
+    machineMonthlyUnits: number;
+    // ALL products selling on this machine with their PER-MACHINE rate (not fleet)
+    products: Array<{
+      name: string; category: string;
+      machineDailyUnits: number;
+      machineMonthlyUnits: number;
+    }>;
+    categoryMix: Record<string, number>;
   }>;
   weeklyTrends: {
     available: boolean;
@@ -63,7 +82,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
   const productCount = productsRes.count || products.length;
   const machines = machinesRes.data || [];
 
-  // Top sellers by velocity — uses Nayax's daily_sales_rate (30-day avg)
+  // Top sellers by FLEET velocity — Nayax 30-day avg summed across machines
   const withVelocity = projections.filter((p) => p.velocityPerDay > 0);
   // Per-product machine count
   const { data: machineCounts } = await supabase
@@ -77,7 +96,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     machinesPerProduct.get(pid)!.add(m.machine_id as string);
   }
 
-  const topSellers = withVelocity
+  const topSellersFleetWide = withVelocity
     .sort((a, b) => b.velocityPerDay - a.velocityPerDay)
     .slice(0, 20)
     .map((p) => {
@@ -85,17 +104,23 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       const price = product?.default_vend_price as number | null;
       const cost = product?.unit_cost as number | null;
       const margin = price && cost && price > 0 ? Math.round(((price - cost) / price) * 100) : null;
+      const activeMachines = machinesPerProduct.get(p.productId)?.size || 0;
+      const fleetVelocity = Math.round(p.velocityPerDay * 100) / 100;
+      const avgPerMachine = activeMachines > 0
+        ? Math.round((fleetVelocity / activeMachines) * 100) / 100
+        : fleetVelocity;
       return {
         name: p.productName,
         category: p.category,
-        velocityPerDay: Math.round(p.velocityPerDay * 100) / 100,
-        monthlyProjection: p.projectedUnits30d,
+        fleetVelocityPerDay: fleetVelocity,
+        fleetMonthlyUnits: p.projectedUnits30d,
+        avgPerMachinePerDay: avgPerMachine,
+        activeMachines,
         margin,
-        activeMachines: machinesPerProduct.get(p.productId)?.size || 0,
       };
     });
 
-  // Category breakdown — by sales (real velocity from Nayax)
+  // Category breakdown — fleet-wide sales (sum across machines)
   const catMap = new Map<string, { count: number; totalDailyVelocity: number }>();
   for (const p of products) {
     const cat = (p.category as string) || "Snacks";
@@ -105,16 +130,16 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     e.totalDailyVelocity += v;
     catMap.set(cat, e);
   }
-  const categoryBreakdown = Array.from(catMap.entries())
+  const categoryBreakdownFleetWide = Array.from(catMap.entries())
     .map(([category, e]) => ({
       category,
       count: e.count,
-      totalDailyVelocity: Math.round(e.totalDailyVelocity * 100) / 100,
-      monthlyUnits: Math.round(e.totalDailyVelocity * 30),
+      fleetDailyVelocity: Math.round(e.totalDailyVelocity * 100) / 100,
+      fleetMonthlyUnits: Math.round(e.totalDailyVelocity * 30),
     }))
-    .sort((a, b) => b.totalDailyVelocity - a.totalDailyVelocity);
+    .sort((a, b) => b.fleetDailyVelocity - a.fleetDailyVelocity);
 
-  // Per-machine breakdown — uses Nayax daily_sales_rate (30-day avg)
+  // Per-machine product list — PER-MACHINE rates (NOT fleet totals)
   const { data: machineInv } = await supabase
     .from("machine_inventory")
     .select("machine_id, product_id, daily_sales_rate, products(name, category)");
@@ -133,10 +158,10 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
   const machineRows = machines.map((m) => {
     const items = (byMachine.get(m.id as string) || []).filter((x) => x.rate > 0).sort((a, b) => b.rate - a.rate);
     const categoryMix: Record<string, number> = {};
-    let dailySales = 0;
+    let dailyUnits = 0;
     for (const it of items) {
       categoryMix[it.category] = (categoryMix[it.category] || 0) + it.rate;
-      dailySales += it.rate;
+      dailyUnits += it.rate;
     }
     // Round category mix
     for (const k of Object.keys(categoryMix)) {
@@ -146,8 +171,16 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       name: m.name as string,
       status: m.status as string,
       productCount: items.length,
-      dailySales: Math.round(dailySales * 10) / 10,
-      topProducts: items.slice(0, 8).map((x) => `${x.name} (${x.rate.toFixed(1)}/d)`),
+      machineDailyUnits: Math.round(dailyUnits * 10) / 10,
+      machineMonthlyUnits: Math.round(dailyUnits * 30),
+      // ALL products on this machine (not just top 8) so the AI can answer
+      // questions about any product on any specific machine accurately.
+      products: items.map((x) => ({
+        name: x.name,
+        category: x.category,
+        machineDailyUnits: Math.round(x.rate * 100) / 100,
+        machineMonthlyUnits: Math.round(x.rate * 30),
+      })),
       categoryMix,
     };
   });
@@ -160,6 +193,11 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     dataWindow: weeklyTrends.available
       ? `Velocity = Nayax 30-day average. Weekly trends pulled from daily_sales (last ${weeklyTrends.daysOfData} days of per-day data).`
       : "Velocity = Nayax 30-day average. Weekly trends not yet available (run the sync first).",
+    metricsGlossary:
+      "fleetVelocityPerDay / fleetMonthlyUnits = SUM across all active machines (e.g. 7.9/day total across 8 machines = ~1/day per machine, ~237/month fleet-wide). " +
+      "avgPerMachinePerDay = fleet velocity ÷ number of machines selling this product (rough per-machine estimate). " +
+      "machineDailyUnits / machineMonthlyUnits inside the 'machines[].products' array = the TRUE per-machine rate for THAT specific machine, NOT a fleet total. " +
+      "Never blend fleet and per-machine numbers in one answer.",
     totals: {
       products: productCount,
       machines: machines.length,
@@ -167,16 +205,16 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       openAlerts: alerts.length,
       underperformers: underperformersRaw.length,
     },
-    topSellers,
+    topSellersFleetWide,
     underperformers: underperformersRaw.slice(0, 20).map((u) => ({
       name: u.productName,
       category: u.category,
-      monthlyUnits: Math.round(u.averageWeekly * 4),
+      fleetMonthlyUnits: Math.round(u.averageWeekly * 4),
       margin: u.margin,
       reason: u.reason,
     })),
     alerts: alerts.slice(0, 20).map((a) => ({ severity: a.severity, message: a.message })),
-    categoryBreakdown,
+    categoryBreakdownFleetWide,
     machines: machineRows,
     weeklyTrends,
   };

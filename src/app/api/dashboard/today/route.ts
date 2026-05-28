@@ -95,7 +95,9 @@ export async function GET() {
     const offlineMachines = machines.filter((m) => offlineNames.has(m.name as string));
     const activeMachines = machines.length - offlineMachines.length;
 
-    // ─── Refill stops (top 3 machines with lowest estimated_remaining) ─
+    // ─── Refill stops — ALL machines with low items, ranked ────────────
+    // A "low item" = a product on this machine where current estimated
+    // stock is less than 3 days of sales (or unknown — never refilled).
     const machineLowest = new Map<string, { name: string; lowItems: number; remainingTotal: number }>();
     for (const m of machines) {
       machineLowest.set(m.id as string, { name: m.name as string, lowItems: 0, remainingTotal: 0 });
@@ -108,14 +110,15 @@ export async function GET() {
       e.remainingTotal += rem;
       if (rate > 0 && rem <= rate * 3) e.lowItems++;
     }
+    // Return EVERY machine with at least one low item, sorted worst-first.
+    // No artificial cap — the operator should see the full list to plan a route.
     const refillStops = Array.from(machineLowest.values())
       .filter((m) => m.lowItems > 0)
       .sort((a, b) => b.lowItems - a.lowItems)
-      .slice(0, 3)
       .map((m) => ({
         machine: m.name,
         items: m.lowItems,
-        color: m.lowItems >= 8 ? "#dc2626" : m.lowItems >= 4 ? "#d97706" : "#059669",
+        color: m.lowItems >= 20 ? "#dc2626" : m.lowItems >= 10 ? "#d97706" : "#059669",
       }));
 
     // ─── Warehouse value + low stock count ─────────────────────────────

@@ -173,7 +173,12 @@ export default function Dashboard() {
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Today&apos;s Refill Stops</div>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-                  <span style={{ fontWeight: 600, color: "#16a34a" }}>{refillStops.length}</span> machines need refill
+                  <span style={{ fontWeight: 600, color: "#16a34a" }}>{refillStops.length}</span> machine{refillStops.length === 1 ? "" : "s"} need refill
+                  {refillStops.length > 0 && (
+                    <span style={{ marginLeft: 6, color: "#94a3b8" }}>
+                      · {refillStops.reduce((s, r) => s + r.items, 0)} low items total
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -181,12 +186,15 @@ export default function Dashboard() {
               {refillStops.length === 0 ? (
                 <EmptyHint message="All machines stocked — no refills needed yet" />
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{
+                  display: "flex", flexDirection: "column", gap: 8,
+                  maxHeight: 280, overflowY: "auto", paddingRight: 4,
+                }}>
                   {refillStops.map((s, i) => (
                     <div key={i} style={listRow}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
-                        <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{s.machine}</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.machine}</div>
                       </div>
                       <span style={badge("#fff", "#4b5563")}>{s.items} low items</span>
                     </div>

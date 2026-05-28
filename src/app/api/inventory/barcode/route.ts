@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
 import { lookupExternalUpc } from "@/lib/upc-lookup";
+import { canonicalBarcode, barcodeVariants } from "@/lib/barcode-normalize";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -24,11 +25,16 @@ export async function GET(req: Request) {
     }
     const companyId = await ensureDefaultCompany();
     const supabase = createServerClient();
+    // Look up by every reasonable variant of the scanned code (raw, canonical
+    // 12-digit UPC-A, 13-digit EAN-13 with leading 0, ITF-14 case GTIN, etc.).
+    // Fixes "re-scan asks to register again" — different decoders return
+    // different digit counts for the same physical barcode.
+    const variants = barcodeVariants(barcode);
     const { data } = await supabase
       .from("products")
       .select("id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, barcode, status")
       .eq("company_id", companyId)
-      .eq("barcode", barcode)
+      .in("barcode", variants)
       .limit(1)
       .maybeSingle();
 
@@ -37,12 +43,17 @@ export async function GET(req: Request) {
     }
 
     // Not in our DB — fall back to UPCItemDB (free trial: ~100/day).
-    // The case/unit-UPC distinction is invisible to us locally but UPCItemDB
-    // hosts the full global catalog, so we'll usually get a clean match.
+    // Try the canonical form (12-digit UPC-A) first since that's what
+    // UPCItemDB's index uses. If that misses, retry with the raw scanned
+    // digits in case it's an ITF-14 stored as case-level instead of unit.
     if (skipExternal) {
       return NextResponse.json({ success: true, source: "local", product: null });
     }
-    const external = await lookupExternalUpc(barcode);
+    const canonical = canonicalBarcode(barcode);
+    let external = await lookupExternalUpc(canonical);
+    if (!external.found && canonical !== barcode.replace(/\D/g, "")) {
+      external = await lookupExternalUpc(barcode);
+    }
     if (external.found) {
       return NextResponse.json({
         success: true,
@@ -74,10 +85,13 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const barcode = String(body.barcode || "").trim();
-    if (!barcode) {
+    const rawBarcode = String(body.barcode || "").trim();
+    if (!rawBarcode) {
       return NextResponse.json({ success: false, error: "barcode required" }, { status: 400 });
     }
+    // Always store the canonical form (12-digit UPC-A where possible) so
+    // future lookups hit on every variant the scanner might return.
+    const barcode = canonicalBarcode(rawBarcode) || rawBarcode;
     const companyId = await ensureDefaultCompany();
     const supabase = createServerClient();
 
@@ -94,6 +108,27 @@ export async function POST(req: Request) {
     // Register a new product (with barcode + case size)
     if (!body.name) {
       return NextResponse.json({ success: false, error: "Product name required" }, { status: 400 });
+    }
+
+    // Pre-register dedupe: if ANY product already has a barcode matching
+    // any variant of what we just scanned, attach instead of creating.
+    // This catches "I scanned the case (ITF-14) the first time and the
+    // unit (UPC-A) the second time" — they're the same SKU.
+    const variants = barcodeVariants(rawBarcode);
+    const { data: existingByBarcode } = await supabase
+      .from("products")
+      .select("id, name, sku, case_size, barcode")
+      .eq("company_id", companyId)
+      .in("barcode", variants)
+      .limit(1)
+      .maybeSingle();
+    if (existingByBarcode?.id) {
+      return NextResponse.json({
+        success: true,
+        product: existingByBarcode,
+        attached: true,
+        message: "Matched existing product by barcode variant",
+      });
     }
 
     // If a product with the same name already exists, just attach the barcode

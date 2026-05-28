@@ -214,7 +214,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
 
   const topSellersFleetWide = withVelocity
     .sort((a, b) => b.velocityPerDay - a.velocityPerDay)
-    .slice(0, 25)
+    .slice(0, 15)
     .map((p) => {
       const product = productById.get(p.productId);
       const price = product?.default_vend_price ?? null;
@@ -281,7 +281,9 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       productCount: items.length,
       machineDailyUnits: Math.round(dailyUnits * 10) / 10,
       machineMonthlyUnits: Math.round(dailyUnits * 30),
-      products: items.map((x) => ({
+      // Limit to top 12 products per machine — covers the bestsellers and
+      // any meaningful sellers; long tail (0.01/day items) bloats tokens.
+      products: items.slice(0, 12).map((x) => ({
         name: x.name, category: x.category,
         machineDailyUnits: Math.round(x.rate * 100) / 100,
         machineMonthlyUnits: Math.round(x.rate * 30),
@@ -482,14 +484,14 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       todayHasData: lastSaleDate === todayStr,
     },
     topSellersFleetWide,
-    underperformers: underperformersRaw.slice(0, 20).map((u) => ({
+    underperformers: underperformersRaw.slice(0, 12).map((u) => ({
       name: u.productName,
       category: u.category,
       fleetMonthlyUnits: Math.round(u.averageWeekly * 4),
       margin: u.margin,
       reason: u.reason,
     })),
-    alerts: alerts.slice(0, 25).map((a) => ({
+    alerts: alerts.slice(0, 15).map((a) => ({
       severity: a.severity, kind: a.kind, message: a.message,
     })),
     categoryBreakdownFleetWide,

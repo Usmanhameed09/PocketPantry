@@ -130,8 +130,11 @@ export async function POST(req: Request) {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o",
-        temperature: 0.4,
+        // gpt-4o-mini: same quality for structured-data Q&A, ~10× cheaper per
+        // token + much higher per-minute throughput than gpt-4o. Important
+        // because we send the full snapshot every turn (~10–15k tokens).
+        model: "gpt-4o-mini",
+        temperature: 0.3,
         max_tokens: 700,
         messages: apiMessages,
       }),

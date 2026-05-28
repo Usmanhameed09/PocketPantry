@@ -111,6 +111,7 @@ interface Lead {
   apolloMobile?: string;
   apolloTitle?: string;
   footTrafficScore?: number;
+  maxCallAttempts?: number;
   nextAction?: string;
   nextActionAt?: string;
   notInterestedReason?: string;
@@ -2974,6 +2975,10 @@ function GoogleMapsModal({
         let enrichedContact = candidate.contact || "Front Desk";
         let enrichedPhone = candidate.phone || "";
         let enrichedContactTitle = candidate.contactTitle || "";
+        // v2 fields — captured from Apollo so the lead lands with tier-relevant data
+        let enrichedMobile = "";
+        let enrichedEmployeeCount = "";
+        let enrichedVertical = "";
 
         if (candidate.website || candidate.business) {
           try {
@@ -2992,25 +2997,22 @@ function GoogleMapsModal({
                 provider?: "apollo" | "lusha" | "hunter";
                 email?: string;
                 phone?: string;
+                mobile?: string;
                 contactName?: string;
                 contactTitle?: string;
+                employeeCount?: number;
+                industry?: string;
+                companyName?: string;
               } | null;
 
-              if (enrichment?.email) {
-                enrichedEmail = enrichment.email;
-              }
-
-              if (enrichment?.phone) {
-                enrichedPhone = enrichment.phone;
-              }
-
-              if (enrichment?.contactName) {
-                enrichedContact = enrichment.contactName;
-              }
-
-              if (enrichment?.contactTitle) {
-                enrichedContactTitle = enrichment.contactTitle;
-              }
+              if (enrichment?.email) enrichedEmail = enrichment.email;
+              if (enrichment?.phone) enrichedPhone = enrichment.phone;
+              if (enrichment?.contactName) enrichedContact = enrichment.contactName;
+              if (enrichment?.contactTitle) enrichedContactTitle = enrichment.contactTitle;
+              // Apollo extras — these feed tier scoring on insert
+              if (enrichment?.mobile) enrichedMobile = enrichment.mobile;
+              if (typeof enrichment?.employeeCount === "number") enrichedEmployeeCount = String(enrichment.employeeCount);
+              if (enrichment?.industry) enrichedVertical = enrichment.industry;
             }
           } catch {
             // Continue importing the lead even if enrichment fails.
@@ -3034,6 +3036,11 @@ function GoogleMapsModal({
             decisionMakerName: enrichedContact !== "Front Desk" ? enrichedContact : "",
             decisionMakerPhone: enrichedPhone || "",
             decisionMakerEmail: enrichedEmail || "",
+            // Apollo-sourced v2 fields → tier scoring picks these up
+            website: candidate.website || "",
+            apolloMobile: enrichedMobile,
+            employeeCount: enrichedEmployeeCount,
+            vertical: enrichedVertical,
           }),
         });
 
@@ -3664,6 +3671,55 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalli
           <Mail size={10} /> Follow-up scheduled {callbackLabel}
         </div>
       )}
+
+      {/* Max attempts reached — show a clear rule + actionable CTA
+          per the brief ("Switch to email / find alternate DM"). Operator
+          gets a one-click way to find alternate contacts via Apollo. */}
+      {(() => {
+        const max = lead.maxCallAttempts ?? 6;
+        const attempts = lead.callAttempts ?? 0;
+        if (attempts < max) return null;
+        return (
+          <div style={{
+            marginTop: 6, padding: 8, background: "#fef2f2",
+            border: "1px solid #fecaca", borderRadius: 6,
+            fontSize: 11, color: "#991b1b",
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: 2 }}>
+              Max call attempts ({max}) reached
+            </div>
+            <div style={{ marginBottom: 4 }}>
+              Switch to email or find alternate DM.
+            </div>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  await fetch("/api/leads/enrich-batch", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ ids: [lead.id] }),
+                  });
+                  onBooked?.();
+                }}
+                style={{
+                  flex: 1, padding: "4px 8px", fontSize: 10, fontWeight: 600,
+                  background: "#fff", border: "1px solid #fecaca", borderRadius: 4,
+                  color: "#991b1b", cursor: "pointer",
+                }}
+              >Find alt DM</button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onTriggerCall(); }}
+                disabled={!lead.email}
+                style={{
+                  flex: 1, padding: "4px 8px", fontSize: 10, fontWeight: 600,
+                  background: "#fff", border: "1px solid #fecaca", borderRadius: 4,
+                  color: lead.email ? "#991b1b" : "#94a3b8", cursor: lead.email ? "pointer" : "not-allowed",
+                }}
+              >Switch to email</button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Send Email Button */}
       <button

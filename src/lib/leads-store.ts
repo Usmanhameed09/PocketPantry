@@ -459,6 +459,46 @@ export async function addCallLogAndUpdateStage(
     } catch { /* table may not exist yet */ }
   }
 
+  // Wrong-contact recovery (US4.3) — fire Apollo re-search with alternate DM
+  // titles so the operator gets a new contact suggestion. Best-effort; runs
+  // async so the call-log save isn't blocked on Apollo's response.
+  if (outcome === "wrong_number" || outcome === "wrong_contact") {
+    try {
+      const { data: leadForRecover } = await supabase.from("leads")
+        .select("website, business").eq("id", leadId).maybeSingle();
+      const website = (leadForRecover?.website as string) || undefined;
+      const business = (leadForRecover?.business as string) || undefined;
+      if (website || business) {
+        const { enrichLeadContact } = await import("./lead-enrichment");
+        const recovery = await enrichLeadContact({ website, company: business });
+        if (recovery.enrichment) {
+          const e = recovery.enrichment;
+          const recoverUpdate: Record<string, unknown> = {
+            apollo_last_enriched_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            next_action: "Try alternate DM (from Apollo)",
+            next_action_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+            is_call_ready: true,
+          };
+          if (e.contactName) recoverUpdate.decision_maker_name = e.contactName;
+          if (e.mobile) recoverUpdate.apollo_mobile = e.mobile;
+          if (e.contactTitle) recoverUpdate.apollo_title = e.contactTitle;
+          if (e.email) recoverUpdate.decision_maker_email = e.email;
+          await supabase.from("leads").update(recoverUpdate).eq("id", leadId);
+          // Queue a follow-up call for the new contact
+          try {
+            await createTask({
+              leadId, taskType: "call",
+              scheduledFor: new Date(Date.now() + 30 * 60 * 1000),
+              priority: 85,
+              reason: `Try alternate DM: ${e.contactName || e.contactTitle || "Apollo match"}`,
+            });
+          } catch { /* table may not exist */ }
+        }
+      }
+    } catch { /* recovery is best-effort */ }
+  }
+
   await supabase.from("outreach_log").insert({
     lead_id: leadId, action_type: "call",
     action_data: { outcome, summary: callLog.summary, duration: callLog.duration, next_action: next?.reason || null },

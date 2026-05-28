@@ -21,6 +21,12 @@ type LeadTask = {
   reason: string | null;
 };
 
+type MeetingsResponse = {
+  meetings: Array<{ id: string; business: string; contact: string; owner: string; tier: string; date: string; time: string }>;
+  totalUpcoming: number;
+  openSlots: Array<{ date: string; time: string }>;
+};
+
 type Lead = {
   id: string;
   business: string;
@@ -52,22 +58,29 @@ export default function PipelineV2Page() {
   const [dash, setDash] = useState<DashboardData | null>(null);
   const [queue, setQueue] = useState<LeadTask[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [meetings, setMeetings] = useState<MeetingsResponse | null>(null);
   const [filterTier, setFilterTier] = useState<string>("all");
   const [filterOwner, setFilterOwner] = useState<string>("all");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notInterestedOpen, setNotInterestedOpen] = useState(false);
+  const [notInterestedReason, setNotInterestedReason] = useState("price");
+  const [notInterestedNotes, setNotInterestedNotes] = useState("");
 
   async function load() {
     try {
-      const [d, q, l] = await Promise.all([
+      const [d, q, l, m] = await Promise.all([
         fetch("/api/leads/dashboard").then((r) => r.json()),
         fetch("/api/leads/tasks?due=1&type=call").then((r) => r.json()),
         fetch("/api/leads").then((r) => r.json()),
+        fetch("/api/leads/meetings").then((r) => r.json()),
       ]);
       if (d.ok) setDash(d); else setError(d.error || "Failed to load dashboard");
       if (q.ok) setQueue(q.tasks || []);
       if (Array.isArray(l)) setLeads(l);
+      if (m.ok) setMeetings({ meetings: m.meetings || [], totalUpcoming: m.totalUpcoming || 0, openSlots: m.openSlots || [] });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Load failed");
     }
@@ -134,7 +147,42 @@ export default function PipelineV2Page() {
       });
     }
     setSelectedIds(new Set());
+    setNotInterestedOpen(false);
+    setNotInterestedNotes("");
     setBulkBusy(false);
+    setBulkResult(`Marked ${selectedIds.size} leads as Not Interested`);
+    void load();
+  }
+
+  async function bulkVerifyEmails() {
+    setBulkBusy(true); setBulkResult(null);
+    const r = await fetch("/api/leads/verify-emails", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: Array.from(selectedIds) }),
+    }).then((x) => x.json());
+    setBulkBusy(false);
+    if (r.ok) {
+      setBulkResult(`Verified ${r.total}: ${r.deliverable} deliverable, ${r.risky} risky, ${r.undeliverable} undeliverable, ${r.missing} no email`);
+      setSelectedIds(new Set());
+    } else {
+      setBulkResult(`Verify failed: ${r.error || "unknown"}`);
+    }
+    void load();
+  }
+
+  async function bulkEnrichMissing() {
+    setBulkBusy(true); setBulkResult(null);
+    const r = await fetch("/api/leads/enrich-batch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: Array.from(selectedIds) }),
+    }).then((x) => x.json());
+    setBulkBusy(false);
+    if (r.ok) {
+      setBulkResult(`Enriched ${r.enriched} / ${r.processed} (${r.skipped} skipped)`);
+      setSelectedIds(new Set());
+    } else {
+      setBulkResult(`Enrich failed: ${r.error || "unknown"}`);
+    }
     void load();
   }
 
@@ -215,8 +263,8 @@ export default function PipelineV2Page() {
         </div>
       </section>
 
-      {/* Call queue + owner board */}
-      <section style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 20, marginBottom: 20 }}>
+      {/* Call queue + owner board + calendar */}
+      <section style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr", gap: 20, marginBottom: 20 }}>
         <div style={panel}>
           <h2 style={panelHeader}>Today&apos;s call queue ({queue.length})</h2>
           <div style={{ padding: "0 16px 16px" }}>
@@ -261,6 +309,53 @@ export default function PipelineV2Page() {
             )}
           </div>
         </div>
+
+        {/* Calendar block — next 5 meetings + open slot suggestions. Reads from
+            /api/leads/meetings which pulls from leads.visit_date/visit_time. */}
+        <div style={panel}>
+          <h2 style={panelHeader}>
+            Calendar {meetings && meetings.totalUpcoming > 0 ? `(${meetings.totalUpcoming})` : ""}
+          </h2>
+          <div style={{ padding: "0 16px 16px" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 6 }}>
+              Next 5 meetings
+            </div>
+            {(!meetings || meetings.meetings.length === 0) && (
+              <div style={emptyState}>No upcoming meetings.</div>
+            )}
+            {meetings?.meetings.map((m) => (
+              <div key={m.id} style={queueRow}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {m.business}
+                    {m.tier && <span style={{ ...badge(TIER_COLOR[m.tier]), marginLeft: 6, fontSize: 10 }}>{m.tier}</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#64748b" }}>
+                    {m.date} {m.time} · {m.owner || "no owner"}
+                  </div>
+                </div>
+                <Link href={`/email-pipeline?lead=${m.id}`} style={btn("ghost-sm")}>Open</Link>
+              </div>
+            ))}
+
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", letterSpacing: 0.4, textTransform: "uppercase", marginTop: 14, marginBottom: 6 }}>
+              Open slots
+            </div>
+            {(!meetings || meetings.openSlots.length === 0) && (
+              <div style={emptyState}>No suggestions.</div>
+            )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {meetings?.openSlots.map((s, i) => (
+                <span key={i} style={{
+                  fontSize: 11, padding: "3px 8px", background: "#f0fdfa", color: "#0d9488",
+                  border: "1px solid #99f6e4", borderRadius: 4, fontWeight: 600,
+                }}>
+                  {new Date(s.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })} {s.time}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* Lead table with filters + bulk actions */}
@@ -281,10 +376,19 @@ export default function PipelineV2Page() {
           </div>
         </div>
 
+        {bulkResult && (
+          <div style={{
+            padding: "8px 16px", background: "#f0fdf4", borderBottom: "1px solid #86efac",
+            fontSize: 12, color: "#166534", display: "flex", justifyContent: "space-between",
+          }}>
+            <span>{bulkResult}</span>
+            <button onClick={() => setBulkResult(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#166534" }}>✕</button>
+          </div>
+        )}
         {selectedIds.size > 0 && (
           <div style={{
             padding: "10px 16px", background: "#fef3c7", borderBottom: "1px solid #fcd34d",
-            display: "flex", gap: 8, alignItems: "center",
+            display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
           }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>
               {selectedIds.size} selected
@@ -297,15 +401,55 @@ export default function PipelineV2Page() {
               disabled={bulkBusy}
               style={btn("ghost-sm")}
             >Assign owner</button>
+            <button onClick={bulkVerifyEmails} disabled={bulkBusy} style={btn("ghost-sm")}>
+              Verify emails
+            </button>
+            <button onClick={bulkEnrichMissing} disabled={bulkBusy} style={btn("ghost-sm")}>
+              Enrich missing
+            </button>
             <button
-              onClick={() => {
-                const reason = window.prompt("Reason for Not Interested:");
-                if (reason) void bulkMarkNotInterested(reason);
-              }}
+              onClick={() => setNotInterestedOpen((v) => !v)}
               disabled={bulkBusy}
               style={btn("ghost-sm")}
             >Mark not interested</button>
             <button onClick={() => setSelectedIds(new Set())} style={btn("ghost-sm")}>Clear</button>
+            {bulkBusy && <span style={{ fontSize: 12, color: "#92400e" }}>Working…</span>}
+          </div>
+        )}
+
+        {notInterestedOpen && selectedIds.size > 0 && (
+          <div style={{
+            padding: "12px 16px", background: "#fef2f2", borderBottom: "1px solid #fecaca",
+            display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+          }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#991b1b" }}>Reason:</span>
+            <select
+              value={notInterestedReason}
+              onChange={(e) => setNotInterestedReason(e.target.value)}
+              style={selectInput}
+            >
+              <option value="price">Price</option>
+              <option value="space">Space / no room</option>
+              <option value="already_vendor">Already have a vendor</option>
+              <option value="corporate_policy">Corporate policy / contract</option>
+              <option value="not_dm">Not the decision maker</option>
+              <option value="bad_timing">Bad timing — try later</option>
+              <option value="undeliverable">Undeliverable email</option>
+              <option value="other">Other</option>
+            </select>
+            <input
+              type="text"
+              placeholder="Notes (optional)"
+              value={notInterestedNotes}
+              onChange={(e) => setNotInterestedNotes(e.target.value)}
+              style={{ ...selectInput, flex: 1, minWidth: 200 }}
+            />
+            <button
+              onClick={() => bulkMarkNotInterested(`${notInterestedReason}${notInterestedNotes ? ` — ${notInterestedNotes}` : ""}`)}
+              disabled={bulkBusy}
+              style={{ ...btn("ghost-sm"), background: "#dc2626", color: "#fff", borderColor: "#dc2626" }}
+            >Confirm</button>
+            <button onClick={() => setNotInterestedOpen(false)} style={btn("ghost-sm")}>Cancel</button>
           </div>
         )}
 

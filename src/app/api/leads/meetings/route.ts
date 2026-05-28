@@ -13,6 +13,7 @@
 
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
+import { todayInOperatorTz, dateStringInOperatorTz } from "@/lib/operator-timezone";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,8 @@ function addBusinessDays(base: Date, days: number): Date {
 export async function GET() {
   try {
     const supabase = createServerClient();
-    const today = new Date().toISOString().slice(0, 10);
+    // "Today" in operator's TZ so meetings scheduled today still show
+    const today = todayInOperatorTz();
     const { data } = await supabase
       .from("leads")
       .select("id, business, contact, stage, owner, tier, visit_date, visit_time")
@@ -52,7 +54,7 @@ export async function GET() {
     const now = new Date();
     for (let i = 1; i <= 7 && slots.length < 8; i++) {
       const d = addBusinessDays(now, i);
-      const dateStr = d.toISOString().slice(0, 10);
+      const dateStr = dateStringInOperatorTz(d);
       for (const time of ["10:00", "14:00", "16:00"]) {
         if (!taken.has(`${dateStr}T${time}`)) slots.push({ date: dateStr, time });
       }

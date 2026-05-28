@@ -13,6 +13,7 @@ import { getProjections } from "@/lib/projection-engine";
 import { findUnderperformers } from "@/lib/product-proposals";
 import { listAlerts } from "@/lib/alerts-engine";
 import { getSavedPricingAnalyses } from "@/lib/live-pricing-catalog";
+import { todayInOperatorTz, dateNDaysAgoInOperatorTz } from "@/lib/operator-timezone";
 
 export type AssistantContext = {
   generatedAt: string;
@@ -198,7 +199,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     .from("daily_sales").select("sale_date")
     .order("sale_date", { ascending: false }).limit(1).maybeSingle();
   const lastSaleDate = (lastSaleRow?.sale_date as string | null) || null;
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = todayInOperatorTz();
 
   // ─── FLEET TOP SELLERS + PER-MACHINE ──────────────────────────────
   const withVelocity = projections.filter((p) => p.velocityPerDay > 0);
@@ -259,9 +260,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
   // computed by scraper-api as total_sold / max(1, days_span) — so a product
   // with one lifetime sale shows as "1/day" forever. The daily_sales table is
   // the real per-day transaction count.
-  const dsSince = new Date();
-  dsSince.setDate(dsSince.getDate() - 30);
-  const dsSinceStr = dsSince.toISOString().slice(0, 10);
+  const dsSinceStr = dateNDaysAgoInOperatorTz(30);
   const { data: dailySalesRows } = await supabase
     .from("daily_sales")
     .select("product_id, machine_id, sale_date, units_sold")
@@ -574,9 +573,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
 async function fetchDailySales(
   supabase: ReturnType<typeof createServerClient>, daysAgo: number
 ) {
-  const date = new Date();
-  date.setDate(date.getDate() - daysAgo);
-  const dateStr = date.toISOString().slice(0, 10);
+  const dateStr = dateNDaysAgoInOperatorTz(daysAgo);
   const { data } = await supabase
     .from("daily_sales")
     .select("product_id, units_sold, revenue")
@@ -673,10 +670,7 @@ async function buildBuyListSummary(
 }
 
 async function buildWeeklyTrends(supabase: ReturnType<typeof createServerClient>) {
-  const today = new Date();
-  const sinceDate = new Date(today);
-  sinceDate.setDate(sinceDate.getDate() - 14);
-  const sinceStr = sinceDate.toISOString().slice(0, 10);
+  const sinceStr = dateNDaysAgoInOperatorTz(14);
 
   const { data, error } = await supabase
     .from("daily_sales")
@@ -691,9 +685,7 @@ async function buildWeeklyTrends(supabase: ReturnType<typeof createServerClient>
     };
   }
 
-  const cutoff = new Date(today);
-  cutoff.setDate(cutoff.getDate() - 7);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const cutoffStr = dateNDaysAgoInOperatorTz(7);
   const lastWeek = new Map<string, { name: string; units: number }>();
   const priorWeek = new Map<string, { name: string; units: number }>();
   const allDates = new Set<string>();

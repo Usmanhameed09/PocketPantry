@@ -14,6 +14,7 @@ import { ensureDefaultCompany } from "@/lib/inventory-store";
 import { listAlerts } from "@/lib/alerts-engine";
 import { generateBuyList } from "@/lib/buy-list-generator";
 import { getSavedPricingAnalyses } from "@/lib/live-pricing-catalog";
+import { todayInOperatorTz, dateNDaysAgoInOperatorTz } from "@/lib/operator-timezone";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -76,7 +77,9 @@ export async function GET() {
       .limit(1)
       .maybeSingle();
     const lastSaleDate = (lastSaleRow?.sale_date as string | null) || null;
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // "Today" in the operator's timezone (Eastern by default), NOT UTC.
+    // Otherwise after 8pm ET this would jump to tomorrow's UTC date and show $0.
+    const todayStr = todayInOperatorTz();
     const todayHasData = lastSaleDate === todayStr;
 
     // Weekly comparison (for spikes shown on the page)
@@ -235,9 +238,10 @@ export async function GET() {
 }
 
 async function fetchDailySales(supabase: ReturnType<typeof createServerClient>, daysAgo: number) {
-  const date = new Date();
-  date.setDate(date.getDate() - daysAgo);
-  const dateStr = date.toISOString().slice(0, 10);
+  // Use the operator's timezone (Eastern by default) so "today" matches what
+  // Nayax's live dashboard shows. UTC would shift this 4-5 hours and silently
+  // make today's totals look much smaller than the live dashboard.
+  const dateStr = dateNDaysAgoInOperatorTz(daysAgo);
   const { data } = await supabase
     .from("daily_sales")
     .select("product_id, units_sold, revenue")
@@ -250,15 +254,11 @@ async function fetchDailySalesRange(
   fromDaysAgo: number,
   toDaysAgo: number
 ) {
-  const fromDate = new Date();
-  fromDate.setDate(fromDate.getDate() - fromDaysAgo);
-  const toDate = new Date();
-  toDate.setDate(toDate.getDate() - toDaysAgo);
   const { data } = await supabase
     .from("daily_sales")
     .select("units_sold, revenue, sale_date")
-    .gte("sale_date", fromDate.toISOString().slice(0, 10))
-    .lt("sale_date", toDate.toISOString().slice(0, 10));
+    .gte("sale_date", dateNDaysAgoInOperatorTz(fromDaysAgo))
+    .lt("sale_date", dateNDaysAgoInOperatorTz(toDaysAgo));
   return data || [];
 }
 

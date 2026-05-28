@@ -7,6 +7,7 @@
 import "server-only";
 import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
+import { todayInOperatorTz } from "@/lib/operator-timezone";
 
 export type ProjectionRow = {
   productId: string;
@@ -78,7 +79,7 @@ async function getSeasonalMultipliers(): Promise<Map<string, number>> {
 
 async function getOverridesByProduct(): Promise<Map<string, number>> {
   const supabase = createServerClient();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInOperatorTz();
   const { data } = await supabase
     .from("projection_overrides")
     .select("product_id, units_override, valid_from, valid_to")

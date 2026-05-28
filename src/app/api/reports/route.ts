@@ -13,6 +13,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
+import { todayInOperatorTz, dateNDaysAgoInOperatorTz } from "@/lib/operator-timezone";
 import { readEnv } from "@/lib/runtime-env";
 
 export const dynamic = "force-dynamic";
@@ -37,12 +38,10 @@ export async function GET(req: Request) {
     const companyId = await ensureDefaultCompany();
     const supabase = createServerClient();
 
-    // Date range
-    const today = new Date();
-    const fromDate = new Date(today);
-    fromDate.setDate(fromDate.getDate() - days);
-    const fromStr = fromDate.toISOString().slice(0, 10);
-    const toStr = today.toISOString().slice(0, 10);
+    // Date range in the operator's timezone (Eastern by default) so the
+    // Reports page numbers line up with Nayax's live dashboard.
+    const fromStr = dateNDaysAgoInOperatorTz(days);
+    const toStr = todayInOperatorTz();
 
     // ─── 1. Fetch daily_sales rows in range ───────────────────────────
     let dailyQuery = supabase

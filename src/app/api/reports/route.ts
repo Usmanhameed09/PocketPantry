@@ -202,7 +202,21 @@ export async function GET(req: Request) {
     }));
 
     // ─── 6. Payment breakdown (live from scraper-api) ─────────────────
-    const paymentSplit = await fetchPaymentBreakdown(days).catch(() => null);
+    // If filtering by a single machine, look up its Nayax device id and pass
+    // it through so the payment split is scoped to THAT machine, not the fleet.
+    let nayaxDeviceIdFilter: string | null = null;
+    if (machineFilter) {
+      const { data: m } = await supabase
+        .from("machines").select("nayax_device_id")
+        .eq("id", machineFilter).maybeSingle();
+      nayaxDeviceIdFilter = (m?.nayax_device_id as string | null) ?? null;
+    }
+    const rawPayment = await fetchPaymentBreakdown(days).catch(() => null);
+    const paymentSplit = rawPayment
+      ? (nayaxDeviceIdFilter
+        ? filterPaymentToMachine(rawPayment, nayaxDeviceIdFilter)
+        : rawPayment)
+      : null;
 
     // ─── 7. Financial summary ─────────────────────────────────────────
     const cardRevenue = paymentSplit?.byMethod?.["Credit Card"]?.revenue || 0;
@@ -315,6 +329,30 @@ async function fetchPaymentBreakdown(days: number): Promise<PaymentBreakdownResp
   } catch {
     return null;
   }
+}
+
+function filterPaymentToMachine(
+  p: PaymentBreakdownResponse,
+  nayaxDeviceId: string
+): PaymentBreakdownResponse {
+  const m = p.byMachine.find((x) => x.machineId === nayaxDeviceId);
+  if (!m) {
+    // No data for this machine — return empty but valid shape
+    return {
+      totalRevenue: 0, totalSales: 0,
+      byMethod: {}, byBrand: {}, byMachine: [],
+    };
+  }
+  return {
+    totalRevenue: m.totalRevenue,
+    totalSales: m.totalSales,
+    byMethod: m.byMethod,
+    // byBrand is fleet-wide — we don't have per-machine brand split from the
+    // scraper-api yet. Show empty so the UI doesn't show fleet totals labelled
+    // as the machine's.
+    byBrand: {},
+    byMachine: [m],
+  };
 }
 
 function buildPaymentSplit(p: PaymentBreakdownResponse) {

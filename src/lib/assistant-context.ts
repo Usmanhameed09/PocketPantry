@@ -254,18 +254,67 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     .sort((a, b) => b.fleetDailyVelocity - a.fleetDailyVelocity);
 
   // ─── PER-MACHINE PRODUCT BREAKDOWN ────────────────────────────────
-  const byMachine = new Map<string, Array<{ name: string; category: string; rate: number }>>();
-  for (const m of machineInv) {
-    const mid = m.machine_id as string;
-    const prod = (m.products as unknown) as { name?: string; category?: string } | null;
-    const arr = byMachine.get(mid) || [];
-    arr.push({
-      name: prod?.name || "?",
-      category: prod?.category || "Snacks",
-      rate: (m.daily_sales_rate as number) || 0,
-    });
-    byMachine.set(mid, arr);
+  // Source: daily_sales (actual transaction log, aggregated over last 30 days).
+  // Previously we used machine_inventory.daily_sales_rate, but that field is
+  // computed by scraper-api as total_sold / max(1, days_span) — so a product
+  // with one lifetime sale shows as "1/day" forever. The daily_sales table is
+  // the real per-day transaction count.
+  const dsSince = new Date();
+  dsSince.setDate(dsSince.getDate() - 30);
+  const dsSinceStr = dsSince.toISOString().slice(0, 10);
+  const { data: dailySalesRows } = await supabase
+    .from("daily_sales")
+    .select("product_id, machine_id, sale_date, units_sold")
+    .gte("sale_date", dsSinceStr);
+
+  // Find actual span (days between first and last observed sale for each
+  // (machine, product) — better than dividing by 30 if data is sparse)
+  type Agg = { units: number; firstDate: string; lastDate: string };
+  const aggByMP = new Map<string, Agg>();
+  for (const r of dailySalesRows || []) {
+    const key = `${r.machine_id}|${r.product_id}`;
+    const e = aggByMP.get(key) || { units: 0, firstDate: r.sale_date as string, lastDate: r.sale_date as string };
+    e.units += (r.units_sold as number) || 0;
+    const d = r.sale_date as string;
+    if (d < e.firstDate) e.firstDate = d;
+    if (d > e.lastDate) e.lastDate = d;
+    aggByMP.set(key, e);
   }
+  // Determine the actual span of daily_sales data we have (so we don't divide
+  // 5 days of data by 30 and underestimate).
+  let dataSpanDays = 30;
+  if (dailySalesRows && dailySalesRows.length > 0) {
+    const dates = (dailySalesRows as Array<{ sale_date: string }>).map((r) => r.sale_date);
+    const minD = dates.reduce((a, b) => (a < b ? a : b));
+    const maxD = dates.reduce((a, b) => (a > b ? a : b));
+    const span = (new Date(maxD).getTime() - new Date(minD).getTime()) / 86400000 + 1;
+    dataSpanDays = Math.max(1, Math.min(30, span));
+  }
+
+  // Resolve product metadata for these IDs
+  const dsProductIds = [...new Set(Array.from(aggByMP.keys()).map((k) => k.split("|")[1]))];
+  const { data: dsProductRows } = dsProductIds.length > 0
+    ? await supabase.from("products").select("id, name, category").in("id", dsProductIds)
+    : { data: [] as Array<{ id: string; name?: string; category?: string }> };
+  const dsProductMeta = new Map((dsProductRows || []).map((p) => [
+    p.id as string,
+    { name: (p.name as string) || "?", category: (p.category as string) || "Snacks" },
+  ]));
+
+  const byMachine = new Map<string, Array<{ name: string; category: string; rate: number }>>();
+  for (const [key, agg] of aggByMP) {
+    const [machineId, productId] = key.split("|");
+    const meta = dsProductMeta.get(productId);
+    if (!meta) continue;
+    const rate = agg.units / dataSpanDays;
+    const arr = byMachine.get(machineId) || [];
+    arr.push({ name: meta.name, category: meta.category, rate });
+    byMachine.set(machineId, arr);
+  }
+
+  // Suppress unused-var warning — kept for parity with the previous
+  // implementation in case we need fleet-wide machine_inventory access later.
+  void machineInv;
   const machineRows = machines.map((m) => {
     const items = (byMachine.get(m.id as string) || []).filter((x) => x.rate > 0).sort((a, b) => b.rate - a.rate);
     const categoryMix: Record<string, number> = {};
@@ -436,9 +485,12 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
 
   return {
     generatedAt: new Date().toISOString(),
-    dataWindow: weeklyTrends.available
-      ? `Velocity = Nayax 30-day average. Weekly trends from daily_sales (last ${weeklyTrends.daysOfData} days).`
-      : "Velocity = Nayax 30-day average. Weekly trends not yet available.",
+    dataWindow:
+      `Per-machine product rates are computed from daily_sales transaction log over the last ${Math.round(dataSpanDays)} days of data we have. ` +
+      `Fleet topSellers velocity uses Nayax's own 30-day rolling average from machine_inventory.daily_sales_rate. ` +
+      (weeklyTrends.available
+        ? `Weekly trends from daily_sales (last ${weeklyTrends.daysOfData} days).`
+        : "Weekly trends not yet available."),
     metricsGlossary:
       "FLEET-WIDE numbers: sums across all machines (fleetVelocityPerDay, fleetMonthlyUnits, fleetDailyVelocity, etc.). " +
       "PER-MACHINE numbers: inside machines[].products[] — these are the rate for THAT specific machine only. " +

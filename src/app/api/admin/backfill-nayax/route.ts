@@ -54,10 +54,19 @@ type HistoricalSalesResponse = {
 export async function POST(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const requestedDays = Math.max(1, Math.min(365, Number(searchParams.get("days")) || 365));
+    const requestedDays = Math.max(1, Math.min(365, Number(searchParams.get("days")) || 90));
+    // offset = how many days back the END of this chunk sits.
+    // offset=0   + days=90 → today-90 to today      (chunk 1)
+    // offset=90  + days=90 → today-180 to today-90  (chunk 2)
+    // offset=180 + days=90 → today-270 to today-180 (chunk 3)
+    // offset=270 + days=90 → today-360 to today-270 (chunk 4)
+    // The UI calls this 4 times to cover a full year without hitting
+    // Vercel's 300s function timeout (each chunk ~20-90s of scraper work).
+    const offset = Math.max(0, Math.min(365, Number(searchParams.get("offset")) || 0));
     const to = new Date();
+    to.setDate(to.getDate() - offset);
     const from = new Date();
-    from.setDate(from.getDate() - requestedDays);
+    from.setDate(from.getDate() - offset - requestedDays);
     const fromIso = from.toISOString().slice(0, 10);
     const toIso = to.toISOString().slice(0, 10);
 

@@ -246,23 +246,42 @@ export default function ReportsPage() {
             }}><Download size={14} /> Export CSV</button>
             <button
               onClick={async () => {
-                if (!confirm("Backfill all Nayax sales from the last 365 days into daily_sales? This may take 1-3 minutes.")) return;
+                if (!confirm("Backfill all Nayax sales from the last 365 days into daily_sales? This runs in 4 chunks of 90 days, takes ~2-5 minutes total. Safe to re-run.")) return;
                 setBackfilling(true);
-                setBackfillMsg(null);
-                try {
-                  const res = await fetch("/api/admin/backfill-nayax?days=365", { method: "POST" });
-                  const j = await res.json();
-                  if (j.ok) {
-                    setBackfillMsg(`Done. Wrote ${j.dailySalesWritten} rows across ${j.machinesProcessed} machines (${j.fromDate} to ${j.toDate}).`);
-                    void load();
-                  } else {
-                    setBackfillMsg(`Backfill failed: ${j.error || "unknown"}`);
+                setBackfillMsg("Starting…");
+                // 4 chunks of 90 days each = 360 days back from today.
+                // Sequential to keep each Vercel call under the 300s timeout.
+                const chunks = [0, 90, 180, 270];
+                let totalWritten = 0;
+                let earliestDate: string | null = null;
+                let machinesProcessed = 0;
+                const errors: string[] = [];
+                for (let i = 0; i < chunks.length; i++) {
+                  const offset = chunks[i];
+                  setBackfillMsg(`Chunk ${i + 1}/4: backfilling days ${offset + 1} to ${offset + 90} ago…`);
+                  try {
+                    const res = await fetch(`/api/admin/backfill-nayax?days=90&offset=${offset}`, { method: "POST" });
+                    const j = await res.json();
+                    if (j.ok) {
+                      totalWritten += j.dailySalesWritten || 0;
+                      machinesProcessed = Math.max(machinesProcessed, j.machinesProcessed || 0);
+                      if (j.fromDate && (!earliestDate || j.fromDate < earliestDate)) earliestDate = j.fromDate;
+                    } else {
+                      errors.push(`Chunk ${i + 1}: ${j.error || "unknown"}`);
+                    }
+                  } catch (e) {
+                    errors.push(`Chunk ${i + 1}: ${e instanceof Error ? e.message : "network error"}`);
                   }
-                } catch (e) {
-                  setBackfillMsg(`Backfill failed: ${e instanceof Error ? e.message : "network error"}`);
-                } finally {
-                  setBackfilling(false);
                 }
+                if (errors.length === 0) {
+                  setBackfillMsg(`Done. Wrote ${totalWritten} rows across ${machinesProcessed} machines, back to ${earliestDate || "?"}.`);
+                } else if (totalWritten > 0) {
+                  setBackfillMsg(`Partial: wrote ${totalWritten} rows, ${errors.length} chunk(s) failed: ${errors.join("; ")}`);
+                } else {
+                  setBackfillMsg(`Backfill failed: ${errors.join("; ")}`);
+                }
+                setBackfilling(false);
+                void load();
               }}
               disabled={backfilling}
               style={{

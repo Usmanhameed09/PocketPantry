@@ -189,7 +189,14 @@ export async function findApolloContact(params: { website?: string; company?: st
   let searchPayload: ApolloSearchResponse;
 
   try {
-    searchPayload = await apolloFetch<ApolloSearchResponse>(`/mixed_people/search?${searchParams.toString()}`, {
+    // /people/search is the Basic-plan ($49/mo) People Search endpoint per
+    // Apollo's tier docs. We previously used /mixed_people/search which
+    // includes the operator's saved contacts AND Apollo's database — that
+    // "mixed" endpoint is gated behind Standard/Advanced plans and returns
+    // "API_INACCESSIBLE" on Basic. For our cold-prospecting use case we
+    // only care about Apollo's database anyway, so /people/search is the
+    // right call.
+    searchPayload = await apolloFetch<ApolloSearchResponse>(`/people/search?${searchParams.toString()}`, {
       method: "GET",
     });
   } catch (error) {

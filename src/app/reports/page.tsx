@@ -54,6 +54,8 @@ export default function ReportsPage() {
   const [appliedFrom, setAppliedFrom] = useState<string>("");
   const [appliedTo, setAppliedTo] = useState<string>("");
   const [machineId, setMachineId] = useState<string>("");
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
 
   // "Last month" = previous calendar month (e.g. on May 28 → April 1 to April 30)
   function lastMonthRange(): { from: string; to: string } {
@@ -242,13 +244,56 @@ export default function ReportsPage() {
               background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
               fontSize: 13, fontWeight: 500, cursor: "pointer",
             }}><Download size={14} /> Export CSV</button>
-            <button style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "9px 18px",
-              background: "#e2e8f0", color: "#94a3b8", border: "none", borderRadius: 8,
-              fontSize: 13, fontWeight: 600, cursor: "not-allowed",
-            }} title="Coming soon"><Calendar size={14} /> Schedule Report</button>
+            <button
+              onClick={async () => {
+                if (!confirm("Backfill all Nayax sales from the last 365 days into daily_sales? This may take 1-3 minutes.")) return;
+                setBackfilling(true);
+                setBackfillMsg(null);
+                try {
+                  const res = await fetch("/api/admin/backfill-nayax?days=365", { method: "POST" });
+                  const j = await res.json();
+                  if (j.ok) {
+                    setBackfillMsg(`Done. Wrote ${j.dailySalesWritten} rows across ${j.machinesProcessed} machines (${j.fromDate} to ${j.toDate}).`);
+                    void load();
+                  } else {
+                    setBackfillMsg(`Backfill failed: ${j.error || "unknown"}`);
+                  }
+                } catch (e) {
+                  setBackfillMsg(`Backfill failed: ${e instanceof Error ? e.message : "network error"}`);
+                } finally {
+                  setBackfilling(false);
+                }
+              }}
+              disabled={backfilling}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
+                background: backfilling ? "#94a3b8" : "#0d9488", color: "#fff",
+                border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                cursor: backfilling ? "wait" : "pointer",
+              }}
+              title="Pull every Nayax transaction from the last 365 days into daily_sales — one-time backfill so Reports/Machines show true historical numbers"
+            >
+              {backfilling ? "Backfilling…" : "Backfill Nayax 365d"}
+            </button>
           </div>
         </div>
+
+        {backfillMsg && (
+          <div style={{
+            margin: "0 0 16px",
+            padding: "10px 14px",
+            background: backfillMsg.startsWith("Done") ? "#f0fdf4" : "#fef2f2",
+            border: `1px solid ${backfillMsg.startsWith("Done") ? "#86efac" : "#fecaca"}`,
+            color: backfillMsg.startsWith("Done") ? "#166534" : "#991b1b",
+            borderRadius: 8, fontSize: 13,
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+          }}>
+            <span>{backfillMsg}</span>
+            <button onClick={() => setBackfillMsg(null)} style={{
+              background: "none", border: "none", cursor: "pointer", color: "inherit",
+            }}>✕</button>
+          </div>
+        )}
 
         {/* Data quality banner */}
         {dataQuality.flaggedCostProducts > 0 && (

@@ -53,10 +53,16 @@ export async function GET() {
     const machineInv = machineInvRes.data || [];
     const warehouse = warehouseRes.data || [];
 
-    // Also fetch scraper-api machine status — Nayax has its own offline signal
-    // (no orders in >3 days) that's independent of our 24h-no-sync detector.
-    // The Machines page uses the merged view, so we should too.
-    const scraperOfflineNames = await fetchScraperOfflineMachines();
+    // Fetch the SAME machine list the /machines page renders, so the active/
+    // offline counts on the Today tile agree with that page. Counting from
+    // Supabase here while the page counts from /api/machines caused the
+    // "Today shows 7/8, Machines shows 6/8" mismatch operators reported.
+    const scraperMachineList = await fetchScraperMachines();
+    const scraperOfflineNames = new Set(
+      scraperMachineList
+        .filter((m) => (m.status || "").toLowerCase() === "offline")
+        .map((m) => m.name || "")
+    );
 
     // ─── Today's revenue ───────────────────────────────────────────────
     // 1. First read what's in daily_sales (whatever the last sync wrote)
@@ -106,14 +112,19 @@ export async function GET() {
       ? Math.round(((thisWeekUnits - priorWeekUnits) / priorWeekUnits) * 100)
       : 0;
 
-    // ─── Machines status (merge DB + scraper-api signals) ──────────────
-    const dbOffline = new Set(
-      machines.filter((m) => (m.status as string) === "offline").map((m) => m.name as string)
+    // ─── Machines status ───────────────────────────────────────────────
+    // Count from the SAME scraper-merged list the Machines page shows
+    // (filtered by lowercase "offline" so it matches /api/machines status
+    // overlay logic). If the scraper proxy is unreachable, fall back to the
+    // Supabase machines table so the tile still renders something.
+    const machineCountSource = scraperMachineList.length > 0
+      ? scraperMachineList.map((m) => ({ name: m.name || "", status: m.status || "" }))
+      : machines.map((m) => ({ name: m.name as string, status: m.status as string }));
+    const offlineMachines = machineCountSource.filter(
+      (m) => (m.status || "").toLowerCase() === "offline" || scraperOfflineNames.has(m.name)
     );
-    // Combine: a machine is offline if EITHER our DB OR scraper-api says so
-    const offlineNames = new Set<string>([...dbOffline, ...scraperOfflineNames]);
-    const offlineMachines = machines.filter((m) => offlineNames.has(m.name as string));
-    const activeMachines = machines.length - offlineMachines.length;
+    const totalMachines = machineCountSource.length;
+    const activeMachines = totalMachines - offlineMachines.length;
 
     // ─── Refill stops — ALL machines with low items, ranked ────────────
     // A "low item" = a product on this machine where current estimated
@@ -226,10 +237,10 @@ export async function GET() {
         liveDataAt,
       },
       machines: {
-        total: machines.length,
+        total: totalMachines,
         active: activeMachines,
         offline: offlineMachines.length,
-        offlineList: offlineMachines.slice(0, 3).map((m) => ({ name: m.name as string, status: "Offline" })),
+        offlineList: offlineMachines.slice(0, 3).map((m) => ({ name: m.name, status: "Offline" })),
       },
       alerts: {
         total: alerts.length,
@@ -343,20 +354,23 @@ async function fetchLiveTodayTotals(todayDateStr: string): Promise<
   }
 }
 
-async function fetchScraperOfflineMachines(): Promise<Set<string>> {
-  // Call our own /api/machines proxy which merges scraper + DB statuses.
-  // We can't import the route directly server-side, so fetch.
+type ScraperMachine = { name?: string; status?: string };
+
+/**
+ * Pulls the SAME machine list the Machines page renders, so the Today tile
+ * count agrees with that page. Previously we counted from Supabase here
+ * and the Machines page counted from this proxy → the lists diverged when
+ * a machine existed in one source but not the other.
+ */
+async function fetchScraperMachines(): Promise<ScraperMachine[]> {
   try {
     const url = `${process.env.NEXT_PUBLIC_APP_URL || "https://pocketpantry.vercel.app"}/api/machines`;
     const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) return new Set();
+    if (!res.ok) return [];
     const data = await res.json();
-    const ms = (data.machines || []) as Array<{ name?: string; status?: string }>;
-    return new Set(
-      ms.filter((m) => (m.status || "").toLowerCase() === "offline").map((m) => m.name || "")
-    );
+    return (data.machines || []) as ScraperMachine[];
   } catch {
-    return new Set();
+    return [];
   }
 }
 

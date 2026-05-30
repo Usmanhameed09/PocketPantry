@@ -165,6 +165,53 @@ async function scanOfflineMachines(): Promise<{ created: number; marked: number 
   return { created, marked: offlineIds.length };
 }
 
+/**
+ * Targeted alert refresh for a single product. Called from the stock-movement
+ * endpoint right after a "purchase" or "refill" so a scan or manual restock
+ * makes the matching low-stock alert disappear immediately, without waiting
+ * for the next full scanAndPersistAlerts() pass.
+ *
+ * Approach: if on-hand is now at or above the alert's recommended_qty
+ * (what we told the operator to buy), the alert is satisfied — resolve it.
+ * If not, leave it in place; the next full scan will recompute properly.
+ *
+ * Returns the number of alerts dismissed (0 in the common case where nothing
+ * was over-threshold).
+ */
+export async function resolveAlertsForProduct(productId: string): Promise<number> {
+  if (!productId) return 0;
+  try {
+    const supabase = createServerClient();
+    const { data: alerts } = await supabase
+      .from("alerts")
+      .select("id, recommended_qty")
+      .eq("product_id", productId)
+      .eq("type", "low_stock")
+      .eq("status", "open");
+    if (!alerts || alerts.length === 0) return 0;
+
+    const { data: wh } = await supabase
+      .from("warehouse_inventory")
+      .select("on_hand")
+      .eq("product_id", productId)
+      .maybeSingle();
+    const onHand = (wh?.on_hand as number) || 0;
+
+    const toResolve = alerts.filter(
+      (a) => onHand >= ((a.recommended_qty as number) || 0)
+    );
+    if (toResolve.length === 0) return 0;
+
+    await supabase
+      .from("alerts")
+      .update({ status: "resolved", resolved_at: new Date().toISOString() })
+      .in("id", toResolve.map((a) => a.id as string));
+    return toResolve.length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function scanAndPersistAlerts(): Promise<{ created: number; dismissed: number; offlineCreated?: number; offlineMarked?: number }> {
   const companyId = await ensureDefaultCompany();
   const supabase = createServerClient();

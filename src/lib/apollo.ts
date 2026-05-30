@@ -163,9 +163,6 @@ export async function findApolloContact(params: { website?: string; company?: st
   }
 
   const warnings: string[] = [];
-  const searchParams = new URLSearchParams();
-  searchParams.set("page", "1");
-  searchParams.set("per_page", "5");
 
   const titles = [
     "manager",
@@ -178,26 +175,27 @@ export async function findApolloContact(params: { website?: string; company?: st
     "administrator",
   ];
 
-  for (const title of titles) {
-    searchParams.append("person_titles[]", title);
-  }
-
+  // Apollo deprecated GET /people/search and (older) POST /mixed_people/search
+  // for API callers — both now return HTTP 422 with the message "use the new
+  // mixed_people/api_search endpoint". The new endpoint is POST-only and
+  // takes the filters as a JSON body. Verified working with the Basic plan
+  // ($49/mo) — returns Apollo's database matches (NOT the operator's saved
+  // contacts, which is what we want for cold prospecting).
+  const searchBody: Record<string, unknown> = {
+    page: 1,
+    per_page: 5,
+    person_titles: titles,
+  };
   if (domain) {
-    searchParams.append("q_organization_domains_list[]", domain);
+    searchBody.q_organization_domains_list = [domain];
   }
 
   let searchPayload: ApolloSearchResponse;
 
   try {
-    // /people/search is the Basic-plan ($49/mo) People Search endpoint per
-    // Apollo's tier docs. We previously used /mixed_people/search which
-    // includes the operator's saved contacts AND Apollo's database — that
-    // "mixed" endpoint is gated behind Standard/Advanced plans and returns
-    // "API_INACCESSIBLE" on Basic. For our cold-prospecting use case we
-    // only care about Apollo's database anyway, so /people/search is the
-    // right call.
-    searchPayload = await apolloFetch<ApolloSearchResponse>(`/people/search?${searchParams.toString()}`, {
-      method: "GET",
+    searchPayload = await apolloFetch<ApolloSearchResponse>("/mixed_people/api_search", {
+      method: "POST",
+      body: JSON.stringify(searchBody),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Apollo search failed.";
@@ -227,12 +225,16 @@ export async function findApolloContact(params: { website?: string; company?: st
 
   if (best.id) {
     try {
+      // reveal_phone_number requires a webhook_url on the Basic plan (Apollo
+      // bills phone unlocks async and posts the result back via webhook). We
+      // don't have one wired up yet, so reveal email only — the mobile_phone
+      // field still comes through if it's already in Apollo's public dataset
+      // for this person. Adding a webhook flow is a separate Sprint 7 task.
       const matchPayload = await apolloFetch<ApolloMatchResponse>("/people/match", {
         method: "POST",
         body: JSON.stringify({
           id: best.id,
           reveal_personal_emails: true,
-          reveal_phone_number: true,
         }),
       });
 

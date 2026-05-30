@@ -7,7 +7,7 @@
 import "server-only";
 import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
-import { todayInOperatorTz } from "@/lib/operator-timezone";
+import { todayInOperatorTz, dateNDaysAgoInOperatorTz } from "@/lib/operator-timezone";
 
 export type ProjectionRow = {
   productId: string;
@@ -123,23 +123,47 @@ export async function getProjections(): Promise<ProjectionRow[]> {
 
   if (!products.length) return [];
 
-  // Velocity source: machine_inventory.daily_sales_rate is the per-machine
-  // daily rate that Nayax calculates over its own 30-day lookback window.
-  // We sum across machines to get fleet-wide per-product velocity. This is
-  // far more accurate than aggregating our own sparse sale_estimate ledger
-  // which only has a few sync samples.
-  const { data: machineInv } = await supabase
-    .from("machine_inventory")
-    .select("product_id, daily_sales_rate");
+  // Velocity source: aggregate the last 30 days of daily_sales rows.
+  // Previously we used machine_inventory.daily_sales_rate which the scraper
+  // computes as total_sold / max(1, days_span) — so a product with 1 sale
+  // ever shows as 1/day forever, and summing across N machines gives N×
+  // inflated velocity. That's why operators were seeing projections 3-5×
+  // larger than the actual Reports numbers for the same window.
+  //
+  // daily_sales is the real per-day transaction count (one row per product /
+  // machine / day). Sum units_sold across the last 30 days, divide by 30,
+  // get a real fleet-wide per-day velocity.
+  const since = dateNDaysAgoInOperatorTz(30);
+  const dailySalesRows: Array<{ product_id: string; machine_id: string; units_sold: number }> = [];
+  const DS_PAGE = 1000;
+  for (let from = 0; from < 100000; from += DS_PAGE) {
+    const { data, error } = await supabase
+      .from("daily_sales")
+      .select("product_id, machine_id, units_sold")
+      .gte("sale_date", since)
+      .range(from, from + DS_PAGE - 1);
+    if (error) break;
+    if (!data || data.length === 0) break;
+    dailySalesRows.push(...(data as Array<{ product_id: string; machine_id: string; units_sold: number }>));
+    if (data.length < DS_PAGE) break;
+  }
 
+  const unitsByProduct = new Map<string, number>();
+  const machinesByProduct = new Map<string, Set<string>>();
+  for (const r of dailySalesRows) {
+    const pid = r.product_id;
+    unitsByProduct.set(pid, (unitsByProduct.get(pid) || 0) + (r.units_sold || 0));
+    if (!machinesByProduct.has(pid)) machinesByProduct.set(pid, new Set());
+    machinesByProduct.get(pid)!.add(r.machine_id);
+  }
   const velocityByProduct = new Map<string, number>();
   const machineCountByProduct = new Map<string, number>();
-  for (const m of machineInv || []) {
-    const pid = m.product_id as string;
-    const rate = (m.daily_sales_rate as number) || 0;
-    if (rate <= 0) continue;
-    velocityByProduct.set(pid, (velocityByProduct.get(pid) || 0) + rate);
-    machineCountByProduct.set(pid, (machineCountByProduct.get(pid) || 0) + 1);
+  for (const [pid, units] of unitsByProduct.entries()) {
+    // Per-day velocity over the 30d window. Stays per-day (not per-machine)
+    // so projectedUnits30d = velocity * 30 matches Reports' "last 30 days"
+    // total for the same product when there's no seasonal multiplier.
+    velocityByProduct.set(pid, units / 30);
+    machineCountByProduct.set(pid, machinesByProduct.get(pid)?.size || 0);
   }
 
   const rows: ProjectionRow[] = [];

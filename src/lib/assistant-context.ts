@@ -9,7 +9,7 @@
 import "server-only";
 import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
-import { getProjections } from "@/lib/projection-engine";
+import { getProjections, getProjectionSettings } from "@/lib/projection-engine";
 import { findUnderperformers } from "@/lib/product-proposals";
 import { listAlerts } from "@/lib/alerts-engine";
 import { getSavedPricingAnalyses } from "@/lib/live-pricing-catalog";
@@ -82,6 +82,38 @@ export type AssistantContext = {
     declines: Array<{ name: string; lastWeek: number; priorWeek: number; pct: number }>;
     topSellersThisWeek: Array<{ name: string; units: number }>;
   };
+  // 30-day projection from /predictions. Distinct from topSellersFleetWide
+  // (which is actual recent velocity). The AI should treat these as "expected
+  // next 30 days" and use them for forward-looking questions ("what should we
+  // stock?", "how much will we spend on X this month?").
+  predictions: {
+    horizonDays: number;
+    windowWeeks: number;
+    totalProjectedUnits30d: number;
+    totalProjectedCogs30d: number;
+    productCount: number;
+    topByUnits: Array<{
+      product: string; category: string;
+      projectedUnits30d: number;
+      velocityPerDay: number;
+      seasonalMultiplier: number;
+      hasManualOverride: boolean;
+      explanation: string;
+    }>;
+    topByCogsSpend: Array<{
+      product: string; category: string;
+      projectedUnits30d: number;
+      projectedCogs30d: number;
+      unitCost: number;
+    }>;
+    manualOverrides: Array<{
+      product: string; category: string; override: number;
+    }>;
+    seasonalBoostsActive: Array<{
+      product: string; category: string;
+      seasonalMultiplier: number;
+    }>;
+  };
   warehouse: {
     totalValue: number;
     totalUnits: number;
@@ -149,6 +181,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     projections,
     alerts,
     underperformersRaw,
+    projectionSettings,
     productsRes,
     machinesRes,
     machineInvRes,
@@ -166,6 +199,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     getProjections(),
     listAlerts(false),
     findUnderperformers(),
+    getProjectionSettings().catch(() => ({ windowWeeks: 6, safetyStockDays: 5, horizonDays: 7 })),
     supabase.from("products").select("id, name, category, default_vend_price, unit_cost", { count: "exact" }).eq("company_id", companyId).range(0, 9999),
     supabase.from("machines").select("id, name, status").eq("company_id", companyId),
     supabase.from("machine_inventory").select("machine_id, product_id, daily_sales_rate, products(name, category)"),
@@ -454,6 +488,55 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
   }));
   const activeReplacementPlans = replacements.filter((r) => r.status === "Active").length;
 
+  // ─── PREDICTIONS / PROJECTIONS ───────────────────────────────────
+  // Same source as the Predictions page: daily_sales over 30d (operator TZ)
+  // × category seasonal multiplier × manual override. Distinct from
+  // topSellersFleetWide which is RECENT velocity. The AI should use these
+  // for forward-looking questions ("how many will I sell next month?",
+  // "what's the expected restock cost?").
+  const projectionsWithDemand = projections.filter((p) => p.projectedUnits30d > 0);
+  const totalProjectedUnits30d = projectionsWithDemand.reduce((s, p) => s + p.projectedUnits30d, 0);
+  const totalProjectedCogs30d = projectionsWithDemand.reduce((s, p) => s + p.projectedCogs30d, 0);
+  const predictionsTopByUnits = [...projectionsWithDemand]
+    .sort((a, b) => b.projectedUnits30d - a.projectedUnits30d)
+    .slice(0, 20)
+    .map((p) => ({
+      product: p.productName,
+      category: p.category,
+      projectedUnits30d: p.projectedUnits30d,
+      velocityPerDay: p.velocityPerDay,
+      seasonalMultiplier: p.seasonalMultiplier,
+      hasManualOverride: p.override !== null,
+      explanation: p.explanation,
+    }));
+  const predictionsTopByCogs = [...projectionsWithDemand]
+    .filter((p) => p.cost > 0)
+    .sort((a, b) => b.projectedCogs30d - a.projectedCogs30d)
+    .slice(0, 15)
+    .map((p) => ({
+      product: p.productName,
+      category: p.category,
+      projectedUnits30d: p.projectedUnits30d,
+      projectedCogs30d: p.projectedCogs30d,
+      unitCost: p.cost,
+    }));
+  const manualOverrides = projectionsWithDemand
+    .filter((p) => p.override !== null)
+    .map((p) => ({
+      product: p.productName,
+      category: p.category,
+      override: p.override as number,
+    }));
+  const seasonalBoostsActive = projectionsWithDemand
+    .filter((p) => Math.abs(p.seasonalMultiplier - 1.0) > 0.01)
+    .sort((a, b) => b.seasonalMultiplier - a.seasonalMultiplier)
+    .slice(0, 15)
+    .map((p) => ({
+      product: p.productName,
+      category: p.category,
+      seasonalMultiplier: p.seasonalMultiplier,
+    }));
+
   // ─── EMAIL REPLIES ───────────────────────────────────────────────
   const replyRows = (emailRepliesRes.data || []) as Array<{
     action_data: { from?: string; intent?: string; summary?: string };
@@ -508,6 +591,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       "replacements (active replacement plans)",
       "recentEmailReplies (last 5 lead replies with intent)",
       "recentStockMovements (last 15 purchases/refills/spoilage)",
+      "predictions (30d projected units + COGS, top by units, top by spend, manual overrides, active seasonal boosts) — use for forward-looking questions",
     ],
     totals: {
       products: productCount,
@@ -545,6 +629,17 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     categoryBreakdownFleetWide,
     machines: machineRows,
     weeklyTrends,
+    predictions: {
+      horizonDays: projectionSettings.horizonDays,
+      windowWeeks: projectionSettings.windowWeeks,
+      totalProjectedUnits30d: Math.round(totalProjectedUnits30d),
+      totalProjectedCogs30d: Math.round(totalProjectedCogs30d * 100) / 100,
+      productCount: projectionsWithDemand.length,
+      topByUnits: predictionsTopByUnits,
+      topByCogsSpend: predictionsTopByCogs,
+      manualOverrides,
+      seasonalBoostsActive,
+    },
     warehouse: {
       totalValue: Math.round(warehouseValue * 100) / 100,
       totalUnits: warehouseUnits,

@@ -21,6 +21,7 @@ import {
   Package,
   Zap,
   Store,
+  RotateCcw,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -126,12 +127,35 @@ export default function PricingPage() {
   const [savingPrices, setSavingPrices] = useState<Record<string, boolean>>({});
   const [savingDecisions, setSavingDecisions] = useState<Record<string, boolean>>({});
   const [costDrafts, setCostDrafts] = useState<Record<string, string>>({});
+  // Selling-price drafts (separate from cost): operator types in the Selling
+  // cell, hits Save, the catalog PATCH writes currentPrice. We also remember
+  // the OLD value per row so the operator can Revert one clerical-error step.
+  // Survives reload via localStorage so undo works even after a refresh.
+  const [sellingDrafts, setSellingDrafts] = useState<Record<string, string>>({});
+  const [savingSelling, setSavingSelling] = useState<Record<string, boolean>>({});
+  const [prevSellingPrice, setPrevSellingPrice] = useState<Record<string, number>>({});
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  // Restore the undo history on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("pricingPrevSelling");
+      if (raw) setPrevSellingPrice(JSON.parse(raw));
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem("pricingPrevSelling", JSON.stringify(prevSellingPrice)); } catch {}
+  }, [prevSellingPrice]);
 
   function syncPriceDrafts(nextItems: PricingItem[]) {
     setCostDrafts(
       Object.fromEntries(
         nextItems.map((item) => [item.productRefId || item.id, item.cost.toFixed(2)])
+      )
+    );
+    setSellingDrafts(
+      Object.fromEntries(
+        nextItems.map((item) => [item.productRefId || item.id, item.currentPrice.toFixed(2)])
       )
     );
   }
@@ -333,6 +357,79 @@ export default function PricingPage() {
       setItems((prev) => prev.map((row) => row.id === item.id ? { ...row, cost: nextValue, prevCost: nextValue } : row));
     } catch (error) { console.error(error); }
     finally { setSavingPrices((prev) => ({ ...prev, [key]: false })); }
+  }
+
+  function handleSellingDraftChange(key: string, value: string) {
+    setSellingDrafts((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleSaveSelling(item: PricingItem) {
+    const key = item.productRefId || item.id;
+    const nextValue = Number(sellingDrafts[key]);
+    if (!Number.isFinite(nextValue) || nextValue < 0 || !item.productRefId) return;
+    if (Math.abs(nextValue - item.currentPrice) < 0.005) return; // no-op
+    setSavingSelling((prev) => ({ ...prev, [key]: true }));
+    try {
+      const res = await fetch("/api/pricing/catalog", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: item.productRefId, currentPrice: nextValue }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      // Remember the old value so the operator can Revert one step
+      setPrevSellingPrice((prev) => ({ ...prev, [key]: item.currentPrice }));
+      // Update local state — margin recomputes from the new currentPrice
+      setItems((prev) => prev.map((row) => {
+        if (row.id !== item.id) return row;
+        const margin = nextValue > 0 && nextValue > row.cost
+          ? Math.round(((nextValue - row.cost) / nextValue) * 100)
+          : 0;
+        return { ...row, currentPrice: nextValue, margin };
+      }));
+      setScrapeError(null);
+    } catch (error) {
+      console.error(error);
+      setScrapeError(error instanceof Error ? error.message : "Failed to save selling price");
+    } finally {
+      setSavingSelling((prev) => ({ ...prev, [key]: false }));
+    }
+  }
+
+  async function handleRevertSelling(item: PricingItem) {
+    const key = item.productRefId || item.id;
+    const prev = prevSellingPrice[key];
+    if (prev === undefined || !item.productRefId) return;
+    setSavingSelling((prev) => ({ ...prev, [key]: true }));
+    try {
+      const res = await fetch("/api/pricing/catalog", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: item.productRefId, currentPrice: prev }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      // Restore + clear undo history (one-step undo by design)
+      setItems((curr) => curr.map((row) => {
+        if (row.id !== item.id) return row;
+        const margin = prev > 0 && prev > row.cost
+          ? Math.round(((prev - row.cost) / prev) * 100)
+          : 0;
+        return { ...row, currentPrice: prev, margin };
+      }));
+      setSellingDrafts((d) => ({ ...d, [key]: prev.toFixed(2) }));
+      setPrevSellingPrice((p) => {
+        const next = { ...p };
+        delete next[key];
+        return next;
+      });
+      setScrapeError(null);
+    } catch (error) {
+      console.error(error);
+      setScrapeError(error instanceof Error ? error.message : "Failed to revert");
+    } finally {
+      setSavingSelling((p) => ({ ...p, [key]: false }));
+    }
   }
 
   async function runScrape(endpoint: string) {
@@ -1106,16 +1203,75 @@ export default function PricingPage() {
                           )}
                         </div>
 
-                        {/* Prices: Current vs Suggested */}
+                        {/* Prices: editable Selling + Suggested */}
                         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 20 : 0, ...(isMobile ? {} : { flexDirection: "column" as const, alignItems: "flex-start" }) }}>
-                          <div>
-                            <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>
-                              Selling
-                            </div>
-                            <div style={{ fontSize: 18, fontWeight: 800, color: "#0f172a" }}>
-                              ${p.currentPrice.toFixed(2)}
-                            </div>
-                          </div>
+                          {(() => {
+                            const key = p.productRefId || p.id;
+                            const draft = sellingDrafts[key] ?? p.currentPrice.toFixed(2);
+                            const draftNum = Number(draft);
+                            const draftValid = Number.isFinite(draftNum) && draftNum >= 0;
+                            const dirty = draftValid && Math.abs(draftNum - p.currentPrice) > 0.005;
+                            const saving = !!savingSelling[key];
+                            const undoTo = prevSellingPrice[key];
+                            const canEdit = !!p.productRefId;
+                            return (
+                              <div>
+                                <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+                                  Selling
+                                </div>
+                                {canEdit ? (
+                                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                    <span style={{ fontSize: 14, fontWeight: 700, color: "#64748b" }}>$</span>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      value={draft}
+                                      disabled={saving}
+                                      onChange={(e) => handleSellingDraftChange(key, e.target.value)}
+                                      onKeyDown={(e) => { if (e.key === "Enter" && dirty) void handleSaveSelling(p); }}
+                                      style={{
+                                        width: 78, padding: "4px 8px", fontSize: 16, fontWeight: 800,
+                                        color: "#0f172a", border: `1px solid ${dirty ? "#16a34a" : "#cbd5e1"}`,
+                                        borderRadius: 6, outline: "none",
+                                      }}
+                                    />
+                                    {dirty && (
+                                      <button
+                                        onClick={() => void handleSaveSelling(p)}
+                                        disabled={saving || !draftValid}
+                                        title="Save selling price"
+                                        style={{
+                                          width: 28, height: 28, borderRadius: 6,
+                                          background: "#16a34a", color: "#fff", border: "none",
+                                          cursor: saving ? "wait" : "pointer",
+                                          display: "inline-flex", alignItems: "center", justifyContent: "center",
+                                        }}
+                                      >{saving ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Check size={13} />}</button>
+                                    )}
+                                    {!dirty && undoTo !== undefined && Math.abs(undoTo - p.currentPrice) > 0.005 && (
+                                      <button
+                                        onClick={() => void handleRevertSelling(p)}
+                                        disabled={saving}
+                                        title={`Revert to $${undoTo.toFixed(2)}`}
+                                        style={{
+                                          padding: "4px 8px", borderRadius: 6,
+                                          background: "#fff", color: "#64748b",
+                                          border: "1px solid #e2e8f0",
+                                          fontSize: 11, fontWeight: 600, cursor: "pointer",
+                                          display: "inline-flex", alignItems: "center", gap: 4,
+                                        }}
+                                      ><RotateCcw size={11} /> ${undoTo.toFixed(2)}</button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div style={{ fontSize: 18, fontWeight: 800, color: "#0f172a" }}>
+                                    ${p.currentPrice.toFixed(2)}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Suggested */}

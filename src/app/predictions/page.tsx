@@ -841,8 +841,31 @@ export default function PredictionsPage() {
               const selected = smartActionMachine && machineOrder.includes(smartActionMachine)
                 ? smartActionMachine
                 : machineOrder[0];
-              const items = grouped.get(selected) || [];
+              const rawItems = grouped.get(selected) || [];
               const template = machineTemplates.find(t => t.machine === selected) || null;
+              // Build the set of products currently in THIS machine from its
+              // Full Template (the planogram). Status "Keep" / "Watch" /
+              // "Remove" all indicate "in machine"; "Add" means "should be
+              // added, not currently there" so we exclude it from the
+              // "in-machine" set. Names normalized lowercase for tolerance.
+              const productsInMachine = new Set<string>();
+              if (template) {
+                for (const cat of template.categories) {
+                  for (const it of cat.items) {
+                    if (it.status !== "Add") productsInMachine.add(it.product.toLowerCase().trim());
+                  }
+                }
+              }
+              // Filter rule: REMOVE / DECREASE / INCREASE only make sense if
+              // the product is already in the machine. The prediction model
+              // sometimes generates fleet-wide "remove this slow seller" recs
+              // for products that aren't even stocked at this machine — those
+              // are noise. ADD actions stay untouched.
+              const items = rawItems.filter((r) => {
+                if (r.action === "Add") return true;
+                if (!template) return true; // no template loaded yet → trust the model
+                return productsInMachine.has(r.product.toLowerCase().trim());
+              });
 
               return (
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -856,7 +879,7 @@ export default function PredictionsPage() {
                       const tpl = machineTemplates.find(t => t.machine === m);
                       const slotInfo = tpl ? `${tpl.filledSlots}/${tpl.totalSlots} slots` : "";
                       const actionInfo = actionCount > 0 ? `${actionCount} action${actionCount === 1 ? "" : "s"}` : "";
-                      const sub = [actionInfo, slotInfo].filter(Boolean).join(" Â· ") || "view plan";
+                      const sub = [actionInfo, slotInfo].filter(Boolean).join(" · ") || "view plan";
                       return (
                         <MachineChip
                           key={m}
@@ -951,7 +974,7 @@ export default function PredictionsPage() {
                         <span style={{ fontSize: 13, fontWeight: 700, color: "#3730a3" }}>Full Template</span>
                         {template && (
                           <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", background: "#fff", padding: "2px 8px", borderRadius: 6 }}>
-                            {template.filledSlots}/{template.totalSlots} slots Â· {template.tier} tier
+                            {template.filledSlots}/{template.totalSlots} slots · {template.tier} tier
                           </span>
                         )}
                       </div>

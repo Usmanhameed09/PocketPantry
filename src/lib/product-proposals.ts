@@ -6,6 +6,7 @@
 import "server-only";
 import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
+import { dateNDaysAgoInOperatorTz } from "@/lib/operator-timezone";
 
 async function callOpenAI(systemPrompt: string, userPayload: unknown): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -268,40 +269,62 @@ export async function findUnderperformers(): Promise<Underperformer[]> {
     .eq("status", "Active");
   if (!products?.length) return [];
 
-  // Source of truth: machine_inventory.daily_sales_rate (Nayax 30-day average).
-  // Sum across all machines to get fleet-wide velocity per product.
-  const { data: invRows } = await supabase
-    .from("machine_inventory")
-    .select("product_id, daily_sales_rate");
+  // Velocity source: daily_sales (real per-day transaction log), NOT
+  // machine_inventory.daily_sales_rate. Same fix as projection-engine —
+  // the Nayax-derived rate field over-counts when summed across machines
+  // and gives a fake "1/day forever" reading for one-time sales. With this
+  // change underperformer counts match Reports for the same 30d window.
+  const since = dateNDaysAgoInOperatorTz(30);
+  const dailyRows: Array<{ product_id: string; units_sold: number }> = [];
+  const PAGE = 1000;
+  for (let from = 0; from < 100000; from += PAGE) {
+    const { data, error } = await supabase
+      .from("daily_sales")
+      .select("product_id, units_sold")
+      .gte("sale_date", since)
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    if (!data || data.length === 0) break;
+    dailyRows.push(...(data as Array<{ product_id: string; units_sold: number }>));
+    if (data.length < PAGE) break;
+  }
 
-  const dailyByProduct = new Map<string, number>();
-  for (const m of invRows || []) {
-    const pid = m.product_id as string;
-    dailyByProduct.set(pid, (dailyByProduct.get(pid) || 0) + ((m.daily_sales_rate as number) || 0));
+  const unitsByProduct = new Map<string, number>();
+  for (const r of dailyRows) {
+    unitsByProduct.set(r.product_id, (unitsByProduct.get(r.product_id) || 0) + (r.units_sold || 0));
   }
 
   const out: Underperformer[] = [];
   for (const p of products) {
-    const daily = dailyByProduct.get(p.id as string) || 0;
+    const units30d = unitsByProduct.get(p.id as string) || 0;
+    const daily = units30d / 30;
     const weekly = daily * 7;
-    const monthly = daily * 30;
     const cost = (p.unit_cost as number) || 0;
     const price = (p.default_vend_price as number) || 0;
     const margin = price > 0 ? ((price - cost) / price) * 100 : null;
 
-    // Skip products that aren't in any machine (no data ≠ underperforming)
-    if (daily === 0) continue;
+    // Skip products with no sales in the window (no data ≠ underperforming)
+    if (units30d === 0) continue;
 
     const reasons: string[] = [];
-    if (weekly < WEEKLY_VOLUME_FLOOR) reasons.push(`only ${weekly.toFixed(1)} units/week (~${monthly.toFixed(0)}/month)`);
-    if (margin !== null && margin < MARGIN_FLOOR_PCT) reasons.push(`${margin.toFixed(0)}% margin`);
+    if (weekly < WEEKLY_VOLUME_FLOOR) reasons.push(`only ${weekly.toFixed(1)} units/week (~${units30d}/month)`);
+
+    // Negative margin = bad cost data (case price stored as unit cost, etc.),
+    // NOT a real money-losing product. A bottle of Monster doesn't actually
+    // cost 5x its sell price. Flag for low margin only if margin is positive
+    // but below floor — that's a real "could earn more per unit" signal.
+    // Reports already surfaces the bad-cost-data list via dataQuality.
+    if (margin !== null && margin >= 0 && margin < MARGIN_FLOOR_PCT) {
+      reasons.push(`${margin.toFixed(0)}% margin`);
+    }
+
     if (reasons.length === 0) continue;
 
     out.push({
       productId: p.id as string,
       productName: p.name as string,
       category: p.category as string,
-      unitsLast4Weeks: Math.round(monthly),
+      unitsLast4Weeks: units30d,
       averageWeekly: Math.round(weekly * 10) / 10,
       margin: margin !== null ? Math.round(margin) : null,
       reason: reasons.join("; "),

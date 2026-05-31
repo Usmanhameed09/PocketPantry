@@ -101,12 +101,57 @@ export default function MachinesPage() {
   // Low-stock machine IDs from inventory data
   const [lowStockMachineIds, setLowStockMachineIds] = useState<Set<string>>(new Set());
 
+  // Cumulative totals from daily_sales. Per-machine cards still read from
+  // the scraper (live rolling-window numbers from Nayax), but the aggregate
+  // tile uses this so it MONOTONICALLY GROWS — Nayax's lastSales is rolling,
+  // so summing across machines plateaus as old transactions drop off the
+  // back. Operators want to see the total accumulate with every new sale.
+  const [cumulativeTotals, setCumulativeTotals] = useState<{
+    revenue: number; orders: number; units: number;
+    fromDate: string; toDate: string; generatedAt: string;
+  } | null>(null);
+  // Background "fresh data" indicator — true while we're forcing a sync
+  const [syncing, setSyncing] = useState(false);
+
+  const fetchTotals = useCallback(async () => {
+    try {
+      const r = await fetch("/api/machines/totals?days=all").then((x) => x.json());
+      if (r.ok) {
+        setCumulativeTotals({
+          revenue: r.total.revenue,
+          orders: r.total.orders,
+          units: r.total.units,
+          fromDate: r.fromDate,
+          toDate: r.toDate,
+          generatedAt: r.generatedAt,
+        });
+      }
+    } catch {}
+  }, []);
+
+  // Trigger a Nayax-to-daily_sales sync, then refresh totals. Fire-and-
+  // forget for the sync request itself (it takes 20-60s) but update the
+  // UI when the totals refresh comes back.
+  const forceSync = useCallback(async () => {
+    setSyncing(true);
+    try {
+      await fetch("/api/inventory/sync", { method: "POST" });
+      await fetchTotals();
+    } catch {} finally {
+      setSyncing(false);
+    }
+  }, [fetchTotals]);
+
   const fetchMachines = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     else setLoading(true);
     try {
-      const res = await fetch("/api/machines");
-      const data = await res.json();
+      // Run live + cumulative in parallel — both come from independent endpoints
+      const [machinesRes] = await Promise.all([
+        fetch("/api/machines"),
+        fetchTotals(),
+      ]);
+      const data = await machinesRes.json();
       if (data.success && data.machines) {
         setMachines(data.machines);
       }
@@ -116,7 +161,14 @@ export default function MachinesPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+    // If the user is showing the page and the last sync was > 15 min ago,
+    // auto-trigger a fresh sync in the background so the cumulative tile
+    // updates without the operator having to click Refresh. Skip if already
+    // syncing or this is itself a refresh click (which will force-sync below).
+    if (showRefresh) {
+      void forceSync();
+    }
+  }, [fetchTotals, forceSync]);
 
   const fetchLowStock = useCallback(async () => {
     try {
@@ -159,7 +211,12 @@ export default function MachinesPage() {
     fetchMachines();
     fetchStatus();
     fetchLowStock();
-  }, [fetchMachines, fetchStatus, fetchLowStock]);
+    // After the initial render, fire a background sync so the cumulative
+    // tile reflects new sales since the last cron run. Page renders fast,
+    // sync runs ~20-60s in the background, tile updates when it finishes.
+    const t = setTimeout(() => { void forceSync(); }, 1500);
+    return () => clearTimeout(t);
+  }, [fetchMachines, fetchStatus, fetchLowStock, forceSync]);
 
   const viewMachineOrders = useCallback(async (machine: Machine) => {
     setSelectedMachine(machine);
@@ -200,12 +257,35 @@ export default function MachinesPage() {
     offline: machines.filter((m) => m.status === "Offline").length,
   };
 
-  // Aggregate stats — sum across the per-machine numbers the scraper returns
-  // so the tile updates as new live sales come in from Nayax.
-  const totalRevenue = machines.reduce((s, m) => s + m.totalRevenue, 0);
+  // Aggregate stats: prefer cumulative totals from daily_sales so the tile
+  // GROWS monotonically with every new sale. Falls back to the scraper sum
+  // while cumulativeTotals is still loading on first render.
+  // (The scraper sum is a rolling-window number — Nayax drops old sales as
+  // new ones arrive, so it plateaus and operators reported it "stuck".)
+  const totalRevenue = cumulativeTotals
+    ? cumulativeTotals.revenue
+    : machines.reduce((s, m) => s + m.totalRevenue, 0);
+  const totalOrders = cumulativeTotals
+    ? cumulativeTotals.orders
+    : machines.reduce((s, m) => s + m.paidOrders, 0);
+  const totalItems = cumulativeTotals
+    ? cumulativeTotals.units
+    : machines.reduce((s, m) => s + m.totalItemsSold, 0);
+  // Weekly stays from the scraper (rolling 7d — acceptable as a "this week"
+  // subtitle, doesn't try to be cumulative).
   const weeklyRevenue = machines.reduce((s, m) => s + m.weeklyRevenue, 0);
-  const totalOrders = machines.reduce((s, m) => s + m.paidOrders, 0);
-  const totalItems = machines.reduce((s, m) => s + m.totalItemsSold, 0);
+
+  // "Synced X min ago" hint so operator knows freshness of the tile.
+  const syncedAgo = cumulativeTotals
+    ? (() => {
+        const ms = Date.now() - new Date(cumulativeTotals.generatedAt).getTime();
+        const mins = Math.max(0, Math.floor(ms / 60000));
+        if (syncing) return "syncing…";
+        if (mins < 1) return "just now";
+        if (mins < 60) return `${mins} min ago`;
+        return `${Math.floor(mins / 60)} h ago`;
+      })()
+    : null;
   const paidMachineOrders = machineOrders.filter((order) => (order.status || "").toLowerCase() === "paid");
   const modalRevenue = paidMachineOrders.reduce((sum, order) => sum + Number(order.amount || 0), 0);
   const modalItemsSold = machineOrders.reduce((sum, order) => sum + Number(order.totalItems || 0), 0);
@@ -245,7 +325,12 @@ export default function MachinesPage() {
             gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
             gap: 14, marginBottom: 22,
           }}>
-            <StatCard icon={<DollarSign size={16} color="#059669" />} label="Total Revenue" value={`$${totalRevenue.toFixed(2)}`} sub={`$${weeklyRevenue.toFixed(2)} this week`} />
+            <StatCard
+              icon={<DollarSign size={16} color="#059669" />}
+              label="Total Revenue"
+              value={`$${totalRevenue.toFixed(2)}`}
+              sub={syncedAgo ? `synced ${syncedAgo} · $${weeklyRevenue.toFixed(2)} this week` : `$${weeklyRevenue.toFixed(2)} this week`}
+            />
             <StatCard icon={<ShoppingCart size={16} color="#3b82f6" />} label="Paid Orders" value={String(totalOrders)} sub={`${totalItems} items sold`} />
             <StatCard icon={<Package size={16} color="#8b5cf6" />} label="Machines" value={String(counts.total)} sub={`${counts.healthy} healthy`} />
             <StatCard icon={<CheckCircle2 size={16} color="#f59e0b" />} label="Avg / Machine" value={counts.total ? `$${(totalRevenue / counts.total).toFixed(2)}` : "--"} sub={counts.total ? `${Math.round(totalOrders / counts.total)} orders avg` : ""} />

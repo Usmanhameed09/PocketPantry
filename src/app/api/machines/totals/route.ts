@@ -37,16 +37,27 @@ export async function GET(req: Request) {
 
     const supabase = createServerClient();
 
-    // 1. Pull daily_sales rows in the window
-    const { data: salesRows, error: salesErr } = await supabase
-      .from("daily_sales")
-      .select("machine_id, units_sold, revenue")
-      .gte("sale_date", fromDate)
-      .lte("sale_date", toDate)
-      .range(0, 49999);
-
-    if (salesErr) {
-      return NextResponse.json({ ok: false, error: salesErr.message }, { status: 500 });
+    // 1. Pull daily_sales rows in the window.
+    // Explicit pagination — .range(0, 49999) alone wasn't enough because
+    // PostgREST's max-rows config caps responses at 1000 rows server-side.
+    // With ~1450 rows in the window, ~450 got dropped, totals reported ~30%
+    // under truth and operators kept saying "Machines total is stuck".
+    // Same pattern Reports + projection-engine + assistant-context use.
+    const PAGE = 1000;
+    const salesRows: Array<{ machine_id: string; units_sold: number; revenue: number }> = [];
+    for (let from = 0; from < 100000; from += PAGE) {
+      const { data, error } = await supabase
+        .from("daily_sales")
+        .select("machine_id, units_sold, revenue")
+        .gte("sale_date", fromDate)
+        .lte("sale_date", toDate)
+        .range(from, from + PAGE - 1);
+      if (error) {
+        return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      }
+      if (!data || data.length === 0) break;
+      salesRows.push(...(data as Array<{ machine_id: string; units_sold: number; revenue: number }>));
+      if (data.length < PAGE) break;
     }
 
     // 2. Aggregate per machine_id + totals

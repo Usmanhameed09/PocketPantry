@@ -217,7 +217,64 @@ export async function POST() {
       errors.push(`Ledger write: ${err.message}`);
     }
 
-    // Bulk-upsert daily_sales rows for weekly trends
+    // ─── HAHA / Chinese machines ─────────────────────────────────────
+    // Pull historical sales from the Chinese platform too — that data path
+    // was never wired into the sync, so HAHA machines never appeared in
+    // daily_sales (and therefore not on Reports / Machines totals / Today).
+    // We fetch the last 30 days each sync; the upsert dedupes by
+    // (product_id, machine_id, sale_date) so partial overlap with prior
+    // syncs is harmless.
+    let chineseMachinesSynced = 0;
+    try {
+      const fromIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const toIso = new Date().toISOString().slice(0, 10);
+      const chineseResp = await fetch(
+        `${SCRAPER_API_URL}/api/machines/chinese-historical-sales?from_date=${fromIso}&to_date=${toIso}`,
+        { headers: { "x-api-key": process.env.SCRAPER_BACKEND_KEY || process.env.API_KEY || "" } },
+      );
+      if (chineseResp.ok) {
+        const chineseData = await chineseResp.json() as {
+          machines?: Array<{
+            machineId: string; machineName: string; nayaxDeviceId: string;
+            products?: Array<{
+              name: string;
+              daily_breakdown?: Record<string, number>;
+              daily_revenue?: Record<string, number>;
+            }>;
+          }>;
+        };
+        for (const cm of chineseData.machines || []) {
+          try {
+            const machineId = await ensureMachine(cm.nayaxDeviceId, cm.machineName);
+            chineseMachinesSynced++;
+            for (const p of cm.products || []) {
+              try {
+                const productId = await ensureProduct(p.name);
+                if (p.daily_breakdown) {
+                  for (const [date, units] of Object.entries(p.daily_breakdown)) {
+                    const rev = (p.daily_revenue && p.daily_revenue[date]) || 0;
+                    dailySales.push({ productId, machineId, date, units, revenue: rev });
+                  }
+                }
+              } catch (err: any) {
+                errors.push(`Chinese product ${p.name}: ${err.message}`);
+              }
+            }
+          } catch (err: any) {
+            errors.push(`Chinese machine ${cm.machineName}: ${err.message}`);
+          }
+        }
+      } else {
+        // Don't fail the whole sync if the Chinese endpoint is unavailable —
+        // older scraper deploys won't have it yet.
+        const t = await chineseResp.text();
+        errors.push(`Chinese sales (${chineseResp.status}): ${t.slice(0, 200)}`);
+      }
+    } catch (err: any) {
+      errors.push(`Chinese fetch: ${err.message}`);
+    }
+
+    // Bulk-upsert daily_sales rows for weekly trends (now includes HAHA rows)
     let dailySalesWritten = 0;
     try {
       dailySalesWritten = await bulkUpsertDailySales(dailySales);
@@ -228,6 +285,7 @@ export async function POST() {
     return NextResponse.json({
       success: true,
       machinesSynced,
+      chineseMachinesSynced,
       productsProcessed: productsCreated,
       inventoryRows,
       ledgerWrites,

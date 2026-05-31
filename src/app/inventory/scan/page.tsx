@@ -59,6 +59,12 @@ export default function ScanPage() {
   const videoTrackRef = useRef<MediaStreamTrack | null>(null);
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
+  // Zoom support — populated from track.getCapabilities() if the camera
+  // reports a zoom range. The slider only renders when supported.
+  const [zoomCaps, setZoomCaps] = useState<{ min: number; max: number; step: number } | null>(null);
+  const [zoomValue, setZoomValue] = useState(1);
+  // Focus-pulse animation after tap-to-focus so the operator gets feedback
+  const [focusPulse, setFocusPulse] = useState<{ x: number; y: number; key: number } | null>(null);
 
   // Check support on mount
   useEffect(() => {
@@ -77,12 +83,39 @@ export default function ScanPage() {
       } catch {}
       scannerRef.current = null;
     }
-    // Reset torch state — track will be torn down with the stream
+    // Reset torch + zoom state — track will be torn down with the stream
     videoTrackRef.current = null;
     setTorchSupported(false);
     setTorchOn(false);
+    setZoomCaps(null);
+    setZoomValue(1);
+    setFocusPulse(null);
     setScanning(false);
   }, []);
+
+  // Tap-to-focus — operator taps the live video where the barcode is and
+  // the camera refocuses there. Works on Chrome Android via the
+  // pointsOfInterest advanced constraint; ignored silently on iOS Safari.
+  async function tapToFocus(e: React.MouseEvent<HTMLDivElement>) {
+    const track = videoTrackRef.current as (MediaStreamTrack & {
+      applyConstraints?: (c: MediaTrackConstraints) => Promise<void>;
+    }) | null;
+    if (!track || !track.applyConstraints) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    try {
+      await track.applyConstraints({
+        advanced: [
+          { focusMode: "single-shot" },
+          { pointsOfInterest: [{ x, y }] },
+        ] as unknown as MediaTrackConstraintSet[],
+      });
+      // Pulse a focus ring briefly so the operator sees feedback
+      setFocusPulse({ x: e.clientX - rect.left, y: e.clientY - rect.top, key: Date.now() });
+      setTimeout(() => setFocusPulse(null), 700);
+    } catch { /* unsupported, ignore */ }
+  }
 
   // Toggle torch on/off using the MediaStreamTrack advanced constraints API.
   // Some browsers throw if torch is busy — swallow gracefully.
@@ -121,24 +154,43 @@ export default function ScanPage() {
         clear: () => scanner.clear(),
       };
 
-      // Compute a large qrbox sized to ~80% of the camera viewport — barcodes
-      // on cases are wide so make the scan box wide too.
+      // Scan box ~92% of viewport width — gives the decoder more pixels to
+      // search per frame. Operators with small/curved cases had trouble
+      // hitting the previous 85%-wide box. Phones cap the actual decode
+      // region anyway, so bigger here just means fewer "barcode missed
+      // the box" failures.
       const viewportWidth = containerRef.current?.clientWidth || 480;
-      const boxW = Math.min(360, Math.floor(viewportWidth * 0.85));
-      const boxH = Math.floor(boxW * 0.55);
+      const boxW = Math.min(440, Math.floor(viewportWidth * 0.92));
+      const boxH = Math.floor(boxW * 0.6);
 
       await scanner.start(
         { facingMode: "environment" },
         {
-          fps: 15,
+          // 10fps instead of 15 — gives the decoder ~33% more CPU per frame,
+          // which materially improves the chance of catching a slightly-
+          // blurry or angled barcode. The eye doesn't notice 10 vs 15 fps
+          // on a viewfinder.
+          fps: 10,
           qrbox: { width: boxW, height: boxH },
-          // Don't pin aspectRatio — let the camera deliver its native ratio,
-          // otherwise iOS Safari shows black bars on one side.
-          // Request high resolution so even small barcodes are readable
+          // Request 4K (3840x2160) ideally — browser drops to max available
+          // (most phones top out at 1080p or 4K on rear cam). The min
+          // floors prevent it falling all the way to QVGA on weak devices.
+          // continuous focus + macro mode pulled in via advanced constraints
+          // below — getUserMedia accepts these even though TS doesn't type
+          // them yet.
           videoConstraints: {
             facingMode: { ideal: "environment" },
-            width: { ideal: 1920, min: 640 },
-            height: { ideal: 1080, min: 480 },
+            width: { ideal: 3840, min: 1280 },
+            height: { ideal: 2160, min: 720 },
+            // Higher frame rate from the sensor itself, NOT the decoder fps.
+            // More frames means more chances for a clean one to land.
+            frameRate: { ideal: 30 },
+            advanced: [
+              { focusMode: "continuous" },
+              { focusDistance: 0.1 }, // ~10cm — close-up bias for barcodes
+              { whiteBalanceMode: "continuous" },
+              { exposureMode: "continuous" },
+            ] as unknown as MediaTrackConstraintSet[],
           },
         } as unknown as undefined,
         (decodedText: string) => handleScan(decodedText),
@@ -164,6 +216,15 @@ export default function ScanPage() {
           const caps = (track as (MediaStreamTrack & { getCapabilities?: () => Record<string, unknown> }) | null)?.getCapabilities?.();
           if (caps && "torch" in caps) {
             setTorchSupported(true);
+          }
+          // Zoom range — when present we render a slider. min/max are
+          // device-specific (e.g., 1 → 5 on a phone with telephoto).
+          // getCapabilities() returns a dictionary that the standard DOM
+          // lib doesn't include zoom in, so we cast through unknown.
+          const zoom = (caps as unknown as Record<string, { min?: number; max?: number; step?: number } | undefined>)?.zoom;
+          if (zoom && typeof zoom.min === "number" && typeof zoom.max === "number" && zoom.max > zoom.min) {
+            setZoomCaps({ min: zoom.min, max: zoom.max, step: zoom.step || 0.1 });
+            setZoomValue(zoom.min);
           }
         } catch { /* unsupported browser */ }
       }, 600);
@@ -414,13 +475,39 @@ export default function ScanPage() {
             )}
           </div>
 
-          <div ref={containerRef} style={{
-            position: "relative", width: "100%", maxWidth: 480, margin: "0 auto",
-            borderRadius: 12, overflow: "hidden", background: "#0f172a",
-            minHeight: scanning ? 280 : 120,
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
+          <div
+            ref={containerRef}
+            onClick={scanning ? tapToFocus : undefined}
+            style={{
+              position: "relative", width: "100%", maxWidth: 480, margin: "0 auto",
+              borderRadius: 12, overflow: "hidden", background: "#0f172a",
+              minHeight: scanning ? 280 : 120,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: scanning ? "crosshair" : "default",
+            }}
+            title={scanning ? "Tap the live image to refocus there" : ""}
+          >
             <div id="pp-scanner" style={{ width: "100%", lineHeight: 0 }} />
+            {/* Focus ring animation after a tap — gives the operator instant
+                feedback that the camera received the focus request even
+                though the actual refocus takes 100-300ms. */}
+            {focusPulse && (
+              <div key={focusPulse.key} style={{
+                position: "absolute",
+                left: focusPulse.x - 30, top: focusPulse.y - 30,
+                width: 60, height: 60, borderRadius: "50%",
+                border: "2px solid #fde047", pointerEvents: "none",
+                animation: "ppFocusPulse 700ms ease-out forwards",
+                zIndex: 6,
+              }} />
+            )}
+            <style>{`
+              @keyframes ppFocusPulse {
+                0%   { transform: scale(1.3); opacity: 0; }
+                30%  { transform: scale(1);   opacity: 1; }
+                100% { transform: scale(0.8); opacity: 0; }
+              }
+            `}</style>
             <style>{`
               /* Make the html5-qrcode video fill the container on iOS/mobile */
               #pp-scanner video {
@@ -475,6 +562,46 @@ export default function ScanPage() {
               >
                 {torchOn ? <Flashlight size={22} /> : <FlashlightOff size={22} />}
               </button>
+            )}
+
+            {/* Zoom slider — only renders when the camera reports a zoom
+                range capability. Bottom-left so it doesn't collide with the
+                torch button. Lets the operator get closer to small / curved
+                barcodes without physically moving the phone. */}
+            {scanning && zoomCaps && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  position: "absolute", bottom: 14, left: 14,
+                  background: "rgba(15,23,42,0.75)", color: "#fff",
+                  borderRadius: 8, padding: "8px 12px",
+                  display: "flex", alignItems: "center", gap: 8, zIndex: 5,
+                  fontSize: 11, fontWeight: 600,
+                  border: "1px solid rgba(255,255,255,0.25)",
+                }}
+              >
+                <span>{zoomValue.toFixed(1)}×</span>
+                <input
+                  type="range"
+                  min={zoomCaps.min}
+                  max={zoomCaps.max}
+                  step={zoomCaps.step}
+                  value={zoomValue}
+                  onChange={async (e) => {
+                    const v = Number(e.target.value);
+                    setZoomValue(v);
+                    const track = videoTrackRef.current as (MediaStreamTrack & {
+                      applyConstraints?: (c: MediaTrackConstraints) => Promise<void>;
+                    }) | null;
+                    if (track?.applyConstraints) {
+                      try {
+                        await track.applyConstraints({ advanced: [{ zoom: v }] as unknown as MediaTrackConstraintSet[] });
+                      } catch { /* ignore */ }
+                    }
+                  }}
+                  style={{ width: 110 }}
+                />
+              </div>
             )}
           </div>
 

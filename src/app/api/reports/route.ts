@@ -52,19 +52,27 @@ export async function GET(req: Request) {
     const toStr = isoTo || todayInOperatorTz();
 
     // ─── 1. Fetch daily_sales rows in range ───────────────────────────
-    // .range(0, 49999) overrides Supabase's default 1000-row cap; otherwise
-    // any window past ~30 days silently truncated and the totals were wrong.
-    let dailyQuery = supabase
-      .from("daily_sales")
-      .select("product_id, machine_id, sale_date, units_sold, revenue")
-      .gte("sale_date", fromStr)
-      .lte("sale_date", toStr)
-      .range(0, 49999);
-    if (machineFilter) dailyQuery = dailyQuery.eq("machine_id", machineFilter);
-
-    const { data: dailySales, error: dsErr } = await dailyQuery;
-    if (dsErr) throw dsErr;
-    const rows = (dailySales || []) as DailySaleRow[];
+    // Explicit pagination — .range(0, 49999) alone wasn't enough because
+    // PostgREST defaults max-rows to 1000 server-side. Without paging,
+    // smaller machines whose rows happened to land past the 1000-row cutoff
+    // (in PK ordering) got partially summed — eg Hartman 16300 showed
+    // \$10.11 when its actual 30d revenue was \$119.80.
+    const PAGE = 1000;
+    const rows: DailySaleRow[] = [];
+    for (let from = 0; from < 100000; from += PAGE) {
+      let q = supabase
+        .from("daily_sales")
+        .select("product_id, machine_id, sale_date, units_sold, revenue")
+        .gte("sale_date", fromStr)
+        .lte("sale_date", toStr)
+        .range(from, from + PAGE - 1);
+      if (machineFilter) q = q.eq("machine_id", machineFilter);
+      const { data, error } = await q;
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      rows.push(...(data as DailySaleRow[]));
+      if (data.length < PAGE) break;
+    }
 
     // ─── 2. Lookup tables: products + machines ────────────────────────
     const productIds = [...new Set(rows.map((r) => r.product_id))];

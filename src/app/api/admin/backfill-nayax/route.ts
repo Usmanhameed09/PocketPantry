@@ -70,26 +70,44 @@ export async function POST(req: Request) {
     const fromIso = from.toISOString().slice(0, 10);
     const toIso = to.toISOString().slice(0, 10);
 
-    // 1. Pull historical sales from the scraper-api
-    const scraperRes = await fetch(
-      `${SCRAPER_API_URL}/api/machines/historical-sales?from_date=${fromIso}&to_date=${toIso}`,
-      {
-        headers: {
-          "x-api-key": process.env.SCRAPER_BACKEND_KEY || process.env.API_KEY || "",
-        },
-        cache: "no-store",
-      },
-    );
+    // 1. Pull historical sales from BOTH Nayax + HAHA endpoints in parallel.
+    // The "nayax" name on this route is now misleading — it backfills the
+    // whole fleet. Renaming the path would break the UI button so we just
+    // expand the behavior here. Each chunk gets ~30-90s of scraper work
+    // per platform; in parallel they fit inside one Vercel function call.
+    const apiKey = process.env.SCRAPER_BACKEND_KEY || process.env.API_KEY || "";
+    const [nayaxRes, chineseRes] = await Promise.all([
+      fetch(`${SCRAPER_API_URL}/api/machines/historical-sales?from_date=${fromIso}&to_date=${toIso}`,
+        { headers: { "x-api-key": apiKey }, cache: "no-store" }),
+      fetch(`${SCRAPER_API_URL}/api/machines/chinese-historical-sales?from_date=${fromIso}&to_date=${toIso}`,
+        { headers: { "x-api-key": apiKey }, cache: "no-store" })
+        // Allow Chinese to fail without killing the whole backfill (older
+        // scraper deploys won't have this endpoint).
+        .catch((e) => new Response(JSON.stringify({ machines: [], _err: String(e) }), { status: 599 })),
+    ]);
 
-    if (!scraperRes.ok) {
-      const text = await scraperRes.text();
+    if (!nayaxRes.ok) {
+      const text = await nayaxRes.text();
       return NextResponse.json(
-        { ok: false, error: `Scraper API ${scraperRes.status}: ${text.slice(0, 300)}` },
+        { ok: false, error: `Scraper API ${nayaxRes.status}: ${text.slice(0, 300)}` },
         { status: 502 },
       );
     }
 
-    const data = (await scraperRes.json()) as HistoricalSalesResponse;
+    const nayaxData = (await nayaxRes.json()) as HistoricalSalesResponse;
+    let chineseData: HistoricalSalesResponse = { success: true, fromDate: fromIso, toDate: toIso, machines: [] };
+    if (chineseRes.ok) {
+      chineseData = (await chineseRes.json()) as HistoricalSalesResponse;
+    }
+
+    // Combine machine lists — same shape from both endpoints, downstream
+    // processing is identical (ensureMachine + ensureProduct + upsert rows).
+    const data: HistoricalSalesResponse = {
+      success: true,
+      fromDate: nayaxData.fromDate,
+      toDate: nayaxData.toDate,
+      machines: [...nayaxData.machines, ...chineseData.machines],
+    };
 
     // 2. For every machine + product, ensure rows exist locally and build
     //    the list of daily_sales tuples to upsert.

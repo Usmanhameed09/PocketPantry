@@ -430,16 +430,21 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       // 30d total = raw units summed across all products on this machine
       // over the same 30-day window the Reports page uses.
       machineMonthlyUnits: total30d,
-      // No slice cap — the AI was hallucinating numbers when asked about
-      // products outside the cap. Snapshot is a few KB larger but the AI
-      // can now find every actual product on the machine.
-      products: items.map((x) => ({
-        name: x.name, category: x.category,
-        // machineDailyUnits = average daily rate (units30d / 30)
+      // Cap to top 20 by units to stay under OpenAI's 30k TPM rate limit.
+      // The system prompt explicitly tells the AI to admit it doesn't see
+      // a product if it's outside this list (rather than invent numbers).
+      // productsTruncated tells the AI when there are more products
+      // beyond the top 20 so it knows when to defer to the Inventory page.
+      products: items.slice(0, 20).map((x) => ({
+        name: x.name,
+        category: x.category,
         machineDailyUnits: Math.round(x.rate * 100) / 100,
-        // machineMonthlyUnits = ACTUAL units sold over last 30 days (matches Reports)
         machineMonthlyUnits: x.units30d,
       })),
+      // Tells the AI N more products exist beyond the visible top 20. The
+      // system prompt instructs it to defer to the Inventory page rather
+      // than invent numbers for products outside this list.
+      productsTruncated: items.length > 20 ? items.length - 20 : 0,
       categoryMix,
     };
   });
@@ -572,7 +577,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
   const totalProjectedCogs30d = projectionsWithDemand.reduce((s, p) => s + p.projectedCogs30d, 0);
   const predictionsTopByUnits = [...projectionsWithDemand]
     .sort((a, b) => b.projectedUnits30d - a.projectedUnits30d)
-    .slice(0, 20)
+    .slice(0, 12) // Trimmed for OpenAI 30k TPM headroom
     .map((p) => ({
       product: p.productName,
       category: p.category,
@@ -585,7 +590,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
   const predictionsTopByCogs = [...projectionsWithDemand]
     .filter((p) => p.cost > 0)
     .sort((a, b) => b.projectedCogs30d - a.projectedCogs30d)
-    .slice(0, 15)
+    .slice(0, 10) // Trimmed for OpenAI 30k TPM headroom
     .map((p) => ({
       product: p.productName,
       category: p.category,
@@ -644,7 +649,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       const lb = b.last_touch_at ? new Date(b.last_touch_at).getTime() : 0;
       return lb - la;
     })
-    .slice(0, 30) // Reduced from 60 to stay under OpenAI 30k TPM rate limit
+    .slice(0, 15) // Trimmed to stay under OpenAI 30k TPM (full list on Lead Dashboard)
     .map((l) => ({
       id: l.id,
       business: l.business,

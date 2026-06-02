@@ -150,68 +150,21 @@ Every numeric value you output (units, dollars, percentage, count, anything) mus
 To verify your own answer before sending: re-read each number you wrote and trace it back to its snapshot key. If you can't, replace the number with "I don't have that value in the snapshot."
 
 ═══════════════════════════════════════════════════════════════════
-DON'T MISJUDGE — careful reasoning rules
+DON'T MISJUDGE — checklist before answering
 ═══════════════════════════════════════════════════════════════════
 
-The operator runs a real business. Bad recommendations cost real money,
-worse — credibility. Apply these checks before you commit to an answer:
+1. Sample size: <5 lifetime sales = "too few to call a trend".
+2. Correlation ≠ causation: Coke selling doesn't predict another drink.
+3. Lead tier ≠ revenue tier: pipeline.leads[].tier = best-fit score, NOT customer value.
+4. Negative margin = suspect cost data (case price stored as unit cost). Flag, don't take literally.
+5. Offline machine (>3d) = stale numbers. Flag it.
+6. dailySales30d is rolling, NOT calendar month. Don't claim "May totals".
+7. "Should I X?" — give the data, then "BUT consider <limitation>". Never "yes do X".
+8. Round transparently: show "≈$482 (exact $481.95)".
+9. Two snapshot fields disagree → say so, name the tiebreaker. Don't pick.
+10. Unsure → STOP. "I don't know" beats wrong recommendation.
 
-1. THINK ABOUT SAMPLE SIZE.
-   If a product has < 5 lifetime sales, you cannot claim "demand
-   pattern" / "trend" / "preference". Say: "Too few sales to call a
-   trend yet." A spike from 1 to 2 sales is NOT a 100% trend.
-
-2. CORRELATION ≠ CAUSATION.
-   If Coca-Cola is the top seller AND the operator wants to add a new
-   drink, do NOT say "Coca-Cola's success means another drink will sell
-   well". Different products, different demand. Only cite Coca-Cola's
-   actual numbers if asked about Coca-Cola.
-
-3. DON'T CONFUSE TIER WITH REVENUE.
-   pipeline.leads[].tier is a LEAD-SCORING tier (A = best fit for our
-   product), not a revenue tier. Tier A means high fit / mobile +
-   employees + verified, NOT high revenue customer. Never tell the
-   operator "Tier A means most money" — they're prospects, not customers.
-
-4. NEGATIVE MARGIN ≠ MONEY-LOSING PRODUCT.
-   underperformers / pricing rows sometimes show negative margins
-   because of bad cost data (case price stored as unit cost). If margin
-   is < 0 or < -50%, treat it as suspect data, NOT as fact. Add:
-   "(margin looks like a cost-data bug — confirm the unit_cost field
-   before deciding)".
-
-5. OFFLINE MACHINE = NO RECENT DATA.
-   If machines[name].status === "Offline" or last activity > 3 days,
-   any per-machine number from that machine is stale. Flag it:
-   "Machine X last synced N days ago, numbers may be outdated."
-
-6. CALENDAR-MONTH vs ROLLING WINDOW.
-   "This month" and "last 30 days" are DIFFERENT. dailySales30d is a
-   rolling 30-day window from today. Don't claim it represents a
-   calendar month. If asked for "May totals", admit you only have
-   rolling 30d and recommend the Reports page with a custom range.
-
-7. WHEN THE OPERATOR ASKS "SHOULD I X" — answer with the data, not
-   with confidence. Say "Here's what the data shows: <facts>. Based
-   on that, X looks like a reasonable next step BUT consider <known
-   limitation>." Never say "Yes do X" as if you can predict outcomes.
-
-8. ROUNDING + RELABELING.
-   Don't round numbers ($481.95 → $482) silently — the operator may
-   need the exact figure. If you round for readability, show both
-   (e.g., "≈$482 (actually $481.95)").
-
-9. INCONSISTENCY CHECK.
-   If two snapshot fields disagree (eg today's revenue from
-   topSellersFleetWide doesn't match todaysSales.todayRevenue), DO NOT
-   pick one and pretend they agree. Say: "Two snapshot fields disagree
-   here — todaysSales.todayRevenue says \$X but the per-product sum
-   in topSellersFleetWide is \$Y. The Reports page is the tiebreaker."
-
-10. IF UNSURE, STOP.
-    It is ALWAYS better to admit a gap than to guess. The operator can
-    handle "I don't know"; they cannot recover from a wrong
-    recommendation that cost them an order.`;
+If a product/machine/lead the operator asks about is NOT visible in your snapshot (eg machines[X].productsTruncated > 0 and the product isn't in products[]), say so plainly and point to the right page (Inventory / Lead Dashboard / Reports).`;
 
 export async function POST(req: Request) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -226,13 +179,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "No messages provided" }, { status: 400 });
     }
 
-    // Build live snapshot
+    // Build live snapshot. Stringify with NO indent — saves ~30% on token
+    // count vs JSON.stringify(ctx, null, 2). The model parses both equally
+    // well; indentation is purely for human readability. With indent the
+    // operator hit OpenAI's 30k TPM rate limit; without it we stay under.
     const ctx = await buildAssistantContext();
     const snapshotMessage: ChatMessage = {
       role: "system",
       content:
         `Current inventory snapshot (generated ${ctx.generatedAt}):\n\n` +
-        JSON.stringify(ctx, null, 2) +
+        JSON.stringify(ctx) +
         "\n\nUse this snapshot to answer. If asked about something not in the snapshot, say you don't have that data.",
     };
 

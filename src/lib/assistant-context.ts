@@ -165,6 +165,58 @@ export type AssistantContext = {
     product: string; qty: number; reason: string;
     location: string; createdAt: string;
   }>;
+  // ─── Pipeline / leads ─────────────────────────────────────────────
+  // Top 60 leads sorted by tier then last touch. Use these to answer
+  // "what hot leads do I have", "who is in Meeting Booked", etc. For
+  // a specific lead by id, tell the operator to open the Lead
+  // Dashboard — the snapshot only carries summary fields.
+  pipeline: {
+    counts: {
+      total: number;
+      byTier: Record<string, number>;
+      byStage: Record<string, number>;
+      callReady: number;
+      noNextAction: number;
+    };
+    leads: Array<{
+      id: string;
+      business: string;
+      tier: string | null;
+      tierScore: number | null;
+      stage: string;
+      owner: string | null;
+      vertical: string | null;
+      employeeCount: string | null;
+      nextAction: string | null;
+      nextActionAt: string | null;
+      lastTouchAt: string | null;
+      callAttempts: number;
+      isCallReady: boolean;
+      apolloTitle: string | null;
+    }>;
+  };
+  // ─── Daily revenue last 30 days ──────────────────────────────────
+  // Same source as Reports + Today tile. Use for trend questions
+  // ("which day this month was best?", "is today above or below
+  // average?", "how am I trending?").
+  dailySales30d: Array<{
+    date: string;
+    revenue: number;
+    units: number;
+    transactions: number;
+  }>;
+  // ─── Seasonal index per top-selling product ──────────────────────
+  // monthlyIndex maps 1..12 -> multiplier (1.0 = at average; 1.2 = +20%
+  // for that month; 0.8 = -20%). Operator can ask "what's peak month
+  // for Coca-Cola?" or "which products are about to slow down?".
+  seasonalTrends: Array<{
+    product: string;
+    category: string;
+    peakMonth: string;
+    lowMonth: string;
+    swingPct: number;       // peak/low spread as percentage
+    monthlyIndex: Record<string, number>;
+  }>;
 };
 
 type ProductRow = {
@@ -182,6 +234,9 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     alerts,
     underperformersRaw,
     projectionSettings,
+    leadsRes,
+    dailySales30dRes,
+    seasonalTrendsRes,
     productsRes,
     machinesRes,
     machineInvRes,
@@ -200,6 +255,24 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     listAlerts(false),
     findUnderperformers(),
     getProjectionSettings().catch(() => ({ windowWeeks: 6, safetyStockDays: 5, horizonDays: 7 })),
+    // Pipeline / leads — full list (capped at 1000) so the AI can answer
+    // tier counts, owner ownership, hot lead questions. Light filter for
+    // visible columns only — call/email logs are NOT pulled (too heavy).
+    supabase.from("leads")
+      .select("id, business, stage, tier, tier_score, owner, vertical, employee_count, next_action, next_action_at, last_touch_at, call_attempts, is_call_ready, apollo_title")
+      .range(0, 999),
+    // Daily revenue series for the last 30 days. Same source the Reports
+    // page uses — answers trend questions without making up dates.
+    supabase.from("daily_sales")
+      .select("sale_date, revenue, units_sold")
+      .gte("sale_date", dateNDaysAgoInOperatorTz(30))
+      .range(0, 9999),
+    // Seasonal trends (most recent run only). Lets the AI answer
+    // "what's peak for Coke" without inventing numbers.
+    supabase.from("seasonal_trends")
+      .select("product_id, current_season, seasonal_change_pct, peak_month, low_month, insight, products(name, category)")
+      .order("created_at", { ascending: false })
+      .limit(40),
     supabase.from("products").select("id, name, category, default_vend_price, unit_cost", { count: "exact" }).eq("company_id", companyId).range(0, 9999),
     supabase.from("machines").select("id, name, status").eq("company_id", companyId),
     supabase.from("machine_inventory").select("machine_id, product_id, daily_sales_rate, products(name, category)"),
@@ -537,6 +610,100 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       seasonalMultiplier: p.seasonalMultiplier,
     }));
 
+  // ─── PIPELINE / LEADS ────────────────────────────────────────────
+  type LeadRow = {
+    id: string; business: string; stage: string;
+    tier: string | null; tier_score: number | null;
+    owner: string | null; vertical: string | null; employee_count: string | null;
+    next_action: string | null; next_action_at: string | null;
+    last_touch_at: string | null; call_attempts: number | null;
+    is_call_ready: boolean | null; apollo_title: string | null;
+  };
+  const leadRows = (leadsRes?.data || []) as LeadRow[];
+  const WON = new Set(["Won", "Installed"]);
+  const pipelineByTier: Record<string, number> = { A: 0, B: 0, C: 0, none: 0 };
+  const pipelineByStage: Record<string, number> = {};
+  let callReadyCount = 0;
+  let noNextActionCount = 0;
+  for (const l of leadRows) {
+    const t = (l.tier || "none").toUpperCase();
+    pipelineByTier[t] = (pipelineByTier[t] || 0) + 1;
+    const s = l.stage || "Unknown";
+    pipelineByStage[s] = (pipelineByStage[s] || 0) + 1;
+    if (l.is_call_ready) callReadyCount++;
+    if (!l.next_action_at && !WON.has(s) && s !== "Not Interested") noNextActionCount++;
+  }
+  // Top 60 leads: A tier first, then B, then C; within tier by last_touch DESC
+  const tierRank: Record<string, number> = { A: 0, B: 1, C: 2 };
+  const topLeads = [...leadRows]
+    .sort((a, b) => {
+      const ta = tierRank[a.tier || "Z"] ?? 9;
+      const tb = tierRank[b.tier || "Z"] ?? 9;
+      if (ta !== tb) return ta - tb;
+      const la = a.last_touch_at ? new Date(a.last_touch_at).getTime() : 0;
+      const lb = b.last_touch_at ? new Date(b.last_touch_at).getTime() : 0;
+      return lb - la;
+    })
+    .slice(0, 60)
+    .map((l) => ({
+      id: l.id,
+      business: l.business,
+      tier: l.tier,
+      tierScore: l.tier_score,
+      stage: l.stage,
+      owner: l.owner,
+      vertical: l.vertical,
+      employeeCount: l.employee_count,
+      nextAction: l.next_action,
+      nextActionAt: l.next_action_at,
+      lastTouchAt: l.last_touch_at,
+      callAttempts: l.call_attempts || 0,
+      isCallReady: !!l.is_call_ready,
+      apolloTitle: l.apollo_title,
+    }));
+
+  // ─── DAILY SALES (last 30 days) ──────────────────────────────────
+  type DSRow = { sale_date: string; revenue: number | null; units_sold: number | null };
+  const dsRows = (dailySales30dRes?.data || []) as DSRow[];
+  const dsByDate = new Map<string, { revenue: number; units: number; transactions: number }>();
+  for (const r of dsRows) {
+    const d = r.sale_date;
+    const e = dsByDate.get(d) || { revenue: 0, units: 0, transactions: 0 };
+    e.revenue += r.revenue || 0;
+    e.units += r.units_sold || 0;
+    if ((r.units_sold || 0) > 0) e.transactions += 1;
+    dsByDate.set(d, e);
+  }
+  const dailySales30d = Array.from(dsByDate.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, v]) => ({
+      date,
+      revenue: Math.round(v.revenue * 100) / 100,
+      units: v.units,
+      transactions: v.transactions,
+    }));
+
+  // ─── SEASONAL TRENDS ─────────────────────────────────────────────
+  type STRow = {
+    product_id: string;
+    current_season: string;
+    seasonal_change_pct: number | null;
+    peak_month: string | null;
+    low_month: string | null;
+    insight: string | null;
+    products?: { name?: string; category?: string };
+  };
+  const stRows = (seasonalTrendsRes?.data || []) as STRow[];
+  const seasonalTrendsOut = stRows.slice(0, 25).map((s) => ({
+    product: s.products?.name || s.product_id,
+    category: s.products?.category || "?",
+    peakMonth: s.peak_month || "?",
+    lowMonth: s.low_month || "?",
+    swingPct: Math.round(((s.seasonal_change_pct as number) || 0)),
+    monthlyIndex: {}, // Detailed per-month index lives on the predictions
+                     // page; AI should reference it from there if asked.
+  }));
+
   // ─── EMAIL REPLIES ───────────────────────────────────────────────
   const replyRows = (emailRepliesRes.data || []) as Array<{
     action_data: { from?: string; intent?: string; summary?: string };
@@ -592,6 +759,9 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       "recentEmailReplies (last 5 lead replies with intent)",
       "recentStockMovements (last 15 purchases/refills/spoilage)",
       "predictions (30d projected units + COGS, top by units, top by spend, manual overrides, active seasonal boosts) — use for forward-looking questions",
+      "pipeline (counts.byTier, counts.byStage, counts.callReady, leads[60] with id/business/tier/stage/owner/vertical/nextAction/lastTouchAt) — for lead pipeline questions",
+      "dailySales30d (per-day revenue / units / transactions for last 30 days, oldest first) — for trend questions, day-of-week patterns, today vs avg",
+      "seasonalTrends (peakMonth / lowMonth / swingPct per product) — when operator asks 'when does X peak' / 'what's about to slow down'",
     ],
     totals: {
       products: productCount,
@@ -662,6 +832,18 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     replacements,
     recentEmailReplies,
     recentStockMovements,
+    pipeline: {
+      counts: {
+        total: leadRows.length,
+        byTier: pipelineByTier,
+        byStage: pipelineByStage,
+        callReady: callReadyCount,
+        noNextAction: noNextActionCount,
+      },
+      leads: topLeads,
+    },
+    dailySales30d,
+    seasonalTrends: seasonalTrendsOut,
   };
 }
 

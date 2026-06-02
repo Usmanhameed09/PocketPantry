@@ -644,7 +644,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       const lb = b.last_touch_at ? new Date(b.last_touch_at).getTime() : 0;
       return lb - la;
     })
-    .slice(0, 60)
+    .slice(0, 30) // Reduced from 60 to stay under OpenAI 30k TPM rate limit
     .map((l) => ({
       id: l.id,
       business: l.business,
@@ -694,7 +694,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     products?: { name?: string; category?: string };
   };
   const stRows = (seasonalTrendsRes?.data || []) as STRow[];
-  const seasonalTrendsOut = stRows.slice(0, 25).map((s) => ({
+  const seasonalTrendsOut = stRows.slice(0, 15).map((s) => ({
     product: s.products?.name || s.product_id,
     category: s.products?.category || "?",
     peakMonth: s.peak_month || "?",

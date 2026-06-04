@@ -217,20 +217,39 @@ export async function detectExceptions(): Promise<Exception[]> {
   }
 
   // ─── 3. Stale machines ────────────────────────────────────────────
-  // Machines flagged Healthy in DB but no sales / sync in 7 days.
-  // Useful when the cron didn't catch it as "offline" yet.
+  // Bug: I was using machines.updated_at (when the row was last edited in
+  // our DB — basically never, after the machine was first added). Result:
+  // every machine that hadn't been edited in a week was flagged stale,
+  // even though sales were syncing fresh.
+  //
+  // Correct field: machines.last_sync_at = when the cron last successfully
+  // pulled from Nayax/HAHA for this machine. Threshold tightened from 7d
+  // to 3d to match the Nayax-side offline detector.
   const staleCutoff = new Date();
-  staleCutoff.setDate(staleCutoff.getDate() - 7);
+  staleCutoff.setDate(staleCutoff.getDate() - 3);
   const { data: stale } = await supabase
     .from("machines")
-    .select("id, name, status, last_sync_at, updated_at")
+    .select("id, name, status, last_sync_at")
     .eq("company_id", companyId)
     .neq("status", "offline")
-    .lt("updated_at", staleCutoff.toISOString())
+    .or(`last_sync_at.is.null,last_sync_at.lt.${staleCutoff.toISOString()}`)
     .range(0, 999);
-  for (const m of (stale || []) as Array<{ id: string; name: string; updated_at: string }>) {
+  for (const m of (stale || []) as Array<{ id: string; name: string; last_sync_at: string | null }>) {
+    if (!m.last_sync_at) {
+      out.push({
+        id: `stale_machine:${m.id}`,
+        type: "stale_machine",
+        severity: "medium",
+        machineId: m.id,
+        machineName: m.name,
+        message: "Machine has never reported a sync. It may have been added without an API token / device ID.",
+        fixAction: "Mark offline",
+        detectedAt: now,
+      });
+      continue;
+    }
     const days = Math.floor(
-      (Date.now() - new Date(m.updated_at).getTime()) / (24 * 60 * 60 * 1000),
+      (Date.now() - new Date(m.last_sync_at).getTime()) / (24 * 60 * 60 * 1000),
     );
     out.push({
       id: `stale_machine:${m.id}`,
@@ -238,7 +257,7 @@ export async function detectExceptions(): Promise<Exception[]> {
       severity: "medium",
       machineId: m.id,
       machineName: m.name,
-      message: `Machine hasn't reported sales in ${days} days but is marked Healthy.`,
+      message: `No sync from Nayax/HAHA in ${days} days, but status is Healthy.`,
       fixAction: "Mark offline",
       currentValue: days,
       detectedAt: now,

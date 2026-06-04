@@ -16,6 +16,7 @@ import {
   Brain,
   Target,
   MessageCircle,
+  BookOpen,
   X,
 } from "lucide-react";
 
@@ -31,6 +32,7 @@ const navItems = [
   { name: "Lead Dashboard", href: "/pipeline/v2", icon: Target },
   { name: "Advertising", href: "/advertising", icon: Megaphone },
   { name: "Reports", href: "/reports", icon: BarChart3 },
+  { name: "Help & SOPs", href: "/help", icon: BookOpen },
 ];
 
 interface SidebarProps {

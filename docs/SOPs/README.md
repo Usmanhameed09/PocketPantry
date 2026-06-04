@@ -20,6 +20,7 @@ These are written for **operators and assistants** — not developers. No coding
 | Lead Dashboard | Tiered lead scoring, call queue, conversion stats | [09-lead-dashboard.md](09-lead-dashboard.md) |
 | Advertising | Ad campaign management | [10-advertising.md](10-advertising.md) |
 | Reports | Custom date ranges, payment splits, CSV export | [11-reports.md](11-reports.md) |
+| Exception Queue | Single list of fixable data issues with one-click actions | [12-exception-queue.md](12-exception-queue.md) |
 
 ## Daily workflow (typical day)
 

@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { readEnv } from "./runtime-env";
 import { PRICING_SYSTEM_LEAD_ID } from "./system-records";
+import { guardScrapedUnitCost } from "./cost-fixer";
 
 // outreach_log has a CHECK constraint that limits action_type to a small set
 // (call/email/email_agent_settings). We reuse "call" — the same pattern
@@ -623,6 +624,44 @@ async function writeSupabaseAnalysisItems(analyses: SavedPricingAnalysis[]) {
   if (error) throw error;
 }
 
+async function applyScrapeTimeCostGuard(analyses: SavedPricingAnalysis[]) {
+  if (analyses.length === 0) return;
+  const supabase = createServerClient();
+  const ids = analyses.map((a) => a.productId).filter(Boolean);
+  if (ids.length === 0) return;
+  const { data: prodRows } = await supabase
+    .from("products")
+    .select("id, name, category, default_vend_price")
+    .in("id", ids);
+  const byId = new Map(
+    (prodRows || []).map((p) => [
+      p.id as string,
+      p as { id: string; name: string; category?: string | null; default_vend_price?: number | null },
+    ])
+  );
+  for (const a of analyses) {
+    const prod = byId.get(a.productId);
+    if (!prod) continue;
+    const result = await guardScrapedUnitCost({
+      productName: prod.name,
+      category: prod.category ?? null,
+      scrapedUnitCost: a.cost,
+      packSize: a.packSize ?? null,
+      packPrice: a.packPrice ?? null,
+      vendPrice: prod.default_vend_price ?? null,
+    });
+    if (result.unitCost !== a.cost) {
+      // Record the correction in the trigger string so the operator can
+      // see in the Pricing UI why the cost changed from what was scraped.
+      a.cost = result.unitCost;
+      a.trigger = `${a.trigger || "Scrape"} (cost-fixer: ${result.source})`;
+    }
+    if (result.flag) {
+      a.status = "Needs Review";
+    }
+  }
+}
+
 export async function getSavedPricingAnalyses() {
   const supabaseAnalyses = await readSupabaseAnalyses();
   if (Object.keys(supabaseAnalyses).length > 0) {
@@ -634,6 +673,16 @@ export async function getSavedPricingAnalyses() {
 
 export async function savePricingAnalyses(analyses: SavedPricingAnalysis[]) {
   if (analyses.length === 0) return { updated: 0 };
+
+  // Scrape-time guard: before persisting, validate each unit cost against
+  // the product name + vending price to catch case-prices-stored-as-unit.
+  // Falls through silently on any error — the guard is opportunistic, not
+  // mandatory; the backlog cleanup tool catches anything that slips by.
+  try {
+    await applyScrapeTimeCostGuard(analyses);
+  } catch (err) {
+    console.warn("[pricing-catalog] cost guard failed:", err);
+  }
 
   // Append per-product rows to Supabase (race-safe). Each call only inserts
   // the products it owns, so concurrent per-product POSTs never overwrite

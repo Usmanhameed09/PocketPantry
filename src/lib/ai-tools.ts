@@ -183,6 +183,197 @@ export const TOOL_DEFINITIONS = [
       parameters: { type: "object", properties: {} },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_purchase_orders",
+      description:
+        "List purchase orders, optionally filtered by status (Draft, Approved, " +
+        "Purchased, Received, Cancelled). Returns id, status, total, lineCount, " +
+        "createdAt, approvedAt, purchasedAt, receivedAt. Use for any PO-related " +
+        "question. For full line items on one PO use get_purchase_order_details.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string", description: "Optional status filter." },
+          limit: { type: "integer", description: "Max results, default 20.", default: 20 },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_purchase_order_details",
+      description:
+        "Full details of one PO including every line (product, qty ordered, " +
+        "qty received, unit cost). Accepts the PO short-id (first 8 chars) or " +
+        "the full UUID.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "PO id (short 8-char or full UUID)." },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_pricing_analyses",
+      description:
+        "Pending price-change analyses — products where the system has " +
+        "calculated a suggested vending price based on cost. Returns product, " +
+        "supplier, current cost, suggested price, projected margin, status. " +
+        "Use for 'what should I charge for X', pricing review questions.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            description: "Filter (e.g. 'Pending Approval'). Default: all.",
+          },
+          limit: { type: "integer", description: "Max results, default 15.", default: 15 },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_underperformers",
+      description:
+        "Products flagged as low-volume or low-margin over the last 30 days. " +
+        "Returns name, category, 4-week units, weekly average, margin, reason. " +
+        "Use for 'what should I drop', 'which products aren't working'.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "integer", description: "Max results, default 15.", default: 15 },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_weekly_trends",
+      description:
+        "Week-over-week comparison — last 7 days vs prior 7 days. Returns " +
+        "fleet totals, plus top spikes (≥30% up) and declines (≥30% down), and " +
+        "top sellers this week. Use for 'what's hot this week', 'what's slowing'.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_predictions",
+      description:
+        "30-day forward projections: top products by expected units OR by " +
+        "expected COGS spend. Includes seasonal multiplier and manual override " +
+        "flags. Use for 'what will I sell next month', 'expected restock cost'.",
+      parameters: {
+        type: "object",
+        properties: {
+          by: { type: "string", enum: ["units", "cogs"], description: "Sort by 'units' (default) or 'cogs'.", default: "units" },
+          limit: { type: "integer", description: "Top N. Default 12.", default: 12 },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_warehouse_summary",
+      description:
+        "Warehouse totals + top-stocked products by value. Returns total " +
+        "value, total units, SKU count, items below threshold. Use for 'what " +
+        "is my warehouse worth', 'how much stock do I have', threshold questions.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_recent_stock_movements",
+      description:
+        "Recent inventory ledger entries (purchases, refills, spoilage, count " +
+        "corrections). Returns product, qty, reason, location, createdAt. " +
+        "Use for 'where did X units go', 'last refills', audit questions.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "integer", description: "Max results, default 20.", default: 20 },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "describe_schema",
+      description:
+        "Returns the list of tables + columns the AI can query via " +
+        "query_table. Use this FIRST whenever you need to call query_table " +
+        "and you're unsure which table/column name to use. Lightweight; " +
+        "always safe to call.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "query_table",
+      description:
+        "Generic safe read-only query against an allowlisted table. Use this " +
+        "as a FALLBACK when none of the named tools above fit the question. " +
+        "Filters use PostgREST operators: eq, neq, gt, gte, lt, lte, ilike. " +
+        "ALWAYS prefer the named tools when one fits — they return cleaner " +
+        "data. Call describe_schema first if you're not sure what's available.",
+      parameters: {
+        type: "object",
+        properties: {
+          table: {
+            type: "string",
+            description: "Allowlisted table name (see describe_schema).",
+          },
+          columns: {
+            type: "string",
+            description: "Comma-separated columns. Default: all safe columns.",
+          },
+          filters: {
+            type: "array",
+            description: "Array of { column, op, value } where op is eq|neq|gt|gte|lt|lte|ilike.",
+            items: {
+              type: "object",
+              properties: {
+                column: { type: "string" },
+                op: { type: "string", enum: ["eq", "neq", "gt", "gte", "lt", "lte", "ilike"] },
+                value: {},
+              },
+              required: ["column", "op", "value"],
+            },
+          },
+          orderBy: {
+            type: "string",
+            description: "Column name to order by.",
+          },
+          orderDesc: {
+            type: "boolean",
+            description: "True for descending order. Default false.",
+          },
+          limit: {
+            type: "integer",
+            description: "Max rows. Capped at 50.",
+            default: 25,
+          },
+        },
+        required: ["table"],
+      },
+    },
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────
@@ -216,6 +407,42 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         );
       case "get_pipeline_summary":
         return await getPipelineSummary();
+      case "get_purchase_orders":
+        return await getPurchaseOrders(
+          args.status ? String(args.status) : undefined,
+          Number(args.limit) || 20
+        );
+      case "get_purchase_order_details":
+        return await getPurchaseOrderDetails(String(args.id || ""));
+      case "get_pricing_analyses":
+        return await getPricingAnalyses(
+          args.status ? String(args.status) : undefined,
+          Number(args.limit) || 15
+        );
+      case "get_underperformers":
+        return await getUnderperformersTool(Number(args.limit) || 15);
+      case "get_weekly_trends":
+        return await getWeeklyTrendsTool();
+      case "get_predictions":
+        return await getPredictionsTool(
+          (args.by === "cogs" ? "cogs" : "units") as "units" | "cogs",
+          Number(args.limit) || 12
+        );
+      case "get_warehouse_summary":
+        return await getWarehouseSummary();
+      case "get_recent_stock_movements":
+        return await getRecentStockMovements(Number(args.limit) || 20);
+      case "describe_schema":
+        return describeSchema();
+      case "query_table":
+        return await queryTable({
+          table: String(args.table || ""),
+          columns: args.columns ? String(args.columns) : undefined,
+          filters: Array.isArray(args.filters) ? (args.filters as Array<{ column: string; op: string; value: unknown }>) : undefined,
+          orderBy: args.orderBy ? String(args.orderBy) : undefined,
+          orderDesc: Boolean(args.orderDesc),
+          limit: Number(args.limit) || 25,
+        });
       default:
         return { error: `Unknown tool: ${name}` };
     }
@@ -730,6 +957,489 @@ async function getPipelineSummary(): Promise<ToolResult> {
     byStage,
     callReady,
     topHotLeads: top5,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_purchase_orders
+// ─────────────────────────────────────────────────────────────────────
+
+async function getPurchaseOrders(status: string | undefined, limit: number): Promise<ToolResult> {
+  const companyId = await ensureDefaultCompany();
+  const supabase = createServerClient();
+  let q = supabase
+    .from("purchase_orders")
+    .select("id, supplier_name, status, total_cost, created_at, approved_at, purchased_at, received_at, po_lines(count)")
+    .eq("company_id", companyId)
+    .order("created_at", { ascending: false })
+    .limit(Math.min(Math.max(limit, 1), 50));
+  if (status) q = q.eq("status", status);
+  const { data } = await q;
+
+  const byStatus: Record<string, number> = {};
+  let openTotal = 0;
+  for (const p of data || []) {
+    const s = p.status as string;
+    byStatus[s] = (byStatus[s] || 0) + 1;
+    if (["Draft", "Approved", "Purchased"].includes(s)) {
+      openTotal += (p.total_cost as number) || 0;
+    }
+  }
+
+  return {
+    pos: (data || []).map((p) => ({
+      id: p.id,
+      shortId: (p.id as string).slice(0, 8),
+      supplier: p.supplier_name,
+      status: p.status,
+      total: p.total_cost || 0,
+      lineCount: ((p.po_lines as unknown) as Array<{ count: number }>)?.[0]?.count ?? 0,
+      createdAt: p.created_at,
+      approvedAt: p.approved_at,
+      purchasedAt: p.purchased_at,
+      receivedAt: p.received_at,
+    })),
+    countByStatus: byStatus,
+    openTotal: Math.round(openTotal * 100) / 100,
+    total: (data || []).length,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_purchase_order_details
+// ─────────────────────────────────────────────────────────────────────
+
+async function getPurchaseOrderDetails(id: string): Promise<ToolResult> {
+  if (!id) return { error: "id is required" };
+  const supabase = createServerClient();
+  // Support short ID (first 8 chars) — query with ilike
+  const isShort = id.length < 36;
+  const { data: pos } = isShort
+    ? await supabase
+        .from("purchase_orders")
+        .select("id, supplier_name, status, total_cost, notes, created_at, approved_at, purchased_at, received_at")
+        .ilike("id", `${id}%`)
+        .limit(1)
+    : await supabase
+        .from("purchase_orders")
+        .select("id, supplier_name, status, total_cost, notes, created_at, approved_at, purchased_at, received_at")
+        .eq("id", id)
+        .limit(1);
+
+  if (!pos || pos.length === 0) return { error: `PO ${id} not found` };
+  const po = pos[0];
+
+  const { data: lines } = await supabase
+    .from("po_lines")
+    .select("id, product_id, qty_ordered, qty_received, unit_cost, products(name)")
+    .eq("po_id", po.id as string);
+
+  return {
+    po: {
+      id: po.id,
+      supplier: po.supplier_name,
+      status: po.status,
+      total: po.total_cost || 0,
+      notes: po.notes,
+      createdAt: po.created_at,
+      approvedAt: po.approved_at,
+      purchasedAt: po.purchased_at,
+      receivedAt: po.received_at,
+    },
+    lines: (lines || []).map((l) => ({
+      productName: ((l as { products?: { name?: string } }).products?.name) || l.product_id,
+      qtyOrdered: l.qty_ordered,
+      qtyReceived: l.qty_received || 0,
+      unitCost: l.unit_cost,
+      lineCost: Math.round(((l.qty_ordered as number) * (l.unit_cost as number)) * 100) / 100,
+    })),
+    lineCount: (lines || []).length,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_pricing_analyses
+// ─────────────────────────────────────────────────────────────────────
+
+async function getPricingAnalyses(status: string | undefined, limit: number): Promise<ToolResult> {
+  const { getSavedPricingAnalyses } = await import("@/lib/live-pricing-catalog");
+  const all = Object.values(await getSavedPricingAnalyses());
+  let filtered = all;
+  if (status) filtered = all.filter((a) => a.status === status);
+  // Sort by margin spread (suggested - cost) descending — highest-value
+  // pricing decisions first.
+  filtered.sort((a, b) => (b.suggestedPrice - b.cost) - (a.suggestedPrice - a.cost));
+  return {
+    analyses: filtered.slice(0, Math.min(Math.max(limit, 1), 30)).map((a) => ({
+      product: a.scrapedProduct || a.productId,
+      supplier: a.supplier,
+      cost: a.cost,
+      suggestedPrice: a.suggestedPrice,
+      margin: a.margin,
+      status: a.status,
+    })),
+    total: filtered.length,
+    statusFilter: status || null,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_underperformers
+// ─────────────────────────────────────────────────────────────────────
+
+async function getUnderperformersTool(limit: number): Promise<ToolResult> {
+  const { findUnderperformers } = await import("@/lib/product-proposals");
+  const items = await findUnderperformers();
+  return {
+    underperformers: items.slice(0, Math.min(Math.max(limit, 1), 30)).map((u) => ({
+      product: u.productName,
+      category: u.category,
+      units4Wk: u.unitsLast4Weeks,
+      avgWeekly: u.averageWeekly,
+      margin: u.margin,
+      reason: u.reason,
+    })),
+    total: items.length,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_weekly_trends — week-over-week comparison
+// ─────────────────────────────────────────────────────────────────────
+
+async function getWeeklyTrendsTool(): Promise<ToolResult> {
+  const supabase = createServerClient();
+  const sinceStr = dateNDaysAgoInOperatorTz(14);
+  const cutoffStr = dateNDaysAgoInOperatorTz(7);
+  const { data } = await supabase
+    .from("daily_sales")
+    .select("product_id, sale_date, units_sold, products(name)")
+    .gte("sale_date", sinceStr)
+    .range(0, 49999);
+
+  if (!data || data.length === 0) {
+    return { available: false, message: "No daily sales data in the last 14 days." };
+  }
+
+  const lastWeek = new Map<string, { name: string; units: number }>();
+  const priorWeek = new Map<string, { name: string; units: number }>();
+  for (const r of data) {
+    const pid = r.product_id as string;
+    const target = (r.sale_date as string) >= cutoffStr ? lastWeek : priorWeek;
+    const name = ((r as { products?: { name?: string } }).products?.name) || pid;
+    const e = target.get(pid) || { name, units: 0 };
+    e.units += (r.units_sold as number) || 0;
+    target.set(pid, e);
+  }
+  let lastTotal = 0;
+  let priorTotal = 0;
+  for (const e of lastWeek.values()) lastTotal += e.units;
+  for (const e of priorWeek.values()) priorTotal += e.units;
+
+  const spikes: Array<{ name: string; lastWeek: number; priorWeek: number; pct: number }> = [];
+  const declines: Array<{ name: string; lastWeek: number; priorWeek: number; pct: number }> = [];
+  for (const [pid, lw] of lastWeek) {
+    const pw = priorWeek.get(pid);
+    const priorUnits = pw?.units || 0;
+    if (priorUnits < 3) continue;
+    const pct = Math.round(((lw.units - priorUnits) / priorUnits) * 1000) / 10;
+    if (pct >= 30) spikes.push({ name: lw.name, lastWeek: lw.units, priorWeek: priorUnits, pct });
+    else if (pct <= -30) declines.push({ name: lw.name, lastWeek: lw.units, priorWeek: priorUnits, pct });
+  }
+  spikes.sort((a, b) => b.pct - a.pct);
+  declines.sort((a, b) => a.pct - b.pct);
+  const topSellers = Array.from(lastWeek.values())
+    .sort((a, b) => b.units - a.units).slice(0, 8)
+    .map((e) => ({ name: e.name, units: e.units }));
+
+  return {
+    available: true,
+    lastWeekTotal: lastTotal,
+    priorWeekTotal: priorTotal,
+    fleetWoWPct: priorTotal > 0 ? Math.round(((lastTotal - priorTotal) / priorTotal) * 1000) / 10 : 0,
+    spikes: spikes.slice(0, 8),
+    declines: declines.slice(0, 8),
+    topSellersThisWeek: topSellers,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_predictions — 30-day forward projections
+// ─────────────────────────────────────────────────────────────────────
+
+async function getPredictionsTool(by: "units" | "cogs", limit: number): Promise<ToolResult> {
+  const { getProjections } = await import("@/lib/projection-engine");
+  const projections = await getProjections();
+  const withDemand = projections.filter((p) => p.projectedUnits30d > 0);
+  const totalUnits = withDemand.reduce((s, p) => s + p.projectedUnits30d, 0);
+  const totalCogs = withDemand.reduce((s, p) => s + p.projectedCogs30d, 0);
+  const sorted = [...withDemand].sort((a, b) =>
+    by === "cogs" ? b.projectedCogs30d - a.projectedCogs30d : b.projectedUnits30d - a.projectedUnits30d
+  );
+  return {
+    horizonDays: 30,
+    totalProjectedUnits: Math.round(totalUnits),
+    totalProjectedCogs: Math.round(totalCogs * 100) / 100,
+    productCount: withDemand.length,
+    sortBy: by,
+    top: sorted.slice(0, Math.min(Math.max(limit, 1), 30)).map((p) => ({
+      product: p.productName,
+      category: p.category,
+      projectedUnits30d: p.projectedUnits30d,
+      projectedCogs30d: Math.round(p.projectedCogs30d * 100) / 100,
+      velocityPerDay: p.velocityPerDay,
+      seasonalMultiplier: p.seasonalMultiplier,
+      hasManualOverride: p.override !== null,
+      explanation: p.explanation,
+    })),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_warehouse_summary
+// ─────────────────────────────────────────────────────────────────────
+
+async function getWarehouseSummary(): Promise<ToolResult> {
+  const companyId = await ensureDefaultCompany();
+  const supabase = createServerClient();
+  const { data: warehouse } = await supabase
+    .from("warehouse_inventory")
+    .select("product_id, on_hand")
+    .eq("company_id", companyId)
+    .range(0, 9999);
+
+  const productIds = (warehouse || []).map((w) => w.product_id as string);
+  const { data: prods } = productIds.length > 0
+    ? await supabase
+        .from("products")
+        .select("id, name, unit_cost")
+        .in("id", productIds)
+    : { data: [] as Array<{ id: string; name: string; unit_cost: number }> };
+  const prodById = new Map((prods || []).map((p) => [p.id as string, p as unknown as { name: string; unit_cost?: number }]));
+
+  let totalValue = 0;
+  let totalUnits = 0;
+  let belowThreshold = 0;
+  const topStocked: Array<{ name: string; onHand: number; unitCost: number; value: number }> = [];
+  for (const w of warehouse || []) {
+    const pid = w.product_id as string;
+    const onHand = (w.on_hand as number) || 0;
+    const prod = prodById.get(pid);
+    const cost = (prod?.unit_cost as number) || 0;
+    const value = onHand * cost;
+    totalValue += value;
+    totalUnits += onHand;
+    if (onHand <= 5) belowThreshold++;
+    if (onHand > 0) {
+      topStocked.push({
+        name: prod?.name || pid,
+        onHand,
+        unitCost: cost,
+        value: Math.round(value * 100) / 100,
+      });
+    }
+  }
+  topStocked.sort((a, b) => b.value - a.value);
+
+  return {
+    totalValue: Math.round(totalValue * 100) / 100,
+    totalUnits,
+    skusWithStock: topStocked.length,
+    skusBelowThreshold: belowThreshold,
+    topStocked: topStocked.slice(0, 10),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_recent_stock_movements — last N ledger entries
+// ─────────────────────────────────────────────────────────────────────
+
+async function getRecentStockMovements(limit: number): Promise<ToolResult> {
+  const supabase = createServerClient();
+  const { data } = await supabase
+    .from("stock_movements")
+    .select("qty, reason, location, machine_id, notes, created_at, products(name), machines(name)")
+    .order("created_at", { ascending: false })
+    .limit(Math.min(Math.max(limit, 1), 50));
+
+  return {
+    movements: (data || []).map((m) => ({
+      product: ((m as { products?: { name?: string } }).products?.name) || "?",
+      qty: m.qty,
+      reason: m.reason,
+      location: m.location === "warehouse" ? "warehouse" : "machine",
+      machineName: ((m as { machines?: { name?: string } }).machines?.name) || null,
+      notes: m.notes,
+      createdAt: m.created_at,
+    })),
+    count: (data || []).length,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Schema introspection + safe query escape hatch
+// ─────────────────────────────────────────────────────────────────────
+
+// Tables (and their safe columns) that the AI is allowed to query via
+// query_table. Anything not on this list is blocked — protects PII tables
+// (api_keys, secrets if any) and limits the blast radius of a runaway
+// query. Add tables here as the surface area grows.
+const QUERYABLE_SCHEMA: Record<string, { columns: string[]; defaultOrderBy?: string; description: string }> = {
+  products: {
+    columns: ["id", "name", "sku", "category", "vendor", "status", "unit_cost", "default_vend_price", "case_size", "barcode", "lead_time_days", "created_at"],
+    defaultOrderBy: "name",
+    description: "Master product catalog.",
+  },
+  machines: {
+    columns: ["id", "name", "status", "last_sync_at", "location_id", "created_at"],
+    defaultOrderBy: "name",
+    description: "Vending machines.",
+  },
+  warehouse_inventory: {
+    columns: ["product_id", "on_hand", "updated_at"],
+    defaultOrderBy: "on_hand",
+    description: "Warehouse stock on-hand per product.",
+  },
+  machine_inventory: {
+    columns: ["machine_id", "product_id", "estimated_remaining", "last_loaded_qty", "last_refill_at", "daily_sales_rate", "updated_at"],
+    defaultOrderBy: "last_refill_at",
+    description: "Per-machine inventory baselines + estimates.",
+  },
+  stock_movements: {
+    columns: ["product_id", "machine_id", "location", "qty", "reason", "reference_id", "notes", "created_by", "created_at"],
+    defaultOrderBy: "created_at",
+    description: "Inventory ledger — every stock change.",
+  },
+  purchase_orders: {
+    columns: ["id", "supplier_name", "status", "total_cost", "created_at", "approved_at", "purchased_at", "received_at"],
+    defaultOrderBy: "created_at",
+    description: "Purchase orders.",
+  },
+  po_lines: {
+    columns: ["id", "po_id", "product_id", "qty_ordered", "qty_received", "unit_cost"],
+    description: "Lines on a purchase order.",
+  },
+  daily_sales: {
+    columns: ["sale_date", "machine_id", "product_id", "units_sold", "revenue"],
+    defaultOrderBy: "sale_date",
+    description: "Daily sales aggregated per machine + product.",
+  },
+  alerts: {
+    columns: ["id", "type", "kind", "product_id", "machine_id", "severity", "message", "days_remaining", "recommended_qty", "status", "created_at", "resolved_at"],
+    defaultOrderBy: "created_at",
+    description: "Alert rows (low stock, machine offline, etc.).",
+  },
+  leads: {
+    columns: ["id", "business", "stage", "tier", "tier_score", "owner", "vertical", "employee_count", "next_action", "next_action_at", "last_touch_at", "call_attempts", "apollo_title", "city", "state", "created_at"],
+    defaultOrderBy: "last_touch_at",
+    description: "Sales pipeline leads.",
+  },
+  product_proposals: {
+    columns: ["id", "candidate_name", "category", "reason", "status", "suggested_initial_qty", "target_locations", "suggested_price_min", "suggested_price_max", "reasoning_text", "proposed_by", "created_at", "decided_at"],
+    defaultOrderBy: "created_at",
+    description: "Product proposals (manual + ai-trending).",
+  },
+  replacement_plans: {
+    columns: ["id", "old_product_id", "new_product_id", "status", "started_at", "completed_at", "notes"],
+    defaultOrderBy: "started_at",
+    description: "Active product replacement plans.",
+  },
+  seasonal_multipliers: {
+    columns: ["category", "month", "multiplier"],
+    description: "Per-category monthly seasonal multipliers.",
+  },
+  refill_events: {
+    columns: ["id", "machine_id", "performed_by", "performed_at", "notes"],
+    defaultOrderBy: "performed_at",
+    description: "Refill events (operator-logged).",
+  },
+  refill_lines: {
+    columns: ["refill_id", "product_id", "qty_loaded"],
+    description: "Per-product lines on a refill event.",
+  },
+};
+
+const ALLOWED_OPS = new Set(["eq", "neq", "gt", "gte", "lt", "lte", "ilike"]);
+
+function describeSchema(): ToolResult {
+  return {
+    tables: Object.entries(QUERYABLE_SCHEMA).map(([name, meta]) => ({
+      table: name,
+      columns: meta.columns,
+      description: meta.description,
+      defaultOrderBy: meta.defaultOrderBy || null,
+    })),
+    operatorTip:
+      "Use these as table/column names when calling query_table. Filters " +
+      "accept ops: eq, neq, gt, gte, lt, lte, ilike (case-insensitive LIKE — " +
+      "wrap value with % for substring match).",
+  };
+}
+
+async function queryTable(args: {
+  table: string;
+  columns?: string;
+  filters?: Array<{ column: string; op: string; value: unknown }>;
+  orderBy?: string;
+  orderDesc?: boolean;
+  limit: number;
+}): Promise<ToolResult> {
+  const schema = QUERYABLE_SCHEMA[args.table];
+  if (!schema) {
+    return {
+      error: `Table "${args.table}" is not queryable. Call describe_schema for the allowlist.`,
+    };
+  }
+
+  // Column whitelist enforcement. If the AI requests columns, every one
+  // must be in the schema. If it doesn't, use all of them. We never SELECT *
+  // because some columns (e.g. raw_payload on outreach_log) can be huge.
+  let cols = schema.columns.join(", ");
+  if (args.columns) {
+    const requested = args.columns.split(",").map((c) => c.trim()).filter(Boolean);
+    const bad = requested.filter((c) => !schema.columns.includes(c));
+    if (bad.length > 0) {
+      return { error: `Invalid columns: ${bad.join(", ")}. Allowed: ${schema.columns.join(", ")}` };
+    }
+    cols = requested.join(", ");
+  }
+
+  const supabase = createServerClient();
+  let q = supabase.from(args.table).select(cols);
+
+  // Filter validation — only allowlisted ops, only allowlisted columns.
+  for (const f of args.filters || []) {
+    if (!ALLOWED_OPS.has(f.op)) {
+      return { error: `Op "${f.op}" is not allowed. Use one of: ${[...ALLOWED_OPS].join(", ")}` };
+    }
+    if (!schema.columns.includes(f.column)) {
+      return { error: `Column "${f.column}" not allowed on ${args.table}.` };
+    }
+    // PostgREST's typed methods (eq, gt, etc.) on the query builder
+    type Q = typeof q & Record<string, (col: string, val: unknown) => typeof q>;
+    q = (q as Q)[f.op](f.column, f.value as never);
+  }
+
+  if (args.orderBy) {
+    if (!schema.columns.includes(args.orderBy)) {
+      return { error: `orderBy "${args.orderBy}" not allowed on ${args.table}.` };
+    }
+    q = q.order(args.orderBy, { ascending: !args.orderDesc });
+  } else if (schema.defaultOrderBy) {
+    q = q.order(schema.defaultOrderBy, { ascending: !args.orderDesc });
+  }
+
+  const cappedLimit = Math.min(Math.max(args.limit, 1), 50);
+  q = q.limit(cappedLimit);
+
+  const { data, error } = await q;
+  if (error) return { error: error.message };
+
+  return {
+    table: args.table,
+    rowCount: (data || []).length,
+    rows: data || [],
+    truncatedAt: (data || []).length === cappedLimit ? cappedLimit : null,
   };
 }
 

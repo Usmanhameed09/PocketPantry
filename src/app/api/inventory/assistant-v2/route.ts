@@ -48,12 +48,33 @@ fresh data straight from the database — much more reliable than
 recalling what was in the snapshot.
 
 Available tools:
+  CORE LOOKUPS
   - get_machine_details(name)    — one machine's full breakdown
   - search_products(query)       — catalog search by name/SKU/vendor
   - get_product_details(name)    — one product: sales + machines + seasonality
   - get_sales_for_date(date)     — one day's totals + top sellers
   - find_lead(query)             — pipeline lookup by business/owner
   - list_open_alerts()           — current alerts
+  - get_buy_list(top?)           — what needs to be ordered
+  - get_top_sellers(limit?, category?) — 30d top movers
+  - get_pipeline_summary()       — tier/stage counts + hot leads
+
+  PURCHASE ORDERS / PRICING / FORECASTS
+  - get_purchase_orders(status?, limit?)  — list POs
+  - get_purchase_order_details(id)        — full PO incl. lines
+  - get_pricing_analyses(status?, limit?) — pending price changes
+  - get_underperformers(limit?)           — products to consider dropping
+  - get_weekly_trends()                   — week-over-week spikes/declines
+  - get_predictions(by?, limit?)          — 30-day forecast (units OR cogs)
+  - get_warehouse_summary()               — totals + top-stocked
+  - get_recent_stock_movements(limit?)    — ledger entries
+
+  FALLBACK / ESCAPE HATCH (use only when no named tool fits)
+  - describe_schema()                     — list queryable tables + columns
+  - query_table(table, filters?, ...)     — safe read-only generic query
+    Call describe_schema() first. Always prefer the named tools above —
+    they return cleaner data. query_table is for questions like "show me
+    products with case_size > 24 from Coca Cola" that no named tool covers.
 
 ═══════════════════════════════════════════════════════════════════
 WHEN TO CALL TOOLS vs ANSWER DIRECTLY

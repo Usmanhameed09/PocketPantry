@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import InventoryTabs from "../../InventoryTabs";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { Loader2, CheckCircle2, ShoppingBag, PackageCheck, Ban, ArrowLeft, Truck } from "lucide-react";
+import { Loader2, CheckCircle2, ShoppingBag, PackageCheck, Ban, ArrowLeft, Truck, Trash2 } from "lucide-react";
 import {
   PAGE_BG, CARD, Th, Td, LoadingBox, Badge, Modal,
   BtnPrimary, BtnSecondary, BtnDanger, pageContainer,
@@ -104,6 +104,19 @@ export default function PODetailPage() {
     await load();
   }
 
+  async function deletePO() {
+    if (!confirm("Delete this purchase order? This cannot be undone.")) return;
+    setSubmitting(true);
+    const res = await fetch(`/api/inventory/purchase-orders/${id}`, { method: "DELETE" });
+    const data = await res.json();
+    setSubmitting(false);
+    if (data.success) {
+      router.push("/inventory/purchase-orders");
+    } else {
+      alert(data.error || "Failed to delete PO");
+    }
+  }
+
   async function submitReceipts() {
     if (!po) return;
     const payload = po.lines
@@ -154,7 +167,7 @@ export default function PODetailPage() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                <h2 style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", margin: 0 }}>{po.supplier}</h2>
+                <h2 style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", margin: 0 }}>Purchase Order {po.id.slice(0, 8)}</h2>
                 <Badge color={STATUS_COLOR[po.status] || "gray"}>{po.status}</Badge>
               </div>
               <div style={{ fontSize: 13, color: "#64748b" }}>
@@ -174,6 +187,7 @@ export default function PODetailPage() {
               {po.status !== "Received" && po.status !== "Cancelled" && (
                 <BtnDanger onClick={() => transition("Cancelled")}><Ban size={16} />Cancel</BtnDanger>
               )}
+              <BtnDanger onClick={deletePO}><Trash2 size={16} />Delete</BtnDanger>
             </div>
           </div>
         </div>

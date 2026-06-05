@@ -44,10 +44,25 @@ export default function ProductsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = products.filter((p) => {
-    const q = search.toLowerCase();
-    return !q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || (p.vendor || "").toLowerCase().includes(q);
-  });
+  const filtered = products
+    .filter((p) => {
+      const q = search.toLowerCase();
+      return !q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || (p.vendor || "").toLowerCase().includes(q);
+    })
+    .sort((a, b) => {
+      // When searching, push products that have actually been scanned
+      // (barcode set) or that have real metadata filled in to the top.
+      // The bulk-imported scraped products with no barcode/vendor drop
+      // below them. Without this, a search for "coca cola" buries the
+      // operator's real stocked SKUs under dozens of catalog noise.
+      if (!search) return a.name.localeCompare(b.name);
+      const score = (p: Product) =>
+        (p.barcode ? 4 : 0) +
+        (p.vendor && p.vendor !== "—" ? 2 : 0) +
+        ((p.default_vend_price ?? 0) > 0 ? 1 : 0);
+      const d = score(b) - score(a);
+      return d !== 0 ? d : a.name.localeCompare(b.name);
+    });
 
   async function save() {
     if (!editing?.name) return;

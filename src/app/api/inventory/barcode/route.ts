@@ -55,6 +55,15 @@ export async function GET(req: Request) {
       external = await lookupExternalUpc(barcode);
     }
     if (external.found) {
+      // Before showing the "register new product" modal, fuzzy-match the
+      // UPCItemDB title against our existing catalog. This catches the
+      // common case where the scanner pulled e.g. "Coca-Cola Classic 12oz"
+      // and we already have "Coca Cola Coke Soda Classic Can" in inventory
+      // (with no barcode set yet). Without this we'd create a duplicate.
+      const matchCandidate = await fuzzyMatchExistingProduct(supabase, companyId, {
+        title: external.title || "",
+        brand: external.brand || null,
+      });
       return NextResponse.json({
         success: true,
         source: "external",
@@ -71,15 +80,84 @@ export async function GET(req: Request) {
             ? Math.round((external.cheapestOffer.price / (external.inferredCaseSize || 1)) * 100) / 100
             : null,
         },
+        matchCandidate,
       });
     }
-    return NextResponse.json({ success: true, source: "external", product: null, external: null });
+    // No UPC database hit either — last resort, see if our catalog already
+    // has a product with this barcode buried in a similar-looking name
+    // (operator may have typed it into a product manually). Returns null
+    // when nothing comes back.
+    const blindMatch = await fuzzyMatchExistingProduct(supabase, companyId, {
+      title: barcode,
+      brand: null,
+    });
+    return NextResponse.json({
+      success: true,
+      source: "external",
+      product: null,
+      external: null,
+      matchCandidate: blindMatch,
+    });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : "Failed" },
       { status: 500 }
     );
   }
+}
+
+// Fuzzy-match a UPC title against the catalog. We strip punctuation, split
+// into tokens, and require ALL meaningful (>=3 chars) tokens from the title
+// to appear in the candidate product name. This avoids false positives —
+// e.g. "Diet Coke 12oz" won't match a plain "Coke Classic" entry — while
+// still catching reasonable rewrites like "Coca-Cola Classic Can" matching
+// our existing "Coca Cola Coke Soda Classic Can".
+async function fuzzyMatchExistingProduct(
+  supabase: ReturnType<typeof createServerClient>,
+  companyId: string,
+  input: { title: string; brand: string | null }
+): Promise<{ id: string; name: string; sku: string; caseSize: number } | null> {
+  const norm = (s: string) =>
+    s.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+  const titleNorm = norm(input.title);
+  if (titleNorm.length < 3) return null;
+
+  const tokens = titleNorm.split(" ").filter((t) => t.length >= 3 && !/^\d+$/.test(t));
+  if (tokens.length === 0) return null;
+
+  // First token is usually the strongest signal — use it for a DB ilike to
+  // cut the candidate pool small, then filter in memory.
+  const primary = tokens[0];
+  const { data: candidates } = await supabase
+    .from("products")
+    .select("id, name, sku, case_size, barcode")
+    .eq("company_id", companyId)
+    .eq("status", "Active")
+    .ilike("name", `%${primary}%`)
+    .limit(50);
+
+  if (!candidates || candidates.length === 0) return null;
+
+  // Prefer candidates without a barcode set (registering an existing
+  // barcode-less product is what the operator usually wants).
+  let best: { row: typeof candidates[0]; score: number } | null = null;
+  for (const row of candidates) {
+    const nameNorm = norm(String(row.name));
+    const hits = tokens.filter((t) => nameNorm.includes(t)).length;
+    const ratio = hits / tokens.length;
+    // Require at least 60% of meaningful tokens to overlap
+    if (ratio < 0.6) continue;
+    // Bonus for already-barcoded matches falling AFTER barcode-less ones
+    const score = ratio + (row.barcode ? 0 : 0.1);
+    if (!best || score > best.score) best = { row, score };
+  }
+  if (!best) return null;
+  return {
+    id: best.row.id as string,
+    name: best.row.name as string,
+    sku: best.row.sku as string,
+    caseSize: (best.row.case_size as number) || 1,
+  };
 }
 
 export async function POST(req: Request) {

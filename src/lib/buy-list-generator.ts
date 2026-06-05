@@ -190,34 +190,49 @@ export async function createPurchaseOrdersFromBuyList(
 ): Promise<string[]> {
   const companyId = await ensureDefaultCompany();
   const supabase = createServerClient();
-  const ids: string[] = [];
 
-  for (const group of buyList.vendorGroups) {
-    const { data: po, error } = await supabase
-      .from("purchase_orders")
-      .insert({
-        company_id: companyId,
-        supplier_name: group.vendor,
-        status: "Draft",
-        total_cost: group.subtotal,
-        created_by: createdBy || null,
-      })
-      .select("id")
-      .single();
-    if (error || !po?.id) throw new Error(`createPO: ${error?.message}`);
+  // The scraped vendor names are not the operator's actual suppliers — they
+  // came from the Nayax product feed and don't reflect who the operator
+  // actually buys from. Roll every recommended line into ONE PO so the
+  // operator can edit/approve as a single purchase document.
+  const allLines = buyList.vendorGroups.flatMap((g) => g.lines);
+  if (allLines.length === 0) return [];
 
-    const lineRows = group.lines.map((l) => ({
-      po_id: po.id,
-      product_id: l.productId,
-      qty_ordered: l.recommendedQty,
-      unit_cost: l.unitCost,
-    }));
-    const { error: linesError } = await supabase.from("po_lines").insert(lineRows);
-    if (linesError) throw new Error(`createPOLines: ${linesError.message}`);
+  const totalCost = Math.round(
+    allLines.reduce((s, l) => s + l.estimatedCost, 0) * 100
+  ) / 100;
 
-    ids.push(po.id as string);
-  }
-  return ids;
+  const { data: po, error } = await supabase
+    .from("purchase_orders")
+    .insert({
+      company_id: companyId,
+      supplier_name: "Purchase Order",
+      status: "Draft",
+      total_cost: totalCost,
+      created_by: createdBy || null,
+    })
+    .select("id")
+    .single();
+  if (error || !po?.id) throw new Error(`createPO: ${error?.message}`);
+
+  const lineRows = allLines.map((l) => ({
+    po_id: po.id,
+    product_id: l.productId,
+    qty_ordered: l.recommendedQty,
+    unit_cost: l.unitCost,
+  }));
+  const { error: linesError } = await supabase.from("po_lines").insert(lineRows);
+  if (linesError) throw new Error(`createPOLines: ${linesError.message}`);
+
+  return [po.id as string];
+}
+
+export async function deletePurchaseOrder(poId: string): Promise<void> {
+  const supabase = createServerClient();
+  // Delete lines first (FK), then the PO itself.
+  await supabase.from("po_lines").delete().eq("po_id", poId);
+  const { error } = await supabase.from("purchase_orders").delete().eq("id", poId);
+  if (error) throw new Error(`deletePurchaseOrder: ${error.message}`);
 }
 
 export type POSummary = {

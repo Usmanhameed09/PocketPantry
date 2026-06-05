@@ -57,6 +57,35 @@ Tips:
 - **Zoom slider** (bottom-left when supported) for small/curved barcodes
 - If a barcode won't read, type it manually in the input below the camera
 
+### Projection settings (Velocity window / Safety stock / Buy-list horizon)
+
+Open **Inventory → Projections** then click the gear/settings button to change how the system forecasts demand. Three knobs:
+
+| Setting | What it does | Default |
+|---|---|---|
+| **Velocity window (weeks)** | How many past weeks of sales the system averages to estimate "units sold per day" for each product. A short window (2–3 weeks) reacts fast to new trends; a long window (8–12 weeks) smooths out one-off spikes. | 6 weeks |
+| **Safety stock (days)** | Extra cushion on top of expected demand. The Buy List adds `safety days × daily sales` to every order so a delayed delivery or a sudden bump in sales doesn't cause a stockout. | 5 days |
+| **Buy-list horizon (days)** | How many days of future demand each weekly purchase should cover. If you order weekly, set this to 7. If you do biweekly runs, set it to 14. | 7 days |
+
+**How they work together in the Buy List formula:**
+
+```
+order_qty = (daily_velocity × seasonal × horizon_days)
+          + (daily_velocity × safety_days)
+          − warehouse_on_hand
+          − units_already_in_machines
+          − units_already_on_open_POs
+```
+
+**Common adjustments:**
+
+- New product just launched? Lower **velocity window** to 2 weeks so the system catches its real trend faster.
+- Just had a stockout? Bump **safety stock** to 7–10 days for a couple of weeks while you build a buffer.
+- Going on vacation / route disruption coming? Raise **buy-list horizon** to 14 so one order covers two weeks.
+- Holiday spike approaching (Halloween, Super Bowl)? Either raise horizon or temporarily increase the seasonal multiplier on the **Seasonal Trends** page.
+
+After saving, the next Buy List run uses the new settings — no need to restart anything.
+
 ### Add a new product manually
 
 1. **Inventory → Products** tab

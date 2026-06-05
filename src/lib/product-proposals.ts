@@ -257,6 +257,12 @@ export type Underperformer = {
 // across the entire fleet. Tunable via env if the operator's data is denser.
 const WEEKLY_VOLUME_FLOOR = Number(process.env.UNDERPERFORMER_WEEKLY_FLOOR) || 0.5;
 const MARGIN_FLOOR_PCT = Number(process.env.UNDERPERFORMER_MARGIN_FLOOR) || 25;
+// Anything selling more than this many units a week is NOT an underperformer
+// regardless of margin — the volume itself is the value. Without this cutoff
+// the page flags fleet bestsellers (Monster, Celsius) just because their
+// stored unit cost is a touch off and the margin reads ~10–20%. Operator
+// feedback (2026-06): "Why is Monster at 50+ units an underperformer?".
+const HIGH_VOLUME_EXEMPTION = Number(process.env.UNDERPERFORMER_HIGH_VOLUME) || 10;
 
 export async function findUnderperformers(): Promise<Underperformer[]> {
   const companyId = await ensureDefaultCompany();
@@ -305,6 +311,8 @@ export async function findUnderperformers(): Promise<Underperformer[]> {
 
     // Skip products with no sales in the window (no data ≠ underperforming)
     if (units30d === 0) continue;
+    // Skip high-volume movers entirely — see HIGH_VOLUME_EXEMPTION comment.
+    if (weekly >= HIGH_VOLUME_EXEMPTION) continue;
 
     const reasons: string[] = [];
     if (weekly < WEEKLY_VOLUME_FLOOR) reasons.push(`only ${weekly.toFixed(1)} units/week (~${units30d}/month)`);
@@ -389,6 +397,101 @@ export async function listReplacementPlans(): Promise<ReplacementPlanRow[]> {
     completedAt: (r.completed_at as string | null) ?? null,
     notes: (r.notes as string | null) ?? null,
   }));
+}
+
+// ──────────────── Trending discovery ────────────────────────────────
+// Ask GPT-4o to suggest products that are trending in the broader market AND
+// look like they'd be a good fit for this operator's catalog. The model sees
+// the existing catalog (so it can avoid suggesting duplicates) plus a list
+// of vending-relevant categories, and returns 5-8 candidates. We persist
+// each one as a Proposed product_proposal so the operator can Approve/Reject
+// from the Trending page like any other proposal.
+
+export type TrendingCandidate = {
+  candidateName: string;
+  category: string;
+  reason: string;
+};
+
+export async function discoverTrendingProducts(): Promise<number> {
+  const companyId = await ensureDefaultCompany();
+  const supabase = createServerClient();
+
+  // Pull the existing catalog so the model can avoid duplicate suggestions.
+  // We page through because there's a 1000-row cap.
+  const existing: string[] = [];
+  const PAGE = 1000;
+  for (let from = 0; from < 20000; from += PAGE) {
+    const { data, error } = await supabase
+      .from("products")
+      .select("name")
+      .eq("company_id", companyId)
+      .neq("status", "Inactive")
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    if (!data || data.length === 0) break;
+    existing.push(...data.map((d) => String(d.name)));
+    if (data.length < PAGE) break;
+  }
+
+  // Cap the prompt size — we just need the model to AVOID suggesting these,
+  // so a representative sample is fine.
+  const sample = existing.slice(0, 250);
+
+  let candidates: TrendingCandidate[] = [];
+  try {
+    const raw = await callOpenAI(
+      `You are a vending-machine assortment advisor. Suggest 5-8 trending snack, candy, or beverage products that are
+       currently popular in the US market based on social media trends, Google Trends, and grocery retail sell-through.
+       Avoid suggesting anything already in the operator's catalog (case-insensitive substring match).
+       Reply with JSON ONLY: { "candidates": [{ "candidateName": "...", "category": "Snacks|Candy|Drinks|Meals", "reason": "1 sentence why it's trending NOW" }] }`,
+      { existingCatalogSample: sample }
+    );
+    const parsed = JSON.parse(raw) as { candidates?: unknown };
+    if (Array.isArray(parsed.candidates)) {
+      candidates = (parsed.candidates as Array<Record<string, unknown>>)
+        .map((c) => ({
+          candidateName: String(c.candidateName || "").trim(),
+          category: String(c.category || "Snacks"),
+          reason: String(c.reason || "").trim(),
+        }))
+        .filter((c) => c.candidateName.length > 0);
+    }
+  } catch (err) {
+    console.warn("[trending] GPT-4o failed:", err);
+    return 0;
+  }
+
+  if (candidates.length === 0) return 0;
+
+  // Don't insert duplicates of existing proposals or catalog items
+  const existingLower = new Set(existing.map((n) => n.toLowerCase()));
+  const { data: openProposals } = await supabase
+    .from("product_proposals")
+    .select("candidate_name")
+    .eq("company_id", companyId)
+    .eq("status", "Proposed");
+  for (const p of openProposals || []) {
+    existingLower.add(String(p.candidate_name).toLowerCase());
+  }
+
+  let added = 0;
+  for (const c of candidates) {
+    if (existingLower.has(c.candidateName.toLowerCase())) continue;
+    try {
+      await createProposal({
+        candidateName: c.candidateName,
+        category: c.category,
+        reason: c.reason || "Trending in the broader market",
+        proposedBy: "ai-trending",
+      });
+      added++;
+      existingLower.add(c.candidateName.toLowerCase());
+    } catch (err) {
+      console.warn("[trending] insert failed:", err);
+    }
+  }
+  return added;
 }
 
 // ──────────────── Trend tags ────────────────────────────────────────

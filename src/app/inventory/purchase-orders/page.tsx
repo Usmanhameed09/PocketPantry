@@ -5,7 +5,7 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import InventoryTabs from "../InventoryTabs";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { Loader2, ExternalLink, ClipboardList } from "lucide-react";
+import { Loader2, ExternalLink, ClipboardList, Trash2 } from "lucide-react";
 import { PAGE_BG, CARD, Th, Td, EmptyState, LoadingBox, Badge, pageContainer } from "../ui";
 
 type PO = {
@@ -33,6 +33,17 @@ export default function PurchaseOrdersPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  async function deletePO(id: string) {
+    if (!confirm("Delete this purchase order? This cannot be undone.")) return;
+    const res = await fetch(`/api/inventory/purchase-orders/${id}`, { method: "DELETE" });
+    const data = await res.json();
+    if (data.success) {
+      await load();
+    } else {
+      alert(data.error || "Failed to delete PO");
+    }
+  }
 
   const filtered = filterStatus === "All" ? pos : pos.filter((p) => p.status === filterStatus);
   const byStatus = pos.reduce((acc, p) => ({ ...acc, [p.status]: (acc[p.status] || 0) + 1 }), {} as Record<string, number>);
@@ -75,26 +86,35 @@ export default function PurchaseOrdersPage() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr>
                   <Th>PO</Th>
-                  <Th>Supplier</Th>
                   <Th>Status</Th>
                   <Th align="right">Lines</Th>
                   <Th align="right">Total</Th>
                   <Th>Created</Th>
-                  <Th width={48}></Th>
+                  <Th width={92}></Th>
                 </tr></thead>
                 <tbody>
                   {filtered.map((p, idx) => (
                     <tr key={p.id} style={{ borderTop: idx === 0 ? "none" : "1px solid #f1f5f9" }}>
                       <Td><span style={{ fontFamily: "ui-monospace, monospace", fontSize: 12, color: "#64748b" }}>{p.id.slice(0, 8)}</span></Td>
-                      <Td><strong>{p.supplier}</strong></Td>
                       <Td><Badge color={STATUS_COLOR[p.status] || "gray"}>{p.status}</Badge></Td>
                       <Td align="right" mono>{p.lineCount}</Td>
                       <Td align="right" mono bold>${p.totalCost.toFixed(2)}</Td>
                       <Td color="#64748b">{new Date(p.createdAt).toLocaleDateString()}</Td>
                       <Td>
-                        <Link href={`/inventory/purchase-orders/${p.id}`} style={{ color: "#16a34a", display: "inline-flex" }}>
-                          <ExternalLink size={16} />
-                        </Link>
+                        <div style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                          <Link href={`/inventory/purchase-orders/${p.id}`} title="Open" style={{ color: "#16a34a", display: "inline-flex" }}>
+                            <ExternalLink size={16} />
+                          </Link>
+                          <button
+                            onClick={() => deletePO(p.id)}
+                            title="Delete PO"
+                            style={{
+                              background: "transparent", border: "none", cursor: "pointer",
+                              color: "#dc2626", display: "inline-flex", padding: 0,
+                            }}>
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
                       </Td>
                     </tr>
                   ))}

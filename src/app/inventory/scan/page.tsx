@@ -270,6 +270,14 @@ export default function ScanPage() {
       if (data.success && data.product) {
         // Known product in our DB → confirm + add case_size units
         setConfirmProduct(data.product);
+      } else if (data.success && data.matchCandidate) {
+        // Server fuzzy-matched against an existing barcode-less product —
+        // offer to attach + add stock instead of registering a duplicate.
+        setMatchCandidate({
+          barcode,
+          existing: data.matchCandidate,
+          externalTitle: data.external?.name || null,
+        });
       } else if (data.success && data.external) {
         // Found via UPCItemDB — pre-fill register form with title, brand, etc.
         const ext = data.external;
@@ -298,6 +306,50 @@ export default function ScanPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // "Match candidate" modal state: when the barcode wasn't in our catalog
+  // but the title (or barcode itself) fuzzy-matched an existing product
+  // that has no barcode set, we surface the suggestion to the operator.
+  const [matchCandidate, setMatchCandidate] = useState<{
+    barcode: string;
+    existing: { id: string; name: string; sku: string; caseSize: number };
+    externalTitle: string | null;
+  } | null>(null);
+
+  async function attachToExisting() {
+    if (!matchCandidate) return;
+    setBusy(true);
+    // 1) Attach the scanned barcode to the existing product
+    const attachRes = await fetch("/api/inventory/barcode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        barcode: matchCandidate.barcode,
+        productId: matchCandidate.existing.id,
+      }),
+    });
+    const attachData = await attachRes.json();
+    if (!attachData.success) {
+      setBusy(false);
+      setError(attachData.error || "Failed to attach barcode");
+      return;
+    }
+    // 2) Add 1 case of stock under that product
+    const product: Product = {
+      id: matchCandidate.existing.id,
+      name: matchCandidate.existing.name,
+      sku: matchCandidate.existing.sku,
+      category: "Snacks",
+      vendor: null,
+      unit_cost: 0,
+      default_vend_price: null,
+      case_size: matchCandidate.existing.caseSize,
+      barcode: matchCandidate.barcode,
+      status: "Active",
+    };
+    setMatchCandidate(null);
+    await addStockForProduct(product, product.case_size);
   }
 
   async function addStockForProduct(p: Product, qty: number) {
@@ -726,6 +778,48 @@ export default function ScanPage() {
                 Add
               </BtnPrimary>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Match-candidate modal — barcode unknown, but a similar existing
+          product was found. Operator can attach + add stock in one tap. */}
+      {matchCandidate && (
+        <Modal onClose={() => setMatchCandidate(null)} title="Match found in your inventory" maxWidth={460}>
+          <p style={{ fontSize: 13, color: "#475569", marginTop: 0 }}>
+            Barcode <code style={{ background: "#f1f5f9", padding: "2px 8px", borderRadius: 4 }}>{matchCandidate.barcode}</code>
+            {matchCandidate.externalTitle ? <> matched <strong>{matchCandidate.externalTitle}</strong>, which</> : <> matches</>}
+            {" "}an existing product in your catalog:
+          </p>
+          <div style={{
+            padding: 14, marginBottom: 14, background: "#dcfce7",
+            border: "1px solid #bbf7d0", borderRadius: 10,
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>
+              {matchCandidate.existing.name}
+            </div>
+            <div style={{ fontSize: 12, color: "#475569", marginTop: 2 }}>
+              SKU {matchCandidate.existing.sku} · case size {matchCandidate.existing.caseSize}
+            </div>
+          </div>
+          <p style={{ fontSize: 12, color: "#64748b", marginBottom: 14 }}>
+            Tap <strong>Use this product</strong> to attach this barcode and add 1 case ({matchCandidate.existing.caseSize} units)
+            to warehouse stock. Or skip to register the scan as a brand-new SKU.
+          </p>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <BtnSecondary onClick={() => {
+              const bc = matchCandidate.barcode;
+              setMatchCandidate(null);
+              setRegisterFor(bc);
+              setDraft({ name: "", category: "Snacks", vendor: "", unitCost: "", caseSize: "", defaultVendPrice: "" });
+              setExternalInfo(null);
+            }}>
+              No, register as new
+            </BtnSecondary>
+            <BtnPrimary onClick={attachToExisting} disabled={busy}>
+              {busy ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : <Plus size={16} />}
+              Use this product
+            </BtnPrimary>
           </div>
         </Modal>
       )}

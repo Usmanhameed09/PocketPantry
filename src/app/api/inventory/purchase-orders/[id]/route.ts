@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getPurchaseOrder, transitionPO } from "@/lib/buy-list-generator";
+import { getPurchaseOrder, transitionPO, deletePurchaseOrder } from "@/lib/buy-list-generator";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +26,19 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       return NextResponse.json({ success: true });
     }
     return NextResponse.json({ success: false, error: "Invalid status" }, { status: 400 });
+  } catch (error) {
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : "Failed" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await ctx.params;
+    await deletePurchaseOrder(id);
+    return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : "Failed" },

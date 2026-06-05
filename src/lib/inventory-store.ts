@@ -4,6 +4,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase";
+import { recordStockMovement } from "@/lib/inventory-ledger";
 
 const COMPANY_ID = "00000000-0000-0000-0000-000000000001";
 const COMPANY_NAME = "PocketPantry";
@@ -154,23 +155,44 @@ export async function logRefill(params: {
   machineId: string;
   items: Array<{ productId: string; quantity: number }>;
   refillDate?: string;
+  createdBy?: string | null;
 }): Promise<void> {
-  const supabase = createServerClient();
-  const refillAt = params.refillDate || new Date().toISOString();
-
   for (const item of params.items) {
-    const { error } = await supabase.from("machine_inventory").upsert(
-      {
-        machine_id: params.machineId,
-        product_id: item.productId,
-        last_loaded_qty: item.quantity,
-        estimated_remaining: item.quantity, // Fresh refill = full stock
-        last_refill_at: refillAt,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "machine_id,product_id" }
-    );
-    if (error) throw new Error(`logRefill: ${error.message}`);
+    if (item.quantity <= 0) continue;
+
+    // Acceptance criterion: "Logging a refill subtracts from warehouse
+    // stock and updates 'in machine' stock baseline."
+    //
+    // Both halves go through the ledger. recordStockMovement() writes the
+    // stock_movements row AND reconciles the rollup table for that
+    // location (warehouse_inventory or machine_inventory).
+    const refEventId = `refill-${params.machineId.slice(0, 8)}-${Date.now()}`;
+
+    // Warehouse side: stock leaving (−qty). Auto-reconciles
+    // warehouse_inventory.on_hand from SUM(stock_movements).
+    await recordStockMovement({
+      productId: item.productId,
+      location: "warehouse",
+      qty: -item.quantity,
+      reason: "refill",
+      referenceId: refEventId,
+      notes: `Refill to machine ${params.machineId.slice(0, 8)}`,
+      createdBy: params.createdBy ?? null,
+    });
+
+    // Machine side: stock arriving (+qty). Auto-reconciles
+    // machine_inventory.estimated_remaining and last_loaded_qty by
+    // replaying movements (refill→reset, sale_estimate→subtract).
+    await recordStockMovement({
+      productId: item.productId,
+      location: params.machineId,
+      machineId: params.machineId,
+      qty: item.quantity,
+      reason: "refill",
+      referenceId: refEventId,
+      notes: "Refill from warehouse",
+      createdBy: params.createdBy ?? null,
+    });
   }
 }
 

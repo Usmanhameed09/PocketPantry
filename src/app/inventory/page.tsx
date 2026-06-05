@@ -95,6 +95,10 @@ export default function InventoryPage() {
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState<Category>("All");
   const [statusFilter, setStatusFilter] = useState<"All" | RestockStatus>("All");
+  // Most operators have ~1000 SKUs in the catalog but only ~50 are actually
+  // stocked at any time. Default hides the "0 / 0 / 0" rows that overwhelm
+  // the table; toggle restores them when needed.
+  const [showEmpty, setShowEmpty] = useState(false);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [machines, setMachines] = useState<MachineOption[]>([]);
@@ -168,7 +172,12 @@ export default function InventoryPage() {
       (catFilter === "Drinks" && p.category.toLowerCase().includes("drink")) ||
       (catFilter === "Snacks" && !p.category.toLowerCase().includes("drink"));
     const matchStatus = statusFilter === "All" || p.restockStatus === statusFilter;
-    return matchSearch && matchCat && matchStatus;
+    // Hide products with no warehouse stock, no machine presence, and no
+    // sales activity — they aren't actually in the operation. Toggle to
+    // reveal the full catalog when needed.
+    const isEmpty = p.onHand === 0 && p.inMachines === 0 && p.dailySales === 0;
+    const matchEmpty = showEmpty || !isEmpty;
+    return matchSearch && matchCat && matchStatus && matchEmpty;
   });
 
   const totalInMachines = products.reduce((s, p) => s + p.inMachines, 0);
@@ -339,6 +348,22 @@ export default function InventoryPage() {
                     }}
                   />
                 </div>
+
+                {/* Show-empty toggle — hidden by default because a 1000-row
+                    catalog dump is unusable. Operator can enable it when
+                    setting up new products. */}
+                <label style={{
+                  display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13,
+                  color: "#475569", cursor: "pointer", userSelect: "none",
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={showEmpty}
+                    onChange={(e) => setShowEmpty(e.target.checked)}
+                    style={{ cursor: "pointer" }}
+                  />
+                  Show empty products
+                </label>
               </div>
 
               <div style={{ display: "flex", gap: 10 }}>

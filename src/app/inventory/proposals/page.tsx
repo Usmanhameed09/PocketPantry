@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import InventoryTabs from "../InventoryTabs";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { Loader2, Plus, Sparkles, Check, X } from "lucide-react";
+import { Loader2, Plus, Sparkles, Check, X, TrendingUp } from "lucide-react";
 import {
   PAGE_BG, CARD, EmptyState, LoadingBox, Modal,
   Field, Select, BtnPrimary, BtnSecondary, Badge, pageContainer,
@@ -26,6 +26,28 @@ export default function ProposalsPage() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ candidateName: "", category: "Snacks", reason: "" });
   const [submitting, setSubmitting] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverMsg, setDiscoverMsg] = useState<string | null>(null);
+
+  async function discoverTrending() {
+    setDiscovering(true);
+    setDiscoverMsg(null);
+    try {
+      const res = await fetch("/api/inventory/proposals/discover", { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        setDiscoverMsg(`Added ${data.added} trending candidate${data.added === 1 ? "" : "s"}.`);
+        await load();
+      } else {
+        setDiscoverMsg(data.error || "Discovery failed");
+      }
+    } catch (err) {
+      setDiscoverMsg(err instanceof Error ? err.message : "Discovery failed");
+    } finally {
+      setDiscovering(false);
+      setTimeout(() => setDiscoverMsg(null), 6000);
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -66,10 +88,39 @@ export default function ProposalsPage() {
 
   return (
     <div style={{ minHeight: "100vh", background: PAGE_BG }}>
-      <Header title="Product Proposals" />
+      <Header title="Trending" />
       <InventoryTabs />
 
       <div style={pageContainer(isMobile)}>
+        <div style={{
+          ...CARD, padding: 16, marginBottom: 16,
+          background: "linear-gradient(135deg, #ede9fe 0%, #fce7f3 100%)",
+          border: "1px solid #ddd6fe",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <TrendingUp size={20} color="#6366f1" />
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
+                  Discover trending products
+                </div>
+                <div style={{ fontSize: 12, color: "#475569" }}>
+                  AI scans your full product list, online trends, and category gaps to surface candidates worth adding.
+                </div>
+              </div>
+            </div>
+            <BtnPrimary onClick={discoverTrending} disabled={discovering}>
+              {discovering ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : <Sparkles size={16} />}
+              Find trending now
+            </BtnPrimary>
+          </div>
+          {discoverMsg && (
+            <div style={{ marginTop: 10, fontSize: 13, color: discoverMsg.includes("fail") ? "#dc2626" : "#15803d" }}>
+              {discoverMsg}
+            </div>
+          )}
+        </div>
+
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
           <BtnPrimary onClick={() => setShowForm(true)}>
             <Plus size={16} /> Propose product

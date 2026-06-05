@@ -27,7 +27,7 @@ const TABS = [
   { href: "/inventory/buy-list",         label: "Buy List",       icon: ShoppingCart },
   { href: "/inventory/purchase-orders",  label: "Purchase Orders",icon: ClipboardList },
   { href: "/inventory/alerts",           label: "Alerts",         icon: Bell },
-  { href: "/inventory/proposals",        label: "Proposals",      icon: Sparkles },
+  { href: "/inventory/proposals",        label: "Trending",       icon: Sparkles },
   { href: "/inventory/underperformers",  label: "Underperformers",icon: AlertTriangle },
   { href: "/inventory/replacements",     label: "Replacements",   icon: ArrowRightLeft },
 ];

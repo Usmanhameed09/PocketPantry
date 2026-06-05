@@ -82,6 +82,10 @@ export default function AssistantPage() {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [snapshotMeta, setSnapshotMeta] = useState<{ productsTracked: number; productsWithSales: number } | null>(null);
+  // Agent mode toggle: v2 uses tool-calling (cheaper, can drill into any
+  // entity in the DB on demand); v1 uses the static snapshot. Defaults
+  // to v2. Operator can flip back if they hit something v2 can't answer.
+  const [useV2, setUseV2] = useState(true);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -98,7 +102,8 @@ export default function AssistantPage() {
     setSending(true);
 
     try {
-      const res = await fetch("/api/inventory/assistant", {
+      const endpoint = useV2 ? "/api/inventory/assistant-v2" : "/api/inventory/assistant";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -130,8 +135,23 @@ export default function AssistantPage() {
         }}>
           <Sparkles size={20} color="#6366f1" />
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#3730a3" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#3730a3", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               AI-powered inventory advisor
+              <label style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                fontSize: 11, fontWeight: 600, color: useV2 ? "#15803d" : "#6b7280",
+                background: useV2 ? "#dcfce7" : "#f1f5f9",
+                padding: "3px 10px", borderRadius: 12, cursor: "pointer",
+                border: `1px solid ${useV2 ? "#86efac" : "#d5d9e2"}`,
+              }}>
+                <input
+                  type="checkbox"
+                  checked={useV2}
+                  onChange={(e) => setUseV2(e.target.checked)}
+                  style={{ margin: 0, cursor: "pointer" }}
+                />
+                {useV2 ? "Agent mode (v2)" : "Snapshot mode (v1)"}
+              </label>
             </div>
             <div style={{ fontSize: 12, color: "#475569" }}>
               {snapshotMeta

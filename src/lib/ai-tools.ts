@@ -137,6 +137,52 @@ export const TOOL_DEFINITIONS = [
       parameters: { type: "object", properties: {} },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_buy_list",
+      description:
+        "Current weekly buy list — products that need to be ordered based on " +
+        "projections + on-hand + safety stock. Each item carries caseSize, " +
+        "units, cases, unitCost, unitVendPrice, perUnitMargin, totalCost, " +
+        "reason. CRITICAL: when caseSize=1, present qty as 'units' not 'cases'. " +
+        "Always show unitCost + unitVendPrice when recommending a buy. " +
+        "Use for 'what should I order', 'what's running low', restock questions.",
+      parameters: {
+        type: "object",
+        properties: {
+          top: { type: "integer", description: "Top N items by total cost. Default 10.", default: 10 },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_top_sellers",
+      description:
+        "Top N products by fleet-wide units sold in the last 30 days. " +
+        "Returns name, category, units30d, dailyVelocity, machineCount. " +
+        "Use for 'what's selling best', 'top sellers', 'best products'.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "integer", description: "How many to return. Default 10.", default: 10 },
+          category: { type: "string", description: "Optional category filter (Snacks/Candy/Drinks/Meals)." },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_pipeline_summary",
+      description:
+        "Sales pipeline counts by tier and stage, plus top 5 hottest leads. " +
+        "Use for 'how is my pipeline', 'how many leads', tier distribution questions.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────
@@ -161,6 +207,15 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         return await findLead(String(args.query || ""), Number(args.limit) || 8);
       case "list_open_alerts":
         return await listOpenAlerts();
+      case "get_buy_list":
+        return await getBuyList(Number(args.top) || 10);
+      case "get_top_sellers":
+        return await getTopSellers(
+          Number(args.limit) || 10,
+          args.category ? String(args.category) : undefined
+        );
+      case "get_pipeline_summary":
+        return await getPipelineSummary();
       default:
         return { error: `Unknown tool: ${name}` };
     }
@@ -513,6 +568,168 @@ async function listOpenAlerts(): Promise<ToolResult> {
       createdAt: a.created_at,
     })),
     count: (data || []).length,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_buy_list — wraps the existing buy-list generator so the
+// case-vs-units + unit-price fixes from the v1 snapshot also apply here.
+// ─────────────────────────────────────────────────────────────────────
+
+async function getBuyList(top: number): Promise<ToolResult> {
+  const { generateBuyList } = await import("@/lib/buy-list-generator");
+  const buyList = await generateBuyList();
+  const flat = buyList.vendorGroups.flatMap((g) =>
+    g.lines.map((l) => ({
+      product: l.productName,
+      vendor: l.vendor,
+      caseSize: l.caseSize,
+      cases: l.recommendedCases,
+      units: l.recommendedQty,
+      unitCost: Math.round(l.unitCost * 100) / 100,
+      unitVendPrice: null as number | null, // filled below if available
+      perUnitMargin: null as number | null,
+      totalCost: Math.round(l.estimatedCost * 100) / 100,
+      reason: l.explanation,
+    }))
+  );
+
+  // Enrich with vend price from products table
+  const supabase = createServerClient();
+  const companyId = await ensureDefaultCompany();
+  const lineNames = flat.map((l) => l.product);
+  if (lineNames.length > 0) {
+    const { data: prods } = await supabase
+      .from("products")
+      .select("name, default_vend_price")
+      .eq("company_id", companyId)
+      .in("name", lineNames);
+    const vendByName = new Map((prods || []).map((p) => [p.name as string, p.default_vend_price as number | null]));
+    for (const l of flat) {
+      const vp = vendByName.get(l.product) ?? null;
+      l.unitVendPrice = vp;
+      if (vp && vp > 0) {
+        l.perUnitMargin = Math.round(((vp - l.unitCost) / vp) * 100);
+      }
+    }
+  }
+
+  const sorted = flat.sort((a, b) => b.totalCost - a.totalCost).slice(0, Math.max(1, Math.min(top, 25)));
+  const totalCost = Math.round(flat.reduce((s, l) => s + l.totalCost, 0) * 100) / 100;
+  const totalUnits = flat.reduce((s, l) => s + l.units, 0);
+
+  return {
+    horizonDays: buyList.horizonDays,
+    safetyStockDays: buyList.safetyStockDays,
+    totalUnits,
+    totalCost,
+    lineCount: flat.length,
+    topRecommendations: sorted,
+    note:
+      "When caseSize=1, present as 'units' not 'cases'. Always show " +
+      "unitCost + unitVendPrice when recommending a buy.",
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_top_sellers — last-30-days top movers fleet-wide
+// ─────────────────────────────────────────────────────────────────────
+
+async function getTopSellers(limit: number, category?: string): Promise<ToolResult> {
+  const supabase = createServerClient();
+  const since = dateNDaysAgoInOperatorTz(30);
+
+  const { data: salesRows } = await supabase
+    .from("daily_sales")
+    .select("product_id, units_sold, revenue, machine_id, products(name, category)")
+    .gte("sale_date", since)
+    .range(0, 49999);
+
+  const agg = new Map<string, { name: string; category: string; units: number; revenue: number; machines: Set<string> }>();
+  for (const r of salesRows || []) {
+    const pid = r.product_id as string;
+    const prod = (r as { products?: { name?: string; category?: string } }).products;
+    const cat = prod?.category || "?";
+    if (category && cat.toLowerCase() !== category.toLowerCase()) continue;
+    const e = agg.get(pid) || {
+      name: prod?.name || pid,
+      category: cat,
+      units: 0,
+      revenue: 0,
+      machines: new Set<string>(),
+    };
+    e.units += (r.units_sold as number) || 0;
+    e.revenue += (r.revenue as number) || 0;
+    if (r.machine_id) e.machines.add(r.machine_id as string);
+    agg.set(pid, e);
+  }
+
+  const sorted = Array.from(agg.values())
+    .sort((a, b) => b.units - a.units)
+    .slice(0, Math.max(1, Math.min(limit, 50)))
+    .map((p) => ({
+      name: p.name,
+      category: p.category,
+      units30d: p.units,
+      revenue30d: Math.round(p.revenue * 100) / 100,
+      dailyVelocity: Math.round((p.units / 30) * 100) / 100,
+      machineCount: p.machines.size,
+    }));
+
+  return {
+    windowDays: 30,
+    categoryFilter: category || null,
+    topSellers: sorted,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_pipeline_summary — lead counts + top 5 hottest leads
+// ─────────────────────────────────────────────────────────────────────
+
+async function getPipelineSummary(): Promise<ToolResult> {
+  const supabase = createServerClient();
+  const { data } = await supabase
+    .from("leads")
+    .select("id, business, tier, stage, owner, last_touch_at, is_call_ready")
+    .range(0, 9999);
+
+  const leads = data || [];
+  const byTier: Record<string, number> = { A: 0, B: 0, C: 0, none: 0 };
+  const byStage: Record<string, number> = {};
+  let callReady = 0;
+  for (const l of leads) {
+    const t = (l.tier as string | null)?.toUpperCase() || "none";
+    byTier[t] = (byTier[t] || 0) + 1;
+    const s = (l.stage as string) || "Unknown";
+    byStage[s] = (byStage[s] || 0) + 1;
+    if (l.is_call_ready) callReady++;
+  }
+
+  const tierRank: Record<string, number> = { A: 0, B: 1, C: 2 };
+  const top5 = [...leads]
+    .sort((a, b) => {
+      const ta = tierRank[(a.tier as string | null) || "Z"] ?? 9;
+      const tb = tierRank[(b.tier as string | null) || "Z"] ?? 9;
+      if (ta !== tb) return ta - tb;
+      return (new Date((b.last_touch_at as string) || 0).getTime()) - (new Date((a.last_touch_at as string) || 0).getTime());
+    })
+    .slice(0, 5)
+    .map((l) => ({
+      id: l.id,
+      business: l.business,
+      tier: l.tier,
+      stage: l.stage,
+      owner: l.owner,
+      lastTouchAt: l.last_touch_at,
+    }));
+
+  return {
+    total: leads.length,
+    byTier,
+    byStage,
+    callReady,
+    topHotLeads: top5,
   };
 }
 

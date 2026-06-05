@@ -118,6 +118,15 @@ ANSWER STYLE
 - For dates: today is in miniSnapshot.today. "Yesterday" = subtract 1.
   "Last Monday" = compute from today. If ambiguous, ask.`;
 
+// Debug probe: GET returns which tools are registered. Lets us verify
+// that a deploy actually picked up the latest tool registry.
+export async function GET() {
+  return NextResponse.json({
+    toolCount: TOOL_DEFINITIONS.length,
+    toolNames: TOOL_DEFINITIONS.map((t) => t.function.name),
+  });
+}
+
 export async function POST(req: Request) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {

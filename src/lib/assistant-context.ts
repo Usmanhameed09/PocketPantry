@@ -134,10 +134,25 @@ export type AssistantContext = {
     horizonDays: number;
     safetyStockDays: number;
     totalCases: number;
+    totalUnits: number;
     totalCost: number;
     byVendor: Array<{ vendor: string; items: number; cost: number }>;
+    // Recommendations now carry caseSize + unitCost + unitVendPrice so the
+    // AI can answer "how many units to buy" and "what's the per-unit
+    // sell/buy economics" without us having to ship two separate lookups.
+    // When caseSize=1, the AI must call the qty "units" not "cases" — the
+    // operator's word, per direct feedback.
     topRecommendations: Array<{
-      product: string; vendor: string; cases: number; units: number; cost: number; reason: string;
+      product: string;
+      vendor: string;
+      caseSize: number;
+      cases: number;
+      units: number;
+      unitCost: number;
+      unitVendPrice: number | null;
+      perUnitMargin: number | null;
+      totalCost: number;
+      reason: string;
     }>;
   };
   pricing: {
@@ -267,12 +282,13 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       .select("sale_date, revenue, units_sold")
       .gte("sale_date", dateNDaysAgoInOperatorTz(30))
       .range(0, 9999),
-    // Seasonal trends (most recent run only). Lets the AI answer
-    // "what's peak for Coke" without inventing numbers.
-    supabase.from("seasonal_trends")
-      .select("product_id, current_season, seasonal_change_pct, peak_month, low_month, insight, products(name, category)")
-      .order("created_at", { ascending: false })
-      .limit(40),
+    // Seasonal trends — pulled from the Python prediction-api (Hostinger),
+    // NOT the Supabase `seasonal_trends` table, which is never populated.
+    // The prediction service computes monthly indices from 24+ months of
+    // sales history; the Supabase table was a placeholder that never got
+    // wired up. Without this fetch, the AI says "no seasonal data" when
+    // asked about Coke peak month even though the data exists upstream.
+    fetchSeasonalTrendsFromPredictionApi(),
     supabase.from("products").select("id, name, category, default_vend_price, unit_cost", { count: "exact" }).eq("company_id", companyId).range(0, 9999),
     supabase.from("machines").select("id, name, status").eq("company_id", companyId),
     supabase.from("machine_inventory").select("machine_id, product_id, daily_sales_rate, products(name, category)"),
@@ -689,25 +705,13 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
     }));
 
   // ─── SEASONAL TRENDS ─────────────────────────────────────────────
-  type STRow = {
-    product_id: string;
-    current_season: string;
-    seasonal_change_pct: number | null;
-    peak_month: string | null;
-    low_month: string | null;
-    insight: string | null;
-    products?: { name?: string; category?: string };
-  };
-  const stRows = (seasonalTrendsRes?.data || []) as STRow[];
-  const seasonalTrendsOut = stRows.slice(0, 15).map((s) => ({
-    product: s.products?.name || s.product_id,
-    category: s.products?.category || "?",
-    peakMonth: s.peak_month || "?",
-    lowMonth: s.low_month || "?",
-    swingPct: Math.round(((s.seasonal_change_pct as number) || 0)),
-    monthlyIndex: {}, // Detailed per-month index lives on the predictions
-                     // page; AI should reference it from there if asked.
-  }));
+  // seasonalTrendsRes is already the array returned by
+  // fetchSeasonalTrendsFromPredictionApi (it normalised the upstream
+  // shape into the snapshot's expected shape — see helper at bottom).
+  // Cap to 30 products to keep the snapshot under the 30k TPM ceiling
+  // while still covering enough of the catalog that questions about
+  // mid-volume products (like Coke 12oz) land.
+  const seasonalTrendsOut = (Array.isArray(seasonalTrendsRes) ? seasonalTrendsRes : []).slice(0, 30);
 
   // ─── EMAIL REPLIES ───────────────────────────────────────────────
   const replyRows = (emailRepliesRes.data || []) as Array<{
@@ -863,6 +867,39 @@ async function fetchDailySales(
   return data || [];
 }
 
+// Fetch seasonal trends from the Python prediction-api service. Falls back
+// to an empty array on any error so the snapshot still builds (the AI will
+// then plainly say "I don't have that data" instead of inventing one).
+async function fetchSeasonalTrendsFromPredictionApi(): Promise<AssistantContext["seasonalTrends"]> {
+  const base = process.env.PREDICTION_API_URL || "";
+  if (!base) return [];
+  try {
+    const res = await fetch(`${base}/api/predictions`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const raw = (data?.seasonalTrends || []) as Array<{
+      product?: string;
+      peakMonth?: string;
+      lowMonth?: string;
+      swing?: number;
+      seasonalChange?: number;
+      monthlyIndex?: Record<string, number>;
+    }>;
+    return raw
+      .filter((s) => s.product && (s.peakMonth || s.lowMonth))
+      .map((s) => ({
+        product: String(s.product),
+        category: "?",
+        peakMonth: String(s.peakMonth || "?"),
+        lowMonth: String(s.lowMonth || "?"),
+        swingPct: Math.round(Number(s.swing ?? s.seasonalChange ?? 0)),
+        monthlyIndex: (s.monthlyIndex || {}) as Record<string, number>,
+      }));
+  } catch {
+    return [];
+  }
+}
+
 async function buildBuyListSummary(
   supabase: ReturnType<typeof createServerClient>,
   projections: Awaited<ReturnType<typeof getProjections>>,
@@ -873,7 +910,8 @@ async function buildBuyListSummary(
   if (projections.length === 0) {
     return {
       available: false, horizonDays: 7, safetyStockDays: 5,
-      totalCases: 0, totalCost: 0, byVendor: [], topRecommendations: [],
+      totalCases: 0, totalUnits: 0, totalCost: 0,
+      byVendor: [], topRecommendations: [],
     };
   }
 
@@ -889,13 +927,17 @@ async function buildBuyListSummary(
     if (open > 0) reservedById.set(l.product_id, (reservedById.get(l.product_id) || 0) + open);
   }
 
-  // Vendor + case_size lookup
+  // Vendor + case_size + per-unit price/cost lookup. We pull
+  // default_vend_price + unit_cost too so the AI can show the operator
+  // unit-level economics next to each buy recommendation — they wanted
+  // "what's the selling price per unit", not "case cost".
   const productIds = projections.map((p) => p.productId);
   const { data: prodVendors } = await supabase
-    .from("products").select("id, vendor, case_size")
+    .from("products").select("id, vendor, case_size, default_vend_price, unit_cost")
     .in("id", productIds.length > 0 ? productIds : ["00000000-0000-0000-0000-000000000000"]);
   const vendorById = new Map((prodVendors || []).map((p) => [p.id as string, ((p.vendor as string) || "Default")]));
   const caseSizeById = new Map((prodVendors || []).map((p) => [p.id as string, Math.max(1, (p.case_size as number) || 1)]));
+  const vendPriceById = new Map((prodVendors || []).map((p) => [p.id as string, (p.default_vend_price as number | null) ?? null]));
 
   // In-machine stock (sum across machines)
   const { data: machineInv } = await supabase
@@ -916,11 +958,20 @@ async function buildBuyListSummary(
     const need = velocity * HORIZON + velocity * SAFETY - onHand - inMachines - reserved;
     const cases = need > 0 ? Math.ceil(need / caseSize) : 0;
     const units = cases * caseSize;
+    const unitCost = p.cost;
+    const unitVendPrice = vendPriceById.get(p.productId) ?? null;
+    const perUnitMargin = unitVendPrice && unitVendPrice > 0
+      ? Math.round(((unitVendPrice - unitCost) / unitVendPrice) * 100)
+      : null;
     return {
       product: p.productName,
       vendor: vendorById.get(p.productId) || "Default",
+      caseSize,
       cases, units,
-      cost: Math.round(units * p.cost * 100) / 100,
+      unitCost: Math.round(unitCost * 100) / 100,
+      unitVendPrice,
+      perUnitMargin,
+      totalCost: Math.round(units * unitCost * 100) / 100,
       reason: cases > 0
         ? `${velocity.toFixed(2)}/d × ${HORIZON + SAFETY}d − ${onHand + inMachines + reserved} on hand`
         : "no order needed",
@@ -928,18 +979,19 @@ async function buildBuyListSummary(
   }).filter((l) => l.cases > 0);
 
   const totalCases = lines.reduce((s, l) => s + l.cases, 0);
-  const totalCost = Math.round(lines.reduce((s, l) => s + l.cost, 0) * 100) / 100;
+  const totalUnits = lines.reduce((s, l) => s + l.units, 0);
+  const totalCost = Math.round(lines.reduce((s, l) => s + l.totalCost, 0) * 100) / 100;
   const vendorMap = new Map<string, { items: number; cost: number }>();
   for (const l of lines) {
     const e = vendorMap.get(l.vendor) || { items: 0, cost: 0 };
     e.items++;
-    e.cost += l.cost;
+    e.cost += l.totalCost;
     vendorMap.set(l.vendor, e);
   }
   const byVendor = Array.from(vendorMap.entries())
     .map(([vendor, e]) => ({ vendor, items: e.items, cost: Math.round(e.cost * 100) / 100 }))
     .sort((a, b) => b.cost - a.cost);
-  const topRecommendations = lines.sort((a, b) => b.cost - a.cost).slice(0, 10);
+  const topRecommendations = lines.sort((a, b) => b.totalCost - a.totalCost).slice(0, 10);
 
   // Mark products as referenced (avoid unused-var warning if we extend later)
   void products;
@@ -947,7 +999,8 @@ async function buildBuyListSummary(
   return {
     available: true,
     horizonDays: HORIZON, safetyStockDays: SAFETY,
-    totalCases, totalCost, byVendor, topRecommendations,
+    totalCases, totalUnits, totalCost,
+    byVendor, topRecommendations,
   };
 }
 

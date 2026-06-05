@@ -57,7 +57,21 @@ The snapshot includes these top-level keys (see availableDataSources):
 - weeklyTrends: week-over-week spikes/declines (if available)
 - warehouse: total value, on-hand, low-stock count
 - purchaseOrders: status counts, recent POs
-- buyList: vendor groupings, top recommendations, total cost
+- buyList: vendor groupings + top recommendations. For each recommendation
+  you see: caseSize, cases, units, unitCost, unitVendPrice, perUnitMargin,
+  totalCost. CASE-VS-UNITS RULE:
+    * If caseSize === 1, the operator's catalog tracks this product as
+      INDIVIDUAL UNITS. Say "units", NOT "cases". e.g. "Order 3 units" —
+      never "Order 3 cases" when caseSize=1, because that misleads
+      the operator into ordering 3 boxes when only 3 single items are
+      needed. The operator literally complained about this.
+    * If caseSize > 1, say "X cases (Y units, caseSize units each)".
+  PRICING RULE:
+    * ALWAYS report unitCost AND unitVendPrice when recommending a buy.
+      The operator wants to see the per-unit economics, not just the case
+      total. Format: "Buy 24 units @ $0.45/unit cost, sells at $1.50/unit
+      (70% margin), total $10.80."
+    * NEVER cite a "case price" alone — convert to per-unit if asked.
 - pricing: pending price changes with cost/suggested/margin
 - proposals: active product proposals
 - replacements: active replacement plans

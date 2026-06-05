@@ -1,34 +1,126 @@
 # 10 — Advertising
 
-**What it's for:** Track ad campaigns running on your vending machines. Manage clients, ad creatives, machines, billing, and impression tracking.
+> SOP for tracking ad campaigns running on your vending machines —
+> managing clients, ad creatives, billing, and impression tracking.
 
-## How to get there
+## How to open it
 
-Sidebar → **Advertising**.
+Click **Advertising** in the left sidebar.
 
-## What you see
+The page has 3 tabs at the top.
 
-### Three sub-tabs
+---
 
-| Tab | What it covers |
-|---|---|
-| **Campaigns** | Every ad campaign (active, scheduled, completed, paused) |
-| **Machines** | Which machines are running ads + slot utilization |
-| **Reports** | Performance — impressions, scans, revenue per campaign |
+# Tasks
 
-## Campaigns tab
+## Task 1 — Create a new ad campaign
+
+**When to do it:** When you've signed a new advertiser.
+
+1. Click **Advertising** in the sidebar.
+2. Click the **Campaigns** tab.
+3. Click the green **+ New Campaign** button.
+4. A form opens. Fill in:
+   - **Client name** + contact email.
+   - **Ad name** (e.g. "Summer Promo").
+   - **Start date** + **end date**.
+   - **Daily rate** ($) — what you're charging the client per day.
+   - **Machine(s)** — multi-select the machines the ad will run on.
+5. Click **Save**.
+
+✅ **What you should see:** The campaign appears in the Campaigns list with status:
+- **Scheduled** if the start date is in the future.
+- **Active** if the start date is today.
+
+---
+
+## Task 2 — Pause a running campaign
+
+**When to do it:** When the client asks to pause temporarily.
+
+1. Click **Advertising** in the sidebar.
+2. Click the **Campaigns** tab.
+3. Find the campaign in the list.
+4. Click the **Pause** button on the row.
+
+✅ **What you should see:** Status badge flips from Active to Paused. The ad stops running.
+
+▶ **To resume:** Click **Resume** on the same row.
+
+---
+
+## Task 3 — End a campaign early
+
+**When to do it:** When a campaign needs to wrap up before the original end date.
+
+1. Click **Advertising** in the sidebar.
+2. Click the **Campaigns** tab.
+3. Find the campaign row.
+4. Click **Edit**.
+5. Change the **end date** to today.
+6. Click **Save**.
+
+✅ **What you should see:** Status flips to **Completed**. Total revenue is recalculated for the actual number of days run.
+
+---
+
+## Task 4 — Generate an invoice for a client
+
+**When to do it:** Weekly or monthly, when billing each advertiser.
+
+1. Click **Advertising** in the sidebar.
+2. Click the **Campaigns** tab.
+3. Find the campaign.
+4. Click the **Download invoice** button.
+5. A PDF is generated.
+
+✅ **What you should see:** A PDF in your downloads folder, ready to email to the client.
+
+💡 **Note:** The invoice covers the period from campaign start through the day you download it. For weekly billing, download every Friday.
+
+---
+
+## Task 5 — Find empty ad slots to sell
+
+**When to do it:** When you're pitching new advertisers.
+
+1. Click **Advertising** in the sidebar.
+2. Click the **Machines** tab.
+3. Look at the **Used slots** column — anything less than the Total slots = available slot.
+4. Note the **Avg daily transactions** column for those machines — high transactions = more attractive ad inventory.
+5. Use these numbers in your pitch.
+
+✅ **What you should see:** A clear list of machines with open slots + the daily traffic for each.
+
+---
+
+## Task 6 — Track QR scans on an ad campaign
+
+**When to do it:** When you've added a unique QR code to an ad creative and want to see how it's performing.
+
+1. Click **Advertising** in the sidebar.
+2. Click the **Reports** tab.
+3. Find the campaign in the list.
+4. Look at:
+   - **QR scans** column — total scans of the campaign's QR code.
+   - **Daily breakdown** chart — scans per day.
+
+✅ **What you should see:** Real engagement numbers you can show the client.
+
+---
+
+# Reference (what each tab shows)
+
+## Tab 1 — Campaigns
 
 ### Top stat tiles
+- **Active campaigns** — currently running today.
+- **Total revenue this month** — ad revenue MTD.
+- **Scheduled** — campaigns starting soon.
+- **Paused** — temporarily off.
 
-- **Active campaigns** — currently running today
-- **Total revenue this month** — ad revenue MTD
-- **Scheduled** — campaigns starting soon
-- **Paused** — temporarily off
-
-### Campaign list
-
-Each row shows:
-- Client name + contact (email)
+### Campaign list columns
+- Client name + contact email
 - Ad name (creative title)
 - Status badge: Active / Scheduled / Completed / Paused
 - Machines the ad runs on
@@ -36,92 +128,53 @@ Each row shows:
 - Daily rate ($) charged to the client
 - Total revenue (daily rate × days run)
 
-### Campaign actions
+### Available actions per row
+- **Edit** — update dates, daily rate, machines, status.
+- **Pause / Resume** — quick toggle.
+- **Download invoice** — generates an invoice PDF.
 
-- **+ New Campaign** — create one (form opens)
-- **Edit** on any row — update dates, daily rate, machines, status
-- **Pause / Resume** — quick toggle
-- **Download invoice** — generates an invoice PDF for the client
+## Tab 2 — Machines
 
-## Machines tab
+Each machine's ad capacity.
 
-Shows each machine's ad capacity. Each row:
-- Machine name + ID
-- **Total slots** — how many ad slots the machine has (typically 4)
-- **Used slots** — how many are currently filled by active campaigns
-- **Avg daily transactions** — for impression estimating
-- Active campaigns running on this machine
+| Column | What it shows |
+|---|---|
+| Machine name + ID | Identifies the machine |
+| **Total slots** | How many ad slots the machine has (typically 4) |
+| **Used slots** | How many are filled by active campaigns |
+| **Avg daily transactions** | For impression estimating |
+| Active campaigns | What's running on this machine |
 
-**Use this for:** Selling ad space. See which machines have empty slots → pitch to clients.
-
-## Reports tab
+## Tab 3 — Reports
 
 Per-campaign performance:
-- **Impressions** — estimated views (based on machine's daily transactions × days running)
-- **QR scans** — actual scans of the ad's QR code (if it has one)
-- **Revenue** — what you've billed the client
-- **Daily breakdown** chart — impressions per day
-
-## Common workflows
-
-### Create a new campaign
-
-1. Click **+ New Campaign**
-2. Fill in:
-   - Client name + contact email
-   - Ad name (e.g., "Summer Promo")
-   - Start + end dates
-   - Daily rate ($)
-   - Machine(s) to run on (multi-select)
-3. Save → status = Scheduled if start date is future, Active if it's today
-
-### Pause a campaign (e.g., client requests)
-
-1. Find the campaign
-2. Click **Pause**
-3. The campaign stops running until you Resume
-
-### End a campaign early
-
-1. Edit the campaign
-2. Change the end date to today
-3. Status flips to Completed
-4. Total revenue calculated for actual days run
-
-### Bill a client
-
-1. Find the campaign
-2. Click **Download invoice** → PDF generates
-3. Send to the client
-
-### Track QR code scans
-
-If your ad creative has a unique QR code:
-
-1. The QR code URL includes a campaign ID
-2. Every scan is logged
-3. View total + daily breakdown in the Reports tab
+- **Impressions** — estimated views (machine's daily transactions × days running).
+- **QR scans** — actual scans of the ad's QR code (if it has one).
+- **Revenue** — what you've billed the client.
+- **Daily breakdown** chart — impressions per day.
 
 ## How impressions are calculated
 
 Impressions ≈ machine's average daily transactions × days the ad ran.
 
-So a campaign on a machine doing 50 transactions/day for 14 days = ~700 impressions.
+Example: a campaign on a machine doing 50 transactions/day for 14 days ≈ 700 impressions.
 
-Real impression count would require ad-display logging from the machine itself; we estimate from sales data as a proxy.
+True impression count would require ad-display logging from the machine itself; we estimate from sales activity as a proxy.
 
-## Common questions
+---
 
-**Q: Can I have multiple ads on the same machine?**
+# Common questions
+
+**Q: Can I run multiple ads on the same machine?**
 A: Yes, up to the machine's slot count (typically 4). The system rotates them.
 
 **Q: What if a machine goes offline during a campaign?**
-A: Impressions stop accruing while offline. Daily revenue still bills (because you committed to the dates) unless you pause the campaign.
+A: Impressions stop accruing while offline. Daily revenue still bills (you committed to the dates) unless you pause the campaign.
 
 **Q: Can I run different ads on different machines under the same campaign?**
-A: One campaign = one creative. To run multiple creatives, create multiple campaigns.
+A: No — one campaign = one creative. For multiple creatives, create multiple campaigns.
 
 **Q: How do I bill a client weekly vs end-of-campaign?**
-A: Generate an invoice anytime — it covers the period from campaign start through the invoice date. Send those weekly if you bill weekly.
+A: Generate an invoice anytime — it covers from campaign start through the invoice date. Send those weekly if you bill weekly.
 
-> **Note:** This menu is a lighter-weight section of the app. If you need to deeply customize ad management (e.g., creative approval workflows, multiple ad networks), let support know.
+> **Note:** This menu is a lighter section of the app. If you need deeper customization (creative approval workflows, multiple ad networks), let support know.

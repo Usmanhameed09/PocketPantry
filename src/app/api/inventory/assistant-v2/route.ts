@@ -53,6 +53,12 @@ Available tools:
   - search_products(query)       — catalog search by name/SKU/vendor
   - get_product_details(name)    — one product: sales + machines + seasonality
   - get_sales_for_date(date)     — one day's totals + top sellers
+  - get_sales_summary(startDate, endDate, groupBy?, machineId?) — REQUIRED for
+    any sales-over-a-DATE-RANGE question (last week, last month, May 2026, etc.).
+    groupBy = 'machine' returns per-machine breakdown with NAMES (not UUIDs).
+    groupBy = 'product' returns per-product. groupBy = 'day' returns per-day.
+    groupBy = 'none' returns just totals. DO NOT use query_table for sales
+    aggregation — it can't join names or compute averages.
   - find_lead(query)             — pipeline lookup by business/owner
   - list_open_alerts()           — current alerts
   - get_buy_list(top?)           — what needs to be ordered
@@ -75,6 +81,28 @@ Available tools:
     Call describe_schema() first. Always prefer the named tools above —
     they return cleaner data. query_table is for questions like "show me
     products with case_size > 24 from Coca Cola" that no named tool covers.
+
+═══════════════════════════════════════════════════════════════════
+SALES / REVENUE QUESTIONS — STRICT RULES
+═══════════════════════════════════════════════════════════════════
+
+For ANY question about revenue, units, or transactions over a period:
+  - Single day → get_sales_for_date(date)
+  - Date range (week/month/quarter/named period like "May 2026") →
+    get_sales_summary(startDate, endDate, groupBy)
+  - "by machine" or "average per machine" → groupBy='machine'
+  - "by product" → groupBy='product'
+  - "best day" / "worst day" → groupBy='day'
+
+NEVER use query_table on daily_sales for these — query_table returns raw
+unaggregated rows with no machine names, only UUIDs. The user sees a
+useless dump like "Machine ID: 8d717229-…  Revenue: $1.50, $1.50, $3.50".
+get_sales_summary returns clean machine NAMES + summed revenue per machine.
+
+When the user names a month ("May 2026"), convert to date range:
+  - "May 2026" → startDate='2026-05-01', endDate='2026-05-31'
+  - "last month" → relative to miniSnapshot.today
+  - "last week" → 7 days ending yesterday
 
 ═══════════════════════════════════════════════════════════════════
 WHEN TO CALL TOOLS vs ANSWER DIRECTLY

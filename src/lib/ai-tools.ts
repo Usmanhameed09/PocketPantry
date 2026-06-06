@@ -111,6 +111,43 @@ export const TOOL_DEFINITIONS = [
   {
     type: "function" as const,
     function: {
+      name: "get_sales_summary",
+      description:
+        "Aggregated sales over a DATE RANGE with optional grouping. Use this " +
+        "for any question of the form 'revenue/units/sales over [period] " +
+        "by [machine|product|day]', e.g. 'average revenue per machine in May 2026', " +
+        "'top 5 days last week', 'units sold per product last month'. " +
+        "Returns TOTAL revenue + units + transactions + dayCount for the period, " +
+        "plus a breakdown array if groupBy is set. Machine and product NAMES " +
+        "are joined in — never just IDs. PREFER this over query_table for " +
+        "anything sales-related.",
+      parameters: {
+        type: "object",
+        properties: {
+          startDate: { type: "string", description: "YYYY-MM-DD (inclusive)." },
+          endDate: { type: "string", description: "YYYY-MM-DD (inclusive)." },
+          groupBy: {
+            type: "string",
+            enum: ["machine", "product", "day", "none"],
+            description: "How to aggregate. Default 'none' = single totals row.",
+          },
+          machineId: {
+            type: "string",
+            description: "Optional: scope to one machine (UUID). Omit for fleet-wide.",
+          },
+          limit: {
+            type: "integer",
+            description: "Max breakdown rows (sorted by revenue DESC). Default 20.",
+            default: 20,
+          },
+        },
+        required: ["startDate", "endDate"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "find_lead",
       description:
         "Search the sales pipeline by business name or owner. Returns lead " +
@@ -394,6 +431,14 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         return await getProductDetails(String(args.name || ""));
       case "get_sales_for_date":
         return await getSalesForDate(String(args.date || ""));
+      case "get_sales_summary":
+        return await getSalesSummary({
+          startDate: String(args.startDate || ""),
+          endDate: String(args.endDate || ""),
+          groupBy: ((args.groupBy as string) || "none") as "machine" | "product" | "day" | "none",
+          machineId: args.machineId ? String(args.machineId) : undefined,
+          limit: Number(args.limit) || 20,
+        });
       case "find_lead":
         return await findLead(String(args.query || ""), Number(args.limit) || 8);
       case "list_open_alerts":
@@ -732,6 +777,137 @@ async function getSalesForDate(date: string): Promise<ToolResult> {
     totalUnits,
     transactions: data.length,
     topProducts,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tool: get_sales_summary — aggregated sales over a date range
+// ─────────────────────────────────────────────────────────────────────
+
+async function getSalesSummary(args: {
+  startDate: string;
+  endDate: string;
+  groupBy: "machine" | "product" | "day" | "none";
+  machineId?: string;
+  limit: number;
+}): Promise<ToolResult> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(args.startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(args.endDate)) {
+    return { error: "startDate and endDate must be YYYY-MM-DD" };
+  }
+  if (args.startDate > args.endDate) {
+    return { error: "startDate must be <= endDate" };
+  }
+  const supabase = createServerClient();
+  // Paginate through daily_sales — Supabase caps at 1000 rows per page.
+  // For a busy month with many machines/products this can run into 5-10k rows.
+  type SalesRow = { sale_date: string; machine_id: string; product_id: string; units_sold: number; revenue: number };
+  const rows: SalesRow[] = [];
+  const PAGE = 1000;
+  for (let from = 0; from < 100000; from += PAGE) {
+    let q = supabase
+      .from("daily_sales")
+      .select("sale_date, machine_id, product_id, units_sold, revenue")
+      .gte("sale_date", args.startDate)
+      .lte("sale_date", args.endDate)
+      .range(from, from + PAGE - 1);
+    if (args.machineId) q = q.eq("machine_id", args.machineId);
+    const { data } = await q;
+    if (!data || data.length === 0) break;
+    rows.push(...(data as SalesRow[]));
+    if (data.length < PAGE) break;
+  }
+
+  if (rows.length === 0) {
+    return {
+      startDate: args.startDate,
+      endDate: args.endDate,
+      totals: { revenue: 0, units: 0, transactions: 0, dayCount: 0 },
+      groupBy: args.groupBy,
+      breakdown: [],
+      message: "No sales recorded in that date range.",
+    };
+  }
+
+  // Totals across the whole range
+  let totalRevenue = 0;
+  let totalUnits = 0;
+  const uniqueDays = new Set<string>();
+  for (const r of rows) {
+    totalRevenue += r.revenue || 0;
+    totalUnits += r.units_sold || 0;
+    uniqueDays.add(r.sale_date);
+  }
+
+  const totals = {
+    revenue: Math.round(totalRevenue * 100) / 100,
+    units: totalUnits,
+    transactions: rows.length,
+    dayCount: uniqueDays.size,
+  };
+
+  if (args.groupBy === "none") {
+    return { startDate: args.startDate, endDate: args.endDate, totals, groupBy: "none", breakdown: [] };
+  }
+
+  // Build the grouped view
+  type Bucket = { key: string; revenue: number; units: number; transactions: number; days: Set<string> };
+  const buckets = new Map<string, Bucket>();
+  for (const r of rows) {
+    let key: string;
+    if (args.groupBy === "machine") key = r.machine_id;
+    else if (args.groupBy === "product") key = r.product_id;
+    else key = r.sale_date;
+    const b = buckets.get(key) || { key, revenue: 0, units: 0, transactions: 0, days: new Set<string>() };
+    b.revenue += r.revenue || 0;
+    b.units += r.units_sold || 0;
+    b.transactions += 1;
+    b.days.add(r.sale_date);
+    buckets.set(key, b);
+  }
+
+  // Resolve names — join to machines/products in a single query each
+  const nameMap = new Map<string, string>();
+  if (args.groupBy === "machine") {
+    const ids = Array.from(buckets.keys());
+    if (ids.length > 0) {
+      const { data } = await supabase.from("machines").select("id, name").in("id", ids);
+      for (const m of data || []) nameMap.set(m.id as string, (m.name as string) || (m.id as string));
+    }
+  } else if (args.groupBy === "product") {
+    const ids = Array.from(buckets.keys());
+    if (ids.length > 0) {
+      const { data } = await supabase.from("products").select("id, name").in("id", ids);
+      for (const p of data || []) nameMap.set(p.id as string, (p.name as string) || (p.id as string));
+    }
+  }
+
+  const cap = Math.min(Math.max(args.limit, 1), 100);
+  const breakdown = Array.from(buckets.values())
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, cap)
+    .map((b) => {
+      const name = args.groupBy === "day" ? b.key : nameMap.get(b.key) || b.key;
+      const avgPerDay = b.days.size > 0 ? b.revenue / b.days.size : 0;
+      const out: Record<string, unknown> = {
+        name,
+        revenue: Math.round(b.revenue * 100) / 100,
+        units: b.units,
+        transactions: b.transactions,
+        activeDays: b.days.size,
+        avgRevenuePerActiveDay: Math.round(avgPerDay * 100) / 100,
+      };
+      if (args.groupBy !== "day") out.id = b.key;
+      return out;
+    });
+
+  return {
+    startDate: args.startDate,
+    endDate: args.endDate,
+    totals,
+    groupBy: args.groupBy,
+    breakdown,
+    breakdownCount: buckets.size,
+    breakdownTruncated: buckets.size > cap ? buckets.size - cap : 0,
   };
 }
 

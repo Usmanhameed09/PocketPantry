@@ -350,6 +350,44 @@ export const TOOL_DEFINITIONS = [
   {
     type: "function" as const,
     function: {
+      name: "get_waste_report",
+      description:
+        "Spoilage + damage report over a date range. Returns total dollars " +
+        "and units lost, event counts, breakdown by category and by product, " +
+        "and a list of recent events. Use for 'how much am I losing to waste', " +
+        "'what spoiled last month', 'top waste products'.",
+      parameters: {
+        type: "object",
+        properties: {
+          startDate: { type: "string", description: "YYYY-MM-DD inclusive. Default: 30 days ago." },
+          endDate: { type: "string", description: "YYYY-MM-DD inclusive. Default: today." },
+          limit: { type: "integer", description: "Max items in byProduct + recentEvents. Default 15.", default: 15 },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_inventory_turns",
+      description:
+        "Inventory turnover per product (units sold ÷ avg on hand) over a " +
+        "configurable period. Classifies products as fast / healthy / slow / " +
+        "dead / no_signal so the operator can spot dead stock. Returns fleet " +
+        "summary + per-product turns + days-of-supply. Use for 'what's not " +
+        "moving', 'how fast does X sell through', 'dead stock to trim'.",
+      parameters: {
+        type: "object",
+        properties: {
+          periodDays: { type: "integer", description: "Days to look back. Default 30.", default: 30 },
+          limit: { type: "integer", description: "Max products. Default 30.", default: 30 },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "describe_schema",
       description:
         "Returns the list of tables + columns the AI can query via " +
@@ -477,6 +515,22 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         return await getWarehouseSummary();
       case "get_recent_stock_movements":
         return await getRecentStockMovements(Number(args.limit) || 20);
+      case "get_waste_report": {
+        const { getWasteReport } = await import("@/lib/waste-report");
+        const { dateNDaysAgoInOperatorTz, todayInOperatorTz } = await import("@/lib/operator-timezone");
+        const start = args.startDate ? String(args.startDate) : dateNDaysAgoInOperatorTz(30);
+        const end = args.endDate ? String(args.endDate) : todayInOperatorTz();
+        const lim = Number(args.limit) || 15;
+        const r = await getWasteReport(start, end, lim);
+        return r as unknown as ToolResult;
+      }
+      case "get_inventory_turns": {
+        const { getInventoryTurns } = await import("@/lib/waste-report");
+        const periodDays = Number(args.periodDays) || 30;
+        const lim = Number(args.limit) || 30;
+        const r = await getInventoryTurns(periodDays, lim);
+        return r as unknown as ToolResult;
+      }
       case "describe_schema":
         return describeSchema();
       case "query_table":

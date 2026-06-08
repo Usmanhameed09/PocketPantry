@@ -32,6 +32,7 @@ const TABS = [
   { href: "/inventory/underperformers",  label: "Underperformers",icon: AlertTriangle },
   { href: "/inventory/replacements",     label: "Replacements",   icon: ArrowRightLeft },
   { href: "/inventory/cost-fixer",       label: "Cost Fixer",     icon: Wand2 },
+  { href: "/inventory/waste",            label: "Waste & Turns",  icon: AlertTriangle },
 ];
 
 export default function InventoryTabs() {

@@ -372,15 +372,25 @@ export const TOOL_DEFINITIONS = [
       name: "get_inventory_turns",
       description:
         "Inventory turnover per product (units sold ÷ avg on hand) over a " +
-        "configurable period. Classifies products as fast / healthy / slow / " +
-        "dead / no_signal so the operator can spot dead stock. Returns fleet " +
-        "summary + per-product turns + days-of-supply. Use for 'what's not " +
-        "moving', 'how fast does X sell through', 'dead stock to trim'.",
+        "configurable period. Classifies as fast / healthy / slow / dead / " +
+        "no_signal. Returns fleet summary + per-product turns + days-of-supply. " +
+        "IMPORTANT: when asked about a SPECIFIC bucket (e.g. 'dead stock', " +
+        "'slow movers', 'what isn't moving'), ALWAYS pass classification to " +
+        "filter — without it, fast movers always come back first and the " +
+        "answer is wrong.",
       parameters: {
         type: "object",
         properties: {
           periodDays: { type: "integer", description: "Days to look back. Default 30.", default: 30 },
           limit: { type: "integer", description: "Max products. Default 30.", default: 30 },
+          classification: {
+            type: "string",
+            enum: ["fast", "healthy", "slow", "dead", "no_signal"],
+            description:
+              "Filter to one bucket. Use 'dead' for 'dead stock' / 'what isn't " +
+              "selling'. Use 'slow' for 'underperformers'. Use 'fast' for 'top " +
+              "sellers by turnover'. Omit for a mixed list (fast first).",
+          },
         },
       },
     },
@@ -528,7 +538,16 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         const { getInventoryTurns } = await import("@/lib/waste-report");
         const periodDays = Number(args.periodDays) || 30;
         const lim = Number(args.limit) || 30;
-        const r = await getInventoryTurns(periodDays, lim);
+        // When a classification filter is requested we have to pull a larger
+        // working set, filter, then trim — otherwise the upstream pre-trim
+        // would consume the cap with fast movers and we'd return [].
+        const cls = args.classification ? String(args.classification) : null;
+        const workingLimit = cls ? 1000 : lim;
+        const r = await getInventoryTurns(periodDays, workingLimit);
+        if (cls) {
+          const filtered = r.products.filter((p) => p.classification === cls).slice(0, lim);
+          return { ...r, products: filtered, classification: cls } as unknown as ToolResult;
+        }
         return r as unknown as ToolResult;
       }
       case "describe_schema":

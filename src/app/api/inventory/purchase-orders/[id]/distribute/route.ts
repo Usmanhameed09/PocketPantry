@@ -8,6 +8,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { recordStockMovement } from "@/lib/inventory-ledger";
+import { invalidateOnPOWrite, invalidateOnInventoryWrite } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -83,6 +84,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       refillsCreated++;
     }
 
+    await invalidateOnPOWrite();
+    await invalidateOnInventoryWrite();
     return NextResponse.json({
       success: true,
       refillsCreated,

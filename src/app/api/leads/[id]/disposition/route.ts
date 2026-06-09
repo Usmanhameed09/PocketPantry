@@ -17,6 +17,7 @@
 
 import { NextResponse } from "next/server";
 import { addCallLogAndUpdateStage, getLead } from "@/lib/leads-store";
+import { invalidateOnLeadWrite } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (!ok) {
       return NextResponse.json({ ok: false, error: "Disposition save failed" }, { status: 500 });
     }
+    await invalidateOnLeadWrite();
     return NextResponse.json({ ok: true, leadId, outcome, attempt });
   } catch (error) {
     return NextResponse.json(

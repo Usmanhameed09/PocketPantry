@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAllLeads, getLead } from "@/lib/leads-store";
 import { createServerClient } from "@/lib/supabase";
+import { invalidateOnLeadWrite } from "@/lib/cache";
 
 type ImportLeadInput = {
   business: string;
@@ -176,6 +177,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (imported.length > 0) await invalidateOnLeadWrite();
     return NextResponse.json({
       ok: true,
       importedCount: imported.length,

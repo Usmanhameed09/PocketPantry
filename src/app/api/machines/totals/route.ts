@@ -20,12 +20,30 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { dateNDaysAgoInOperatorTz, todayInOperatorTz } from "@/lib/operator-timezone";
+import { withCache, CACHE_KEYS, TTL } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
+    const daysParam = searchParams.get("days");
+    const bypass = searchParams.get("fresh") === "1";
+    // Build a key per ?days=N so different windows don't share a cache slot.
+    const cacheKey = `${CACHE_KEYS.machinesTotals}:${daysParam || "30"}`;
+    if (bypass) return NextResponse.json(await buildTotals(searchParams));
+    const payload = await withCache(cacheKey, TTL.machinesTotals, () => buildTotals(searchParams));
+    return NextResponse.json(payload);
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, error: e instanceof Error ? e.message : "Failed" },
+      { status: 500 }
+    );
+  }
+}
+
+async function buildTotals(searchParams: URLSearchParams): Promise<Record<string, unknown>> {
+  try {
     const daysParam = searchParams.get("days");
     // "all" means lifetime total — no lower bound on sale_date, just upper
     // bound at today (so future-dated rows don't sneak in). days=N applies
@@ -53,7 +71,7 @@ export async function GET(req: Request) {
         .lte("sale_date", toDate)
         .range(from, from + PAGE - 1);
       if (error) {
-        return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+        return { ok: false, error: error.message };
       }
       if (!data || data.length === 0) break;
       salesRows.push(...(data as Array<{ machine_id: string; units_sold: number; revenue: number }>));
@@ -115,7 +133,7 @@ export async function GET(req: Request) {
       earliestSaleDate = (earliest?.sale_date as string) || null;
     }
 
-    return NextResponse.json({
+    return {
       ok: true,
       days: isAllTime ? "all" : days,
       fromDate: earliestSaleDate || fromDate,
@@ -127,11 +145,8 @@ export async function GET(req: Request) {
       },
       perMachine: perDevice,
       generatedAt: new Date().toISOString(),
-    });
+    };
   } catch (e) {
-    return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : "Failed" },
-      { status: 500 }
-    );
+    return { ok: false, error: e instanceof Error ? e.message : "Failed" };
   }
 }

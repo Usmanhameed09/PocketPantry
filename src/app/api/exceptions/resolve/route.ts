@@ -16,6 +16,13 @@
 
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
+import {
+  invalidateKeys,
+  invalidateOnInventoryWrite,
+  invalidateOnPriceWrite,
+  invalidateOnMachineWrite,
+  CACHE_KEYS,
+} from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +31,10 @@ export async function POST(req: Request) {
     const body = await req.json();
     const type = String(body.type || "");
     const supabase = createServerClient();
+
+    // Every successful resolve type below also invalidates the exceptions
+    // cache so the next list-load shows the fix immediately.
+    const invalidateExceptions = () => invalidateKeys([CACHE_KEYS.exceptions]);
 
     switch (type) {
       case "missing_cost":
@@ -37,6 +48,8 @@ export async function POST(req: Request) {
           .update({ unit_cost: v })
           .eq("id", body.productId);
         if (error) throw error;
+        await invalidateOnPriceWrite();
+        await invalidateExceptions();
         return NextResponse.json({ ok: true, message: `Cost set to $${v.toFixed(2)}.` });
       }
 
@@ -50,6 +63,8 @@ export async function POST(req: Request) {
           .update({ default_vend_price: v })
           .eq("id", body.productId);
         if (error) throw error;
+        await invalidateOnPriceWrite();
+        await invalidateExceptions();
         return NextResponse.json({ ok: true, message: `Vending price set to $${v.toFixed(2)}.` });
       }
 
@@ -83,6 +98,8 @@ export async function POST(req: Request) {
           reason: "count_correction",
           notes: `Auto-reset from ${prev} via Exception Queue`,
         });
+        await invalidateOnInventoryWrite();
+        await invalidateExceptions();
         return NextResponse.json({ ok: true, message: `Reset estimated_remaining from ${prev} to 0 and logged a correction.` });
       }
 
@@ -108,6 +125,8 @@ export async function POST(req: Request) {
           .update({ status: "offline" })
           .eq("id", body.machineId);
         if (error) throw error;
+        await invalidateOnMachineWrite();
+        await invalidateExceptions();
         return NextResponse.json({ ok: true, message: "Marked machine offline." });
       }
 

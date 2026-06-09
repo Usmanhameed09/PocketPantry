@@ -16,6 +16,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { createTask, addBusinessDays } from "@/lib/lead-tasks";
+import { invalidateOnLeadWrite } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +84,7 @@ export async function POST(req: Request) {
       action_data: { date, time, durationMin: durationMin ?? 30, notes: notes || null },
     });
 
+    await invalidateOnLeadWrite();
     return NextResponse.json({
       ok: true,
       meetingAt: meetingAt.toISOString(),

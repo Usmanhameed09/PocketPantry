@@ -15,6 +15,7 @@ import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
 import { todayInOperatorTz, dateNDaysAgoInOperatorTz } from "@/lib/operator-timezone";
 import { readEnv } from "@/lib/runtime-env";
+import { withCache, reportsCacheKey, TTL } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -32,6 +33,33 @@ type DailySaleRow = {
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
+    const bypass = searchParams.get("fresh") === "1";
+    // Build a cache key that captures the full query — different ranges
+    // and per-machine filters get their own slot so we don't serve the
+    // wrong data when the operator switches the filter.
+    const rangeKey = [
+      searchParams.get("from") || "",
+      searchParams.get("to") || "",
+      searchParams.get("days") || "30",
+    ].join("|");
+    const machineKey = searchParams.get("machineId") || "all";
+    if (bypass) return NextResponse.json(await buildReports(searchParams));
+    const payload = await withCache(
+      reportsCacheKey(rangeKey, machineKey),
+      TTL.reports,
+      () => buildReports(searchParams),
+    );
+    return NextResponse.json(payload);
+  } catch (error) {
+    return NextResponse.json(
+      { ok: false, error: error instanceof Error ? error.message : "Failed" },
+      { status: 500 },
+    );
+  }
+}
+
+async function buildReports(searchParams: URLSearchParams): Promise<Record<string, unknown>> {
+  try {
     // Accept either ?days=N (preset) or ?from=YYYY-MM-DD&to=YYYY-MM-DD (custom range).
     // Custom range wins if both are valid; days is the fallback.
     const fromParam = searchParams.get("from");
@@ -275,7 +303,7 @@ export async function GET(req: Request) {
       }
     }
 
-    return NextResponse.json({
+    return {
       success: true,
       range: { days, fromDate: fromStr, toDate: toStr, machineId: machineFilter },
       stats: {
@@ -305,12 +333,9 @@ export async function GET(req: Request) {
           ? "Payment split is from Nayax's last-sales window — may cover a slightly different period than the revenue total above."
           : null,
       },
-    });
+    };
   } catch (error) {
-    return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Failed" },
-      { status: 500 }
-    );
+    return { success: false, error: error instanceof Error ? error.message : "Failed" };
   }
 }
 

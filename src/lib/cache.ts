@@ -130,7 +130,22 @@ export const CACHE_KEYS = {
   leadsDashboard: "leads:dashboard",
   predictions: "predictions:snapshot",
   aiMiniSnapshot: "ai:mini-snapshot",
+  // Second wave
+  reports: "reports:summary",            // dynamic per-range — see prefix below
+  machinesList: "machines:list",
+  machinesTotals: "machines:totals",
+  exceptions: "inventory:exceptions",
+  underperformers: "inventory:underperformers",
+  posList: "inventory:pos:list",
+  proposals: "inventory:proposals",
+  warehouse: "inventory:warehouse",
 } as const;
+
+// Reports caches per date range — build a deterministic key from the
+// URL params so different ranges don't collide in the cache.
+export function reportsCacheKey(range: string, machine?: string) {
+  return `reports:${range}:${machine || "all"}`;
+}
 
 export async function invalidateOnInventoryWrite(): Promise<void> {
   await invalidateKeys([
@@ -140,6 +155,9 @@ export async function invalidateOnInventoryWrite(): Promise<void> {
     CACHE_KEYS.waste,
     CACHE_KEYS.audit,
     CACHE_KEYS.aiMiniSnapshot,
+    CACHE_KEYS.exceptions,
+    CACHE_KEYS.underperformers,
+    CACHE_KEYS.warehouse,
   ]);
 }
 
@@ -149,6 +167,7 @@ export async function invalidateOnPriceWrite(): Promise<void> {
     CACHE_KEYS.inventoryOverview,
     CACHE_KEYS.buyList,
     CACHE_KEYS.audit,
+    CACHE_KEYS.exceptions,
   ]);
 }
 
@@ -159,6 +178,8 @@ export async function invalidateOnPOWrite(): Promise<void> {
     CACHE_KEYS.inventoryOverview,
     CACHE_KEYS.audit,
     CACHE_KEYS.aiMiniSnapshot,
+    CACHE_KEYS.posList,
+    CACHE_KEYS.warehouse,
   ]);
 }
 
@@ -166,6 +187,15 @@ export async function invalidateOnLeadWrite(): Promise<void> {
   await invalidateKeys([
     CACHE_KEYS.leadsDashboard,
     CACHE_KEYS.today,
+  ]);
+}
+
+export async function invalidateOnMachineWrite(): Promise<void> {
+  await invalidateKeys([
+    CACHE_KEYS.today,
+    CACHE_KEYS.machinesList,
+    CACHE_KEYS.machinesTotals,
+    CACHE_KEYS.inventoryOverview,
   ]);
 }
 
@@ -180,4 +210,13 @@ export const TTL = {
   leadsDashboard: 60,       // Pipeline counts: 1 min
   predictions: 1800,        // Python service: 30 min
   aiMiniSnapshot: 30,       // AI snapshot: 30s
+  // Second wave
+  reports: 300,             // Historical date ranges: 5 min
+  machinesList: 60,         // Machine list with status: 1 min
+  machinesTotals: 60,       // Cumulative totals tile: 1 min
+  exceptions: 120,          // Exception queue: 2 min
+  underperformers: 600,     // Slow-moving SKUs: 10 min (changes slowly)
+  posList: 60,              // PO list: 1 min
+  proposals: 300,           // Product proposals: 5 min
+  warehouse: 120,           // Warehouse view: 2 min
 } as const;

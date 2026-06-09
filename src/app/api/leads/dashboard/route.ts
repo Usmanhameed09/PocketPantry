@@ -11,10 +11,23 @@
 
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
+import { withCache, CACHE_KEYS, TTL } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
+  try {
+    const bypass = new URL(req.url).searchParams.get("fresh") === "1";
+    const payload = bypass
+      ? await buildDashboard()
+      : await withCache(CACHE_KEYS.leadsDashboard, TTL.leadsDashboard, buildDashboard);
+    return NextResponse.json(payload);
+  } catch (e) {
+    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : "Failed" }, { status: 500 });
+  }
+}
+
+async function buildDashboard(): Promise<Record<string, unknown>> {
   try {
     const supabase = createServerClient();
     const { data: leads } = await supabase
@@ -68,7 +81,7 @@ export async function GET() {
       dueToday = count || 0;
     } catch { /* table may not exist */ }
 
-    return NextResponse.json({
+    return {
       ok: true,
       tiers: {
         A: { ...byTier.A, conversionPct: conversion(byTier.A) },
@@ -82,8 +95,8 @@ export async function GET() {
       today: { callReady, dueToday, noNextAction },
       sla: { open: slaCount || 0, sample: slaTasks || [] },
       generatedAt: new Date().toISOString(),
-    });
+    };
   } catch (e) {
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : "Failed" }, { status: 500 });
+    return { ok: false, error: e instanceof Error ? e.message : "Failed" };
   }
 }

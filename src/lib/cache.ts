@@ -139,6 +139,10 @@ export const CACHE_KEYS = {
   posList: "inventory:pos:list",
   proposals: "inventory:proposals",
   warehouse: "inventory:warehouse",
+  // Third wave (identified by latency audit)
+  pricingCatalog: "pricing:catalog",      // ~16s without cache
+  projections: "inventory:projections",   // ~5.8s without cache
+  alerts: "inventory:alerts",             // ~1.5s
 } as const;
 
 // Reports caches per date range — build a deterministic key from the
@@ -158,12 +162,15 @@ export async function invalidateOnInventoryWrite(): Promise<void> {
     CACHE_KEYS.exceptions,
     CACHE_KEYS.underperformers,
     CACHE_KEYS.warehouse,
+    CACHE_KEYS.projections,
+    CACHE_KEYS.alerts,
   ]);
 }
 
 export async function invalidateOnPriceWrite(): Promise<void> {
   await invalidateKeys([
     CACHE_KEYS.pricingAnalyses,
+    CACHE_KEYS.pricingCatalog,
     CACHE_KEYS.inventoryOverview,
     CACHE_KEYS.buyList,
     CACHE_KEYS.audit,
@@ -219,4 +226,8 @@ export const TTL = {
   posList: 60,              // PO list: 1 min
   proposals: 300,           // Product proposals: 5 min
   warehouse: 120,           // Warehouse view: 2 min
+  // Third wave
+  pricingCatalog: 180,      // Pricing page (heavy): 3 min
+  projections: 300,         // Projections page (heavy): 5 min
+  alerts: 60,               // Alerts feed: 1 min
 } as const;

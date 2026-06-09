@@ -6,6 +6,7 @@ import {
   savePricingDecision,
   type PricingCatalogProduct,
 } from "@/lib/live-pricing-catalog";
+import { withCache, CACHE_KEYS, TTL, invalidateOnPriceWrite } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -53,22 +54,15 @@ function mapCatalogItem(
   };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const products = await getPricingCatalog();
-    const savedAnalyses = await getSavedPricingAnalyses();
-    return NextResponse.json(
-      {
-        success: true,
-        data: products.map((product) => mapCatalogItem(product, savedAnalyses[product.id])),
-        meta: { total: products.length, savedCount: Object.keys(savedAnalyses).length },
-      },
-      {
-        headers: {
-          "Cache-Control": "no-store, no-cache, must-revalidate",
-        },
-      }
-    );
+    const bypass = new URL(req.url).searchParams.get("fresh") === "1";
+    const payload = bypass
+      ? await buildCatalog()
+      : await withCache(CACHE_KEYS.pricingCatalog, TTL.pricingCatalog, buildCatalog);
+    return NextResponse.json(payload, {
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
+    });
   } catch (error) {
     const e = error as Partial<{ message: string; code: string; details: string; hint: string }> | null;
     const msg = e?.message || (typeof error === "string" ? error : JSON.stringify(error));
@@ -85,6 +79,16 @@ export async function GET() {
       { status: 502 }
     );
   }
+}
+
+async function buildCatalog(): Promise<Record<string, unknown>> {
+  const products = await getPricingCatalog();
+  const savedAnalyses = await getSavedPricingAnalyses();
+  return {
+    success: true,
+    data: products.map((product) => mapCatalogItem(product, savedAnalyses[product.id])),
+    meta: { total: products.length, savedCount: Object.keys(savedAnalyses).length },
+  };
 }
 
 export async function PATCH(req: Request) {
@@ -115,6 +119,7 @@ export async function PATCH(req: Request) {
       }
 
       await savePricingDecision(analysisId, decision, { currentPrice, suggestedPrice });
+      await invalidateOnPriceWrite();
       return NextResponse.json({ success: true });
     }
 
@@ -141,6 +146,7 @@ export async function PATCH(req: Request) {
     }
 
     await saveProductPricing(productId, updates);
+    await invalidateOnPriceWrite();
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json(

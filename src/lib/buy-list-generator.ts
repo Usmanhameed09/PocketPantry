@@ -227,12 +227,31 @@ export async function createPurchaseOrdersFromBuyList(
   return [po.id as string];
 }
 
-export async function deletePurchaseOrder(poId: string): Promise<void> {
+export async function deletePurchaseOrder(poId: string, actor?: string): Promise<void> {
   const supabase = createServerClient();
+  const { data: oldPo } = await supabase
+    .from("purchase_orders")
+    .select("status, total_cost, supplier_name")
+    .eq("id", poId)
+    .maybeSingle();
   // Delete lines first (FK), then the PO itself.
   await supabase.from("po_lines").delete().eq("po_id", poId);
   const { error } = await supabase.from("purchase_orders").delete().eq("id", poId);
   if (error) throw new Error(`deletePurchaseOrder: ${error.message}`);
+
+  const { recordAuditEvent } = await import("@/lib/audit-log");
+  await recordAuditEvent({
+    actionType: "po_delete",
+    entityType: "purchase_order",
+    entityId: poId,
+    entityName: poId.slice(0, 8),
+    actor: actor || null,
+    oldValue: {
+      status: oldPo?.status ?? null,
+      total_cost: oldPo?.total_cost ?? null,
+      supplier_name: oldPo?.supplier_name ?? null,
+    },
+  });
 }
 
 export type POSummary = {
@@ -316,13 +335,36 @@ export async function getPurchaseOrder(poId: string): Promise<PODetail | null> {
   };
 }
 
-export async function transitionPO(poId: string, newStatus: "Approved" | "Purchased" | "Cancelled") {
+export async function transitionPO(
+  poId: string,
+  newStatus: "Approved" | "Purchased" | "Cancelled",
+  actor?: string,
+) {
   const supabase = createServerClient();
+  const { data: oldPo } = await supabase
+    .from("purchase_orders")
+    .select("status, total_cost")
+    .eq("id", poId)
+    .maybeSingle();
+
   const update: Record<string, unknown> = { status: newStatus };
   if (newStatus === "Approved") update.approved_at = new Date().toISOString();
   if (newStatus === "Purchased") update.purchased_at = new Date().toISOString();
   const { error } = await supabase.from("purchase_orders").update(update).eq("id", poId);
   if (error) throw new Error(`transitionPO: ${error.message}`);
+
+  // Audit the status transition so the owner can answer "who approved
+  // PO 6b9a72cc, and when?".
+  const { recordAuditEvent } = await import("@/lib/audit-log");
+  await recordAuditEvent({
+    actionType: "po_status_change",
+    entityType: "purchase_order",
+    entityId: poId,
+    entityName: poId.slice(0, 8),
+    actor: actor || null,
+    oldValue: { status: oldPo?.status ?? null },
+    newValue: { status: newStatus, total_cost: oldPo?.total_cost ?? null },
+  });
 }
 
 export async function receivePOLines(

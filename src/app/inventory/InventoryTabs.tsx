@@ -15,6 +15,7 @@ import {
   ScanLine,
   Bot,
   Wand2,
+  Shield,
 } from "lucide-react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
@@ -33,6 +34,7 @@ const TABS = [
   { href: "/inventory/replacements",     label: "Replacements",   icon: ArrowRightLeft },
   { href: "/inventory/cost-fixer",       label: "Cost Fixer",     icon: Wand2 },
   { href: "/inventory/waste",            label: "Waste & Turns",  icon: AlertTriangle },
+  { href: "/inventory/audit",            label: "Audit Log",      icon: Shield },
 ];
 
 export default function InventoryTabs() {

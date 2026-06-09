@@ -334,13 +334,34 @@ export async function proposeCostFix(input: {
 export async function applyCostFix(
   productId: string,
   newUnitCost: number,
-  caseSize?: number | null
+  caseSize?: number | null,
+  actor?: string | null,
+  notes?: string | null,
 ): Promise<void> {
   const supabase = createServerClient();
+  const { data: oldRow } = await supabase
+    .from("products")
+    .select("name, unit_cost, case_size")
+    .eq("id", productId)
+    .maybeSingle();
   const update: Record<string, unknown> = { unit_cost: newUnitCost };
   if (caseSize && caseSize > 1) update.case_size = caseSize;
   const { error } = await supabase.from("products").update(update).eq("id", productId);
   if (error) throw new Error(`applyCostFix: ${error.message}`);
+
+  // Audit log — cost-fixer is exactly the kind of "owner wants to know
+  // who changed cost from $X to $Y" event the client asked for.
+  const { recordAuditEvent } = await import("@/lib/audit-log");
+  await recordAuditEvent({
+    actionType: "cost_change",
+    entityType: "product",
+    entityId: productId,
+    entityName: (oldRow?.name as string) || productId,
+    actor: actor ?? "cost-fixer",
+    oldValue: { unit_cost: oldRow?.unit_cost ?? null, case_size: oldRow?.case_size ?? null },
+    newValue: { unit_cost: newUnitCost, case_size: caseSize ?? oldRow?.case_size ?? null },
+    notes: notes || "Applied via Cost Fixer",
+  });
 }
 
 // Hard cap for the scan endpoint so a runaway doesn't burn unbounded

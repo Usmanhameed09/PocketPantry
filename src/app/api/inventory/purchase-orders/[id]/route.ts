@@ -22,7 +22,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const { id } = await ctx.params;
     const body = await req.json();
     if (body.status && ["Approved", "Purchased", "Cancelled"].includes(body.status)) {
-      await transitionPO(id, body.status);
+      await transitionPO(id, body.status, body.actor as string | undefined);
       return NextResponse.json({ success: true });
     }
     return NextResponse.json({ success: false, error: "Invalid status" }, { status: 400 });
@@ -34,10 +34,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   }
 }
 
-export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await ctx.params;
-    await deletePurchaseOrder(id);
+    const actor = new URL(req.url).searchParams.get("actor") || undefined;
+    await deletePurchaseOrder(id, actor);
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json(

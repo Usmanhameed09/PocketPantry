@@ -15,13 +15,14 @@ export async function POST(req: Request) {
     }
     let applied = 0;
     const errors: Array<{ productId: string; error: string }> = [];
+    const actor = (body.actor as string | undefined) || "cost-fixer";
     for (const f of fixes) {
       try {
         if (!f.productId || !Number.isFinite(f.newUnitCost) || f.newUnitCost <= 0) {
           errors.push({ productId: f.productId, error: "invalid input" });
           continue;
         }
-        await applyCostFix(f.productId, f.newUnitCost, f.caseSize ?? null);
+        await applyCostFix(f.productId, f.newUnitCost, f.caseSize ?? null, actor, body.reason as string | undefined);
         applied++;
       } catch (e) {
         errors.push({ productId: f.productId, error: e instanceof Error ? e.message : "failed" });

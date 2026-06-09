@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
 import { recordStockMovement } from "@/lib/inventory-ledger";
+import { recordAuditEvent } from "@/lib/audit-log";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +67,23 @@ export async function POST(req: Request) {
       .select("id")
       .single();
     if (error) throw error;
+
+    await recordAuditEvent({
+      actionType: "product_create",
+      entityType: "product",
+      entityId: data.id as string,
+      entityName: body.name,
+      actor: body.actor || null,
+      newValue: {
+        name: body.name,
+        sku,
+        category: body.category || "Snacks",
+        vendor: body.vendor || null,
+        unit_cost: body.unitCost ?? 0,
+        default_vend_price: body.defaultVendPrice ?? null,
+      },
+    });
+
     return NextResponse.json({ success: true, id: data.id });
   } catch (error) {
     return NextResponse.json(
@@ -92,8 +110,73 @@ export async function PATCH(req: Request) {
     if (body.caseSize !== undefined) updates.case_size = body.caseSize;
     if (body.leadTimeDays !== undefined) updates.lead_time_days = body.leadTimeDays;
 
+    // Read the OLD values BEFORE applying the update so we can diff into
+    // the audit log. Critical for the owner's "who changed cost from $X
+    // to $Y" question.
+    const { data: oldRow } = await supabase
+      .from("products")
+      .select("name, unit_cost, default_vend_price, case_size, status, vendor, category, lead_time_days, unit_size, barcode")
+      .eq("id", body.id)
+      .maybeSingle();
+
     const { error } = await supabase.from("products").update(updates).eq("id", body.id);
     if (error) throw error;
+
+    // Emit one audit row per critical field that actually changed. We
+    // split cost/price into their own action_types because the owner
+    // most often asks about THESE specific fields ("who changed cost?").
+    // Other field edits collapse into a single product_edit row.
+    if (oldRow) {
+      const otherChanges: Record<string, { old: unknown; new: unknown }> = {};
+      if (body.unitCost !== undefined && Number(oldRow.unit_cost) !== Number(body.unitCost)) {
+        await recordAuditEvent({
+          actionType: "cost_change",
+          entityType: "product",
+          entityId: body.id,
+          entityName: (oldRow.name as string) || body.id,
+          actor: body.actor || null,
+          oldValue: { unit_cost: oldRow.unit_cost },
+          newValue: { unit_cost: body.unitCost },
+          notes: body.notes || null,
+        });
+      }
+      if (body.defaultVendPrice !== undefined && Number(oldRow.default_vend_price) !== Number(body.defaultVendPrice)) {
+        await recordAuditEvent({
+          actionType: "price_change",
+          entityType: "product",
+          entityId: body.id,
+          entityName: (oldRow.name as string) || body.id,
+          actor: body.actor || null,
+          oldValue: { default_vend_price: oldRow.default_vend_price },
+          newValue: { default_vend_price: body.defaultVendPrice },
+          notes: body.notes || null,
+        });
+      }
+      for (const f of ["name", "category", "vendor", "status", "unit_size", "barcode"]) {
+        if (body[f] !== undefined && (oldRow as Record<string, unknown>)[f] !== body[f]) {
+          otherChanges[f] = { old: (oldRow as Record<string, unknown>)[f], new: body[f] };
+        }
+      }
+      if (body.caseSize !== undefined && Number(oldRow.case_size) !== Number(body.caseSize)) {
+        otherChanges.case_size = { old: oldRow.case_size, new: body.caseSize };
+      }
+      if (body.leadTimeDays !== undefined && Number(oldRow.lead_time_days) !== Number(body.leadTimeDays)) {
+        otherChanges.lead_time_days = { old: oldRow.lead_time_days, new: body.leadTimeDays };
+      }
+      if (Object.keys(otherChanges).length > 0) {
+        await recordAuditEvent({
+          actionType: "product_edit",
+          entityType: "product",
+          entityId: body.id,
+          entityName: (oldRow.name as string) || body.id,
+          actor: body.actor || null,
+          oldValue: Object.fromEntries(Object.entries(otherChanges).map(([k, v]) => [k, v.old])),
+          newValue: Object.fromEntries(Object.entries(otherChanges).map(([k, v]) => [k, v.new])),
+          notes: body.notes || null,
+        });
+      }
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json(

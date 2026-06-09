@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { recordStockMovement, listStockMovements } from "@/lib/inventory-ledger";
 import { resolveAlertsForProduct } from "@/lib/alerts-engine";
+import { recordAuditEvent, type AuditActionType } from "@/lib/audit-log";
+import { createServerClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +50,41 @@ export async function POST(req: Request) {
     if (body.productId && STOCK_IN_REASONS.has(String(body.reason))) {
       try {
         alertsResolved = await resolveAlertsForProduct(String(body.productId));
+      } catch {}
+    }
+
+    // Audit log — critical actions per client story. spoilage/damage/refill/
+    // warehouse_adjust all flow through here. Look up product name once for
+    // the audit row's display column.
+    const reason = String(body.reason);
+    const auditAction: AuditActionType | null =
+      reason === "spoilage" ? "spoilage" :
+      reason === "damage" ? "damage" :
+      reason === "refill" ? "refill" :
+      reason === "count_correction" ? "warehouse_adjust" :
+      null;
+    if (auditAction && body.productId) {
+      try {
+        const supabase = createServerClient();
+        const { data: prod } = await supabase
+          .from("products")
+          .select("name")
+          .eq("id", body.productId)
+          .maybeSingle();
+        await recordAuditEvent({
+          actionType: auditAction,
+          entityType: "stock_movement",
+          entityId: id || String(body.productId),
+          entityName: (prod?.name as string) || String(body.productId),
+          actor: body.createdBy || null,
+          newValue: {
+            qty: Number(body.qty),
+            reason,
+            location: body.location || "warehouse",
+            machine_id: body.machineId ?? null,
+          },
+          notes: body.notes || null,
+        });
       } catch {}
     }
 

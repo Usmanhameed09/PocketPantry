@@ -398,6 +398,32 @@ export const TOOL_DEFINITIONS = [
   {
     type: "function" as const,
     function: {
+      name: "get_audit_log",
+      description:
+        "Critical-action audit log: every cost change, price change, PO " +
+        "status transition, spoilage/damage event, and product edit with " +
+        "who/what/when/old/new. Use for 'who changed the cost of X', " +
+        "'when was PO Y approved', 'what changed last week', auditing.",
+      parameters: {
+        type: "object",
+        properties: {
+          actionType: {
+            type: "string",
+            enum: ["cost_change","price_change","po_status_change","po_delete","product_create","product_edit","spoilage","damage","refill","warehouse_adjust"],
+            description: "Optional filter for one action type.",
+          },
+          entityId: { type: "string", description: "Optional: filter to one entity (product UUID or PO ID)." },
+          actor: { type: "string", description: "Optional: filter by who made the change." },
+          startDate: { type: "string", description: "YYYY-MM-DD inclusive." },
+          endDate: { type: "string", description: "YYYY-MM-DD inclusive." },
+          limit: { type: "integer", description: "Max events. Default 25.", default: 25 },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "describe_schema",
       description:
         "Returns the list of tables + columns the AI can query via " +
@@ -549,6 +575,18 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           return { ...r, products: filtered, classification: cls } as unknown as ToolResult;
         }
         return r as unknown as ToolResult;
+      }
+      case "get_audit_log": {
+        const { listAuditEvents } = await import("@/lib/audit-log");
+        const events = await listAuditEvents({
+          actionType: args.actionType as never,
+          entityId: args.entityId ? String(args.entityId) : undefined,
+          actor: args.actor ? String(args.actor) : undefined,
+          startDate: args.startDate ? String(args.startDate) : undefined,
+          endDate: args.endDate ? String(args.endDate) : undefined,
+          limit: Number(args.limit) || 25,
+        });
+        return { events, count: events.length } as unknown as ToolResult;
       }
       case "describe_schema":
         return describeSchema();

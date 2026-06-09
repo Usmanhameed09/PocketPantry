@@ -1,21 +1,25 @@
 import { NextResponse } from "next/server";
+import { withCache, CACHE_KEYS, TTL } from "@/lib/cache";
 
 const PREDICTION_API = process.env.PREDICTION_API_URL || "http://localhost:5000";
 
-export async function GET() {
+async function fetchPredictions() {
+  const res = await fetch(`${PREDICTION_API}/api/predictions`, { cache: "no-store" });
+  if (!res.ok) {
+    return { success: false, error: "Prediction API unavailable", status: res.status };
+  }
+  return await res.json();
+}
+
+export async function GET(req: Request) {
   try {
-    const res = await fetch(`${PREDICTION_API}/api/predictions`, {
-      cache: "no-store",
-    });
-
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: "Prediction API unavailable" },
-        { status: res.status }
-      );
-    }
-
-    const data = await res.json();
+    const bypass = new URL(req.url).searchParams.get("fresh") === "1";
+    // Predictions are the most expensive read in the app (round trip to
+    // the Python service on the VPS, ~2-5s). 30-min TTL because the
+    // model only retrains on operator action.
+    const data = bypass
+      ? await fetchPredictions()
+      : await withCache(CACHE_KEYS.predictions, TTL.predictions, fetchPredictions);
     return NextResponse.json(data);
   } catch {
     return NextResponse.json(

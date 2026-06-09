@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { applyCostFix } from "@/lib/cost-fixer";
+import { invalidateOnPriceWrite } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -28,6 +29,9 @@ export async function POST(req: Request) {
         errors.push({ productId: f.productId, error: e instanceof Error ? e.message : "failed" });
       }
     }
+    // Cost changes ripple through inventory margin display + buy list math.
+    if (applied > 0) await invalidateOnPriceWrite();
+
     return NextResponse.json({ success: true, applied, errors });
   } catch (error) {
     return NextResponse.json(

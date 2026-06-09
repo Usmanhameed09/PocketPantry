@@ -3,6 +3,7 @@ import { recordStockMovement, listStockMovements } from "@/lib/inventory-ledger"
 import { resolveAlertsForProduct } from "@/lib/alerts-engine";
 import { recordAuditEvent, type AuditActionType } from "@/lib/audit-log";
 import { createServerClient } from "@/lib/supabase";
+import { invalidateOnInventoryWrite } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +88,10 @@ export async function POST(req: Request) {
         });
       } catch {}
     }
+
+    // Spoilage/damage/refill/count-correction all change downstream
+    // numbers (today tile, inventory overview, buy list, waste).
+    await invalidateOnInventoryWrite();
 
     return NextResponse.json({ success: true, id, alertsResolved });
   } catch (error) {

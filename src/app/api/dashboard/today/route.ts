@@ -15,11 +15,29 @@ import { listAlerts } from "@/lib/alerts-engine";
 import { generateBuyList } from "@/lib/buy-list-generator";
 import { getSavedPricingAnalyses } from "@/lib/live-pricing-catalog";
 import { todayInOperatorTz, dateNDaysAgoInOperatorTz } from "@/lib/operator-timezone";
+import { withCache, CACHE_KEYS, TTL } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function GET() {
+export async function GET(req: Request) {
+  try {
+    // Bypass cache when ?fresh=1 — for manual refresh buttons + the AI
+    // agent when it explicitly wants live numbers.
+    const bypass = new URL(req.url).searchParams.get("fresh") === "1";
+    const payload = bypass
+      ? await buildTodayPayload()
+      : await withCache(CACHE_KEYS.today, TTL.today, buildTodayPayload);
+    return NextResponse.json(payload);
+  } catch (error) {
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : "Failed" },
+      { status: 500 }
+    );
+  }
+}
+
+async function buildTodayPayload(): Promise<Record<string, unknown>> {
   try {
     const companyId = await ensureDefaultCompany();
     const supabase = createServerClient();
@@ -216,7 +234,7 @@ export async function GET() {
       intent: replyRows[0].intent,
     } : null;
 
-    return NextResponse.json({
+    return {
       success: true,
       generatedAt: new Date().toISOString(),
       sales: {
@@ -260,12 +278,12 @@ export async function GET() {
       },
       priceChanges,
       recentReply,
-    });
+    };
   } catch (error) {
-    return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Failed" },
-      { status: 500 }
-    );
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Failed",
+    };
   }
 }
 

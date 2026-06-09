@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPurchaseOrder, transitionPO, deletePurchaseOrder } from "@/lib/buy-list-generator";
+import { invalidateOnPOWrite } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const body = await req.json();
     if (body.status && ["Approved", "Purchased", "Cancelled"].includes(body.status)) {
       await transitionPO(id, body.status, body.actor as string | undefined);
+      await invalidateOnPOWrite();
       return NextResponse.json({ success: true });
     }
     return NextResponse.json({ success: false, error: "Invalid status" }, { status: 400 });
@@ -39,6 +41,7 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     const { id } = await ctx.params;
     const actor = new URL(req.url).searchParams.get("actor") || undefined;
     await deletePurchaseOrder(id, actor);
+    await invalidateOnPOWrite();
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json(

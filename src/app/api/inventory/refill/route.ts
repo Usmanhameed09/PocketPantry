@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { logRefill, getMachineList, getProductList } from "@/lib/inventory-store";
+import { invalidateOnInventoryWrite } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,10 @@ export async function POST(request: Request) {
     }
 
     await logRefill({ machineId, items, refillDate });
+
+    // Cache invalidation — refill changes warehouse on-hand, machine
+    // estimates, and downstream buy-list + waste numbers.
+    await invalidateOnInventoryWrite();
 
     return NextResponse.json({
       success: true,

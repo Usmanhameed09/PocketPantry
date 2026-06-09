@@ -3,6 +3,7 @@ import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
 import { recordStockMovement } from "@/lib/inventory-ledger";
 import { recordAuditEvent } from "@/lib/audit-log";
+import { invalidateOnInventoryWrite, invalidateOnPriceWrite } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -84,6 +85,7 @@ export async function POST(req: Request) {
       },
     });
 
+    await invalidateOnInventoryWrite();
     return NextResponse.json({ success: true, id: data.id });
   } catch (error) {
     return NextResponse.json(
@@ -175,6 +177,14 @@ export async function PATCH(req: Request) {
           notes: body.notes || null,
         });
       }
+    }
+
+    // Any product mutation can shift the inventory overview + buy list;
+    // if cost/price changed it also affects pricing analyses.
+    if (body.unitCost !== undefined || body.defaultVendPrice !== undefined) {
+      await invalidateOnPriceWrite();
+    } else {
+      await invalidateOnInventoryWrite();
     }
 
     return NextResponse.json({ success: true });

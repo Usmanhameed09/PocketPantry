@@ -318,24 +318,38 @@ export default function MachinesPage() {
           />
         </div>
 
-        {/* Stat Cards */}
-        {machines.length > 0 && (
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
-            gap: 14, marginBottom: 22,
-          }}>
-            <StatCard
-              icon={<DollarSign size={16} color="#059669" />}
-              label="Total Revenue"
-              value={`$${totalRevenue.toFixed(2)}`}
-              sub={syncedAgo ? `synced ${syncedAgo} · $${weeklyRevenue.toFixed(2)} this week` : `$${weeklyRevenue.toFixed(2)} this week`}
-            />
-            <StatCard icon={<ShoppingCart size={16} color="#3b82f6" />} label="Paid Orders" value={String(totalOrders)} sub={`${totalItems} items sold`} />
-            <StatCard icon={<Package size={16} color="#8b5cf6" />} label="Machines" value={String(counts.total)} sub={`${counts.healthy} healthy`} />
-            <StatCard icon={<CheckCircle2 size={16} color="#f59e0b" />} label="Avg / Machine" value={counts.total ? `$${(totalRevenue / counts.total).toFixed(2)}` : "--"} sub={counts.total ? `${Math.round(totalOrders / counts.total)} orders avg` : ""} />
-          </div>
-        )}
+        {/* Stat Cards — always rendered. Show "—" while data is loading
+            so the page layout doesn't shift when the fetch resolves. */}
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
+          gap: 14, marginBottom: 22,
+        }}>
+          <StatCard
+            icon={<DollarSign size={16} color="#059669" />}
+            label="Total Revenue"
+            value={loading ? "—" : `$${totalRevenue.toFixed(2)}`}
+            sub={loading ? "loading…" : (syncedAgo ? `synced ${syncedAgo} · $${weeklyRevenue.toFixed(2)} this week` : `$${weeklyRevenue.toFixed(2)} this week`)}
+          />
+          <StatCard
+            icon={<ShoppingCart size={16} color="#3b82f6" />}
+            label="Paid Orders"
+            value={loading ? "—" : String(totalOrders)}
+            sub={loading ? "loading…" : `${totalItems} items sold`}
+          />
+          <StatCard
+            icon={<Package size={16} color="#8b5cf6" />}
+            label="Machines"
+            value={loading ? "—" : String(counts.total)}
+            sub={loading ? "loading…" : `${counts.healthy} healthy`}
+          />
+          <StatCard
+            icon={<CheckCircle2 size={16} color="#f59e0b" />}
+            label="Avg / Machine"
+            value={loading ? "—" : (counts.total ? `$${(totalRevenue / counts.total).toFixed(2)}` : "--")}
+            sub={loading ? "loading…" : (counts.total ? `${Math.round(totalOrders / counts.total)} orders avg` : "")}
+          />
+        </div>
 
         {/* Top bar: search + refresh */}
         <div style={{
@@ -414,16 +428,18 @@ export default function MachinesPage() {
           />
         </div>
 
-        {/* Loading State */}
+        {/* Machine list — shows a slim loading bar while fetching, but the
+            rest of the page (stats, controls) is already visible. */}
         {loading ? (
           <div style={{
             background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
-            padding: "60px 0", textAlign: "center",
+            padding: "24px 28px", display: "flex", alignItems: "center", gap: 10,
           }}>
-            <Loader2 size={24} color="#9ca3af" style={{ animation: "spin 1s linear infinite", margin: "0 auto" }} />
-            <div style={{ fontSize: 14, color: "#94a3b8", marginTop: 12 }}>
-              Fetching machines from API...
-            </div>
+            <Loader2 size={16} color="#9ca3af" style={{ animation: "spin 1s linear infinite" }} />
+            <span style={{ fontSize: 13, color: "#94a3b8" }}>
+              Fetching machines from Nayax + HAHA — the stats above and platform
+              badges are already live.
+            </span>
           </div>
         ) : machines.length === 0 ? (
           /* Empty State */

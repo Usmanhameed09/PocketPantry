@@ -103,32 +103,43 @@ export default function ReportsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  if (loading) {
-    return (
-      <div style={{ minHeight: "100vh" }}>
-        <Header title="Reports" />
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 400 }}>
-          <Loader2 size={32} color="#16a34a" style={{ animation: "spin 1s linear infinite" }} />
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        </div>
-      </div>
-    );
-  }
-
-  if (error || !data) {
+  // Show the date controls + tab bar IMMEDIATELY. Don't block the page on
+  // the report fetch. Each tab body shows a small loading hint until data
+  // arrives. Error state still gets a full-page banner since without
+  // data there's nothing useful to render under the controls.
+  if (error && !data) {
     return (
       <div style={{ minHeight: "100vh" }}>
         <Header title="Reports" />
         <div style={{ padding: 40 }}>
           <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 20, color: "#dc2626" }}>
-            Could not load reports: {error || "Unknown error"}
+            Could not load reports: {error}
           </div>
         </div>
       </div>
     );
   }
 
-  const { stats, revenueByDay, topSkus, revenueByMachine, machineReport, paymentSplit, inventoryTurns, inventoryNote, dataQuality } = data;
+  // Empty defaults used while data is still loading. The render code below
+  // is the same — placeholders show "—" for numbers, charts show a "Loading
+  // data…" hint instead of empty axes.
+  const stats = data?.stats ?? {
+    totalRevenue: 0, totalCost: 0, netProfit: 0,
+    processingFees: 0, avgMargin: 0,
+    totalUnits: 0, totalTransactions: 0, cardRevenue: 0,
+  };
+  const revenueByDay = data?.revenueByDay ?? [];
+  const topSkus = data?.topSkus ?? [];
+  const revenueByMachine = data?.revenueByMachine ?? [];
+  const machineReport = data?.machineReport ?? [];
+  const paymentSplit = data?.paymentSplit ?? null;
+  const inventoryTurns = data?.inventoryTurns ?? null;
+  const inventoryNote = data?.inventoryNote ?? null;
+  const dataQuality = data?.dataQuality ?? {
+    flaggedCostProducts: 0,
+    sampleFlagged: [] as Array<{ product: string; storedCost: number; avgRevenue: number }>,
+    paymentSplitWindowNote: null,
+  };
   const totalSkuRevenue = topSkus.reduce((s, x) => s + x.revenue, 0);
 
   function exportCsv() {
@@ -334,20 +345,25 @@ export default function ReportsPage() {
           </div>
         )}
 
-        {/* Stat Cards */}
+        {/* Stat Cards — render layout immediately, swap "—" placeholders
+            for real numbers as soon as the /api/reports fetch resolves. */}
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
           <BigStat icon={<DollarSign size={20} color="#16a34a" />} iconBg="#dcfce7"
-            label="Total Revenue" value={`$${stats.totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
-            sub={`${stats.totalUnits.toLocaleString()} units · ${data.range.days}d`} />
+            label="Total Revenue"
+            value={loading ? "—" : `$${stats.totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+            sub={loading ? "loading…" : `${stats.totalUnits.toLocaleString()} units · ${data?.range?.days ?? "—"}d`} />
           <BigStat icon={<TrendingUp size={20} color="#059669" />} iconBg="#d1fae5"
-            label="Net Profit" value={`$${stats.netProfit.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
-            sub="After fees & supplier cost" subColor="#059669" />
+            label="Net Profit"
+            value={loading ? "—" : `$${stats.netProfit.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+            sub={loading ? "loading…" : "After fees & supplier cost"} subColor="#059669" />
           <BigStat icon={<CreditCard size={20} color="#d97706" />} iconBg="#fef3c7"
-            label="Processing Fees" value={`$${stats.processingFees.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
-            sub={`5.95% on $${stats.cardRevenue.toFixed(0)} card`} />
+            label="Processing Fees"
+            value={loading ? "—" : `$${stats.processingFees.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+            sub={loading ? "loading…" : `5.95% on $${stats.cardRevenue.toFixed(0)} card`} />
           <BigStat icon={<Percent size={20} color="#6366f1" />} iconBg="#ede9fe"
-            label="Avg. Margin" value={`${stats.avgMargin.toFixed(1)}%`}
-            sub="Revenue minus supplier cost" />
+            label="Avg. Margin"
+            value={loading ? "—" : `${stats.avgMargin.toFixed(1)}%`}
+            sub={loading ? "loading…" : "Revenue minus supplier cost"} />
         </div>
 
         {/* Tabs */}
@@ -366,7 +382,12 @@ export default function ReportsPage() {
         {/* ────── OVERVIEW ────── */}
         {tab === "Overview" && (
           <div style={{ display: "grid", gridTemplateColumns: isTablet ? "1fr" : "1.5fr 1fr", gap: 20 }}>
-            {revenueByDay.length === 0 ? (
+            {loading ? (
+              <div style={{ gridColumn: "1 / -1", ...cardStyle, padding: 32, textAlign: "center", color: "#94a3b8", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} />
+                <span>Loading sales data…</span>
+              </div>
+            ) : revenueByDay.length === 0 ? (
               <div style={{ gridColumn: "1 / -1", ...cardStyle, padding: 32, textAlign: "center", color: "#94a3b8" }}>
                 No sales data for this range yet.
               </div>
@@ -378,7 +399,7 @@ export default function ReportsPage() {
                 <div style={{ ...cardStyle, gridColumn: "1 / -1", padding: 20 }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Revenue Trend</div>
                   <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2, marginBottom: 16 }}>
-                    Daily revenue from Nayax · {data.range.fromDate} to {data.range.toDate}
+                    Daily revenue from Nayax · {data?.range?.fromDate ?? "…"} to {data?.range?.toDate ?? "…"}
                     {isMobile && revenueByDay.length > 10 && <span style={{ marginLeft: 6, color: "#0d9488" }}>· swipe ←→</span>}
                   </div>
                   <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
@@ -435,7 +456,7 @@ export default function ReportsPage() {
                 {/* Revenue by Machine */}
                 <div style={{ ...cardStyle, padding: 20 }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Revenue by Machine</div>
-                  <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>{data.range.days}d window</div>
+                  <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>{data?.range?.days ?? "—"}d window</div>
                   {revenueByMachine.length === 0 ? (
                     <div style={{ color: "#94a3b8", fontSize: 13, padding: 12 }}>No machine data.</div>
                   ) : (

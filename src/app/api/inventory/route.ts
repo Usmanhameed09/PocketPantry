@@ -64,11 +64,29 @@ async function buildOverview(includeEmpty: boolean): Promise<Record<string, unkn
   // A product is "empty" when nothing has ever happened to it: no
   // warehouse stock, no in-machine units, no recent sales. Catalog-
   // import-only rows are typically empty until they actually move.
-  const products = includeEmpty
+  const filtered = includeEmpty
     ? allProducts
     : allProducts.filter(
         (p) => p.onHand > 0 || p.inMachines > 0 || p.dailySales > 0
       );
+
+  // Strip fields the table doesn't render. Each product was carrying a
+  // full machines[] array (avg ~200 bytes each) AND hasStockSignal, of
+  // which the table only ever shows a machineCount + nothing for the
+  // signal. Replacing those two saves ~25% off the wire.
+  const products = filtered.map((p) => ({
+    id: p.id,
+    name: p.name,
+    sku: p.sku,
+    category: p.category,
+    onHand: p.onHand,
+    inMachines: p.inMachines,
+    dailySales: p.dailySales,
+    daysLeft: p.daysLeft,
+    leadTimeDays: p.leadTimeDays,
+    restockStatus: p.restockStatus,
+    machineCount: Array.isArray(p.machines) ? p.machines.length : 0,
+  }));
 
   return {
     success: true,
@@ -81,7 +99,7 @@ async function buildOverview(includeEmpty: boolean): Promise<Record<string, unkn
       outOfStockCount,
       totalUnits: totalValue,
       shownProducts: products.length,
-      hiddenEmpty: includeEmpty ? 0 : allProducts.length - products.length,
+      hiddenEmpty: includeEmpty ? 0 : allProducts.length - filtered.length,
     },
   };
 }

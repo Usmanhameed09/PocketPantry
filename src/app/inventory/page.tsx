@@ -45,7 +45,11 @@ interface Product {
   daysLeft: number;
   leadTimeDays: number;
   restockStatus: RestockStatus;
-  machines: MachineDetail[];
+  // API now sends a count instead of the full machines[] array (saves
+  // ~25% off the wire). The detail view fetches the machines on demand.
+  machineCount: number;
+  // Kept optional for any old callers; populated on click-to-expand.
+  machines?: MachineDetail[];
 }
 
 interface Stats {
@@ -430,7 +434,7 @@ export default function InventoryPage() {
                 {/* Rows */}
                 {filtered.map((p) => {
                   const rc = restockConfig[p.restockStatus];
-                  const machineCount = p.machines?.length || 0;
+                  const machineCount = p.machineCount ?? p.machines?.length ?? 0;
                   return (
                     <div
                       key={p.id}

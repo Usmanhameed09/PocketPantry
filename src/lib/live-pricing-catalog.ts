@@ -310,16 +310,34 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
     }
   }
 
-  const productBySku = new Map(products.map((product) => [product.sku, product]));
-  // Name-based lookup falls back when scraper SKU != products SKU. Without
-  // this, a Cost Fixer edit on the products row never reaches the Pricing
-  // module because the SKU join silently misses and the Pricing module
-  // uses the stale scraper-fed cost.
+  // syncLiveProductsToSupabase creates a separate row per scraper SKU
+  // without populating unit_cost. So the products table often has TWO
+  // rows with the same name: the operator's (unit_cost > 0) and the
+  // sync-created one (unit_cost = NULL). For both maps below, we prefer
+  // the row WITH a real unit_cost so a Cost Fixer / Products edit on the
+  // operator's row wins over the empty sync-created shadow.
+  const preferWithCost = (existing: typeof products[number] | undefined, candidate: typeof products[number]) => {
+    if (!existing) return candidate;
+    const ec = existing.unit_cost;
+    const cc = candidate.unit_cost;
+    const eHas = ec != null && ec > 0;
+    const cHas = cc != null && cc > 0;
+    if (cHas && !eHas) return candidate;
+    return existing;
+  };
+  const productBySku = new Map<string, typeof products[number]>();
+  for (const p of products) {
+    productBySku.set(p.sku, preferWithCost(productBySku.get(p.sku), p));
+  }
+  // Name-based lookup falls back when scraper SKU != products SKU. Same
+  // duplicate-resolution rule — keep whichever row has a real cost.
   const normalizeName = (s: string) =>
     s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
-  const productByNormalizedName = new Map(
-    products.map((p) => [normalizeName(p.name), p])
-  );
+  const productByNormalizedName = new Map<string, typeof products[number]>();
+  for (const p of products) {
+    const key = normalizeName(p.name);
+    productByNormalizedName.set(key, preferWithCost(productByNormalizedName.get(key), p));
+  }
   const priceByProductId = new Map(prices.map((price) => [price.product_id, price.current_price]));
   const localOverrideById = new Map(Object.entries(localStore.priceOverrides));
   const localCostById = new Map(Object.entries(localStore.costOverrides));

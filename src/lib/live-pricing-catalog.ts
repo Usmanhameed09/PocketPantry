@@ -53,6 +53,11 @@ export type PricingCatalogProduct = {
   lastSoldAt: string | null;
   platform: string;
   isManualOnly: boolean;
+  // Debug-only — exposed in the API for tracing the cost source while we
+  // hunt down the Pricing/Cost-Fixer disconnect. Remove once stable.
+  _costSource?: string;
+  _productsUnitCost?: number | null;
+  _supabaseSku?: string | null;
 };
 
 type SupabaseProductRow = {
@@ -373,12 +378,22 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
     //      HAHA most recent observation)
     const localCostOverride = localCostById.get(fallbackProductId);
     const productsUnitCost = supabaseProduct?.unit_cost;
-    const resolvedCost =
-      localCostOverride !== undefined
-        ? Number(localCostOverride)
-        : (productsUnitCost != null && productsUnitCost > 0
-            ? Number(productsUnitCost)
-            : (liveProduct.last_known_cost ?? 0));
+    let resolvedCost: number;
+    let costSource: string;
+    if (localCostOverride !== undefined) {
+      resolvedCost = Number(localCostOverride);
+      costSource = "localOverride";
+    } else if (productsUnitCost != null && productsUnitCost > 0) {
+      resolvedCost = Number(productsUnitCost);
+      costSource = supabaseProduct
+        ? `products.unit_cost (sku=${productBySku.get(sku) ? "matched" : "name-fallback"})`
+        : "products.unit_cost";
+    } else {
+      resolvedCost = liveProduct.last_known_cost ?? 0;
+      costSource = supabaseProduct
+        ? `scraper (supabaseProduct found but unit_cost=${productsUnitCost})`
+        : "scraper (no products row matched)";
+    }
 
     catalog.push({
       id: productId,
@@ -389,6 +404,9 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
       category: liveProduct.category || "snack",
       currentPrice,
       lastKnownCost: resolvedCost,
+      _costSource: costSource,
+      _productsUnitCost: productsUnitCost ?? null,
+      _supabaseSku: supabaseProduct?.sku ?? null,
       expectedPackSize: liveProduct.expected_pack_size ?? parsePackSize(supabaseProduct?.unit_size),
       observedPrice: liveProduct.observed_price ?? null,
       unitsSold: liveProduct.units_sold ?? 0,

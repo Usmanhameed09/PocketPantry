@@ -116,45 +116,43 @@ export default function Dashboard() {
     return () => { cancelled = true; };
   }, []);
 
-  // Build the legacy combined view from whatever has arrived so far. Any
-  // field that isn't ready stays at a sensible "loading" sentinel so the
-  // existing render code doesn't crash.
-  const data: DashboardData | null = tiles ? {
+  // Progressive render: never block the WHOLE page on data. Use empty
+  // placeholder values until each fetch lands; the per-tile/per-section
+  // render code already handles "no data yet" gracefully with its
+  // existing fallbacks. The layout paints in <100ms; tiles fill in as
+  // /tiles arrives (~1s); the lower sections fill in when /sections
+  // arrives (~3-12s on cold cache).
+  const tilesLoading = tiles === null;
+  const sectionsLoading = sections === null;
+
+  const data: DashboardData = {
     generatedAt: new Date().toISOString(),
-    sales: tiles.sales,
-    machines: tiles.machines,
-    alerts: tiles.alerts,
+    sales: tiles?.sales ?? {
+      todayRevenue: 0, todayUnits: 0, todayTransactions: 0,
+      yesterdayRevenue: 0, wowPct: 0, avgSale: 0,
+      thisWeekUnits: 0, priorWeekUnits: 0, weekWoWPct: 0,
+      lastSaleDate: null, todayHasData: false, liveDataAt: null,
+    },
+    machines: tiles?.machines ?? { total: 0, active: 0, offline: 0, offlineList: [] },
+    alerts: tiles?.alerts ?? { total: 0, high: 0, topAlerts: [] },
     warehouse: {
-      ...tiles.warehouse,
+      value: tiles?.warehouse.value ?? 0,
+      itemsBelowThreshold: tiles?.warehouse.itemsBelowThreshold ?? 0,
       restockCost: sections?.restock.cost ?? 0,
       buyListItems: sections?.restock.buyListItems ?? 0,
     },
     refillStops: sections?.refillStops ?? [],
     priceChanges: sections?.priceChanges ?? [],
     recentReply: sections?.recentReply ?? null,
-  } : null;
-  const loading = tiles === null;
-  const sectionsLoading = sections === null;
+  };
 
-  if (loading) {
-    return (
-      <div style={{ minHeight: "100vh" }}>
-        <Header title="Today" />
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 400 }}>
-          <Loader2 size={32} color="#16a34a" style={{ animation: "spin 1s linear infinite" }} />
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
-        </div>
-      </div>
-    );
-  }
-
-  if (error || !data) {
+  if (error && tilesLoading) {
     return (
       <div style={{ minHeight: "100vh" }}>
         <Header title="Today" />
         <div style={{ padding: 40 }}>
           <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 20, color: "#dc2626" }}>
-            Could not load dashboard data: {error || "Unknown error"}
+            Could not load dashboard data: {error}
           </div>
         </div>
       </div>
@@ -162,6 +160,8 @@ export default function Dashboard() {
   }
 
   const { sales, machines, alerts, refillStops, warehouse, priceChanges, recentReply } = data;
+  // Helper: render placeholder text for a number while tiles is loading.
+  const numOrSkel = (val: string) => tilesLoading ? "—" : val;
 
   return (
     <div style={{ minHeight: "100vh" }}>
@@ -177,9 +177,10 @@ export default function Dashboard() {
                 ? "Today's Revenue · LIVE"
                 : sales.todayHasData ? "Today's Revenue" : `Last data ${sales.lastSaleDate || "—"}`
             }
-            value={`$${sales.todayRevenue.toFixed(2)}`}
-            tag={
-              !sales.todayHasData && !sales.liveDataAt
+            value={numOrSkel(`$${sales.todayRevenue.toFixed(2)}`)}
+            tag={tilesLoading
+              ? <span style={{ color: "#94a3b8", fontSize: 12 }}>loading…</span>
+              : !sales.todayHasData && !sales.liveDataAt
                 ? <span style={{ color: "#94a3b8", fontSize: 12 }}>today not synced yet</span>
                 : sales.wowPct === 0 ? <span style={{ color: "#64748b", fontSize: 12 }}>vs yesterday</span>
                 : sales.wowPct > 0
@@ -189,24 +190,33 @@ export default function Dashboard() {
           />
           <StatCard
             icon={<CheckCircle2 size={20} color="#059669" />} iconBg="#dcfce7"
-            label="Machines Active" value={`${machines.active} / ${machines.total}`}
-            tag={machines.offline > 0
-              ? <span style={{ color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{machines.offline} offline</span>
-              : <span style={{ color: "#059669", fontSize: 12, fontWeight: 500 }}>all healthy</span>
+            label="Machines Active"
+            value={numOrSkel(`${machines.active} / ${machines.total}`)}
+            tag={tilesLoading
+              ? <span style={{ color: "#94a3b8", fontSize: 12 }}>loading…</span>
+              : machines.offline > 0
+                ? <span style={{ color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{machines.offline} offline</span>
+                : <span style={{ color: "#059669", fontSize: 12, fontWeight: 500 }}>all healthy</span>
             }
           />
           <StatCard
             icon={<AlertTriangle size={20} color="#d97706" />} iconBg="#fef3c7"
-            label="Open Alerts" value={String(alerts.total)}
-            tag={alerts.high > 0
-              ? <span style={{ color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{alerts.high} high severity</span>
-              : <span style={{ color: "#64748b", fontSize: 12, fontWeight: 500 }}>nothing critical</span>
+            label="Open Alerts"
+            value={numOrSkel(String(alerts.total))}
+            tag={tilesLoading
+              ? <span style={{ color: "#94a3b8", fontSize: 12 }}>loading…</span>
+              : alerts.high > 0
+                ? <span style={{ color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{alerts.high} high severity</span>
+                : <span style={{ color: "#64748b", fontSize: 12, fontWeight: 500 }}>nothing critical</span>
             }
           />
           <StatCard
             icon={<DollarSign size={20} color="#6366f1" />} iconBg="#ede9fe"
-            label="Warehouse Value" value={`$${warehouse.value.toFixed(2)}`}
-            tag={<span style={{ color: "#64748b", fontSize: 12 }}>{warehouse.itemsBelowThreshold} items low</span>}
+            label="Warehouse Value"
+            value={numOrSkel(`$${warehouse.value.toFixed(2)}`)}
+            tag={<span style={{ color: "#64748b", fontSize: 12 }}>
+              {tilesLoading ? "loading…" : `${warehouse.itemsBelowThreshold} items low`}
+            </span>}
           />
         </div>
       </div>
@@ -222,11 +232,17 @@ export default function Dashboard() {
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Today&apos;s Refill Stops</div>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-                  <span style={{ fontWeight: 600, color: "#16a34a" }}>{refillStops.length}</span> machine{refillStops.length === 1 ? "" : "s"} need refill
-                  {refillStops.length > 0 && (
-                    <span style={{ marginLeft: 6, color: "#94a3b8" }}>
-                      · {refillStops.reduce((s, r) => s + r.items, 0)} low items total
-                    </span>
+                  {sectionsLoading ? (
+                    <span>loading…</span>
+                  ) : (
+                    <>
+                      <span style={{ fontWeight: 600, color: "#16a34a" }}>{refillStops.length}</span> machine{refillStops.length === 1 ? "" : "s"} need refill
+                      {refillStops.length > 0 && (
+                        <span style={{ marginLeft: 6, color: "#94a3b8" }}>
+                          · {refillStops.reduce((s, r) => s + r.items, 0)} low items total
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

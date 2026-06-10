@@ -28,7 +28,10 @@ const navItems = [
   { name: "Inventory", href: "/inventory", icon: Package },
   { name: "Pricing", href: "/pricing", icon: DollarSign },
   { name: "Predictions", href: "/predictions", icon: Brain },
-  { name: "Pipeline", href: "/pipeline", icon: GitBranch },
+  // Pipeline (call kanban) hidden per operator request — only Email
+  // Pipeline + Lead Dashboard are in use. Restore the line below when
+  // call workflows come back.
+  // { name: "Pipeline", href: "/pipeline", icon: GitBranch },
   { name: "Email Pipeline", href: "/email-pipeline", icon: Mail },
   { name: "Lead Dashboard", href: "/pipeline/v2", icon: Target },
   { name: "Advertising", href: "/advertising", icon: Megaphone },

@@ -54,16 +54,6 @@ export type PricingCatalogProduct = {
   lastSoldAt: string | null;
   platform: string;
   isManualOnly: boolean;
-  _debug?: {
-    companyId: string;
-    productsCount: number;
-    skuTried: string;
-    normalizedName: string;
-    productsHasName: boolean;
-    productsHasSku: boolean;
-    matchedSku: string | null;
-    matchedUnitCost: number | null;
-  };
 };
 
 type SupabaseProductRow = {
@@ -264,26 +254,38 @@ export async function syncLiveProductsToSupabase(products: LiveMachineProduct[])
 
 async function getSupabaseProducts(companyId: string) {
   const supabase = createServerClient();
-  const [{ data: products, error: productsError }, { data: prices, error: pricesError }] = await Promise.all([
-    supabase
+
+  // PostgREST caps each query at 1000 rows server-side. The products
+  // table has 6000+ rows after the UPC bulk-import; without pagination
+  // we only ever see the first 1000 alphabetically — meaning any
+  // operator edit (Cost Fixer, Products page) to a row beyond that
+  // window was invisible to the Pricing module. Same fix pattern as
+  // projection-engine + reports + assistant-context use.
+  const PAGE = 1000;
+  const products: SupabaseProductRow[] = [];
+  for (let from = 0; from < 50000; from += PAGE) {
+    const { data, error } = await supabase
       .from("products")
       .select("id,name,sku,category,unit_size,unit_cost")
       .eq("company_id", companyId)
-      .order("name", { ascending: true }),
-    supabase
-      .from("product_prices")
-      .select("id,product_id,current_price")
-      .is("machine_id", null),
-  ]);
+      .order("name", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    products.push(...(data as SupabaseProductRow[]));
+    if (data.length < PAGE) break;
+  }
 
-  if (productsError) throw productsError;
-  // product_prices table may not exist — gracefully return empty prices
+  const { data: prices, error: pricesError } = await supabase
+    .from("product_prices")
+    .select("id,product_id,current_price")
+    .is("machine_id", null);
   if (pricesError && !isMissingTableError(pricesError)) {
     console.warn("[pricing] product_prices error:", pricesError.code, pricesError.message);
   }
 
   return {
-    products: (products || []) as SupabaseProductRow[],
+    products,
     prices: (prices || []) as SupabasePriceRow[],
   };
 }
@@ -293,7 +295,6 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
   const localStore = await readLocalStore();
   let products: SupabaseProductRow[] = [];
   let prices: SupabasePriceRow[] = [];
-  let debugCompanyId = "";
 
   try {
     if (liveProducts.length > 0) {
@@ -301,7 +302,6 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
     }
 
     const companyId = await getOrCreateCompanyId();
-    debugCompanyId = companyId;
     const supabaseData = await getSupabaseProducts(companyId);
     products = supabaseData.products;
     prices = supabaseData.prices;
@@ -381,11 +381,6 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
             ? Number(productsUnitCost)
             : (liveProduct.last_known_cost ?? 0));
 
-    const debugNormalizedName = normalizeName(liveProduct.name);
-    const productNameLower = liveProduct.name.toLowerCase();
-    const productsHasName = products.some((p) => p.name.toLowerCase() === productNameLower);
-    const productsHasSku = products.some((p) => p.sku === sku);
-
     catalog.push({
       id: productId,
       productRefId: fallbackProductId,
@@ -395,16 +390,6 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
       category: liveProduct.category || "snack",
       currentPrice,
       lastKnownCost: resolvedCost,
-      _debug: {
-        companyId: debugCompanyId,
-        productsCount: products.length,
-        skuTried: sku,
-        normalizedName: debugNormalizedName,
-        productsHasName,
-        productsHasSku,
-        matchedSku: supabaseProduct?.sku ?? null,
-        matchedUnitCost: supabaseProduct?.unit_cost ?? null,
-      },
       expectedPackSize: liveProduct.expected_pack_size ?? parsePackSize(supabaseProduct?.unit_size),
       observedPrice: liveProduct.observed_price ?? null,
       unitsSold: liveProduct.units_sold ?? 0,

@@ -15,9 +15,15 @@ function mapCatalogItem(
   product: PricingCatalogProduct,
   savedAnalysis?: Awaited<ReturnType<typeof getSavedPricingAnalyses>>[string]
 ) {
+  // ALWAYS use the catalog's resolved cost — which now correctly comes
+  // from products.unit_cost via getPricingCatalog. The savedAnalysis.cost
+  // is a frozen-in-time snapshot from when the analysis was last saved,
+  // so a Cost Fixer (or any other) update to products.unit_cost wouldn't
+  // be reflected. Recompute prevCost + margin against the live cost too.
+  const cost = product.lastKnownCost;
   const margin =
-    product.currentPrice > 0 && product.currentPrice > product.lastKnownCost
-      ? Math.round(((product.currentPrice - product.lastKnownCost) / product.currentPrice) * 100)
+    product.currentPrice > 0 && product.currentPrice > cost
+      ? Math.round(((product.currentPrice - cost) / product.currentPrice) * 100)
       : 0;
 
   return {
@@ -26,11 +32,11 @@ function mapCatalogItem(
     product: product.name,
     scrapedProduct: savedAnalysis?.scrapedProduct ?? null,
     supplier: savedAnalysis?.supplier ?? "Not scraped yet",
-    cost: savedAnalysis?.cost ?? product.lastKnownCost,
-    prevCost: savedAnalysis?.prevCost ?? product.lastKnownCost,
+    cost,
+    prevCost: savedAnalysis?.cost ?? cost, // last-saved cost shown as "previous" for diff context
     currentPrice: product.currentPrice,
     suggestedPrice: savedAnalysis?.suggestedPrice ?? product.currentPrice,
-    margin: savedAnalysis?.margin ?? margin,
+    margin,
     status: savedAnalysis?.status ?? "Cost Margin",
     trigger: savedAnalysis?.trigger ?? (product.isManualOnly
       ? "Manually added product"

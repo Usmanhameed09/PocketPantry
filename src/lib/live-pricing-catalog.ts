@@ -311,6 +311,15 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
   }
 
   const productBySku = new Map(products.map((product) => [product.sku, product]));
+  // Name-based lookup falls back when scraper SKU != products SKU. Without
+  // this, a Cost Fixer edit on the products row never reaches the Pricing
+  // module because the SKU join silently misses and the Pricing module
+  // uses the stale scraper-fed cost.
+  const normalizeName = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  const productByNormalizedName = new Map(
+    products.map((p) => [normalizeName(p.name), p])
+  );
   const priceByProductId = new Map(prices.map((price) => [price.product_id, price.current_price]));
   const localOverrideById = new Map(Object.entries(localStore.priceOverrides));
   const localCostById = new Map(Object.entries(localStore.costOverrides));
@@ -320,7 +329,12 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
   for (const liveProduct of liveProducts) {
     const sku = liveProduct.sku || normalizeSku(liveProduct.name);
     const productId = liveProduct.id || `live-${normalizeSku(liveProduct.name)}`;
-    const supabaseProduct = productBySku.get(sku);
+    // Primary: SKU match. Fallback: normalized-name match (handles the case
+    // where the scraper auto-generates a SKU that doesn't line up with the
+    // SKU on the same product in the products table).
+    const supabaseProduct =
+      productBySku.get(sku) ||
+      productByNormalizedName.get(normalizeName(liveProduct.name));
     const fallbackProductId = supabaseProduct?.id || productId;
     const localOverride = localOverrideById.get(fallbackProductId);
     const currentPrice =

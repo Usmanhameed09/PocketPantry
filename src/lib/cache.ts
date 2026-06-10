@@ -209,7 +209,7 @@ export async function invalidateOnMachineWrite(): Promise<void> {
 // TTLs in seconds — see SOP/architecture notes for rationale.
 export const TTL = {
   today: 60,                // Today tiles: 1 min
-  inventoryOverview: 120,   // Product table: 2 min
+  inventoryOverview: 300,   // Product table: 5 min (was 2; payload is huge so the headroom matters)
   buyList: 300,             // Buy list computation: 5 min
   waste: 300,               // Waste/turns: 5 min
   audit: 60,                // Audit log: 1 min (read-heavy in admin context)

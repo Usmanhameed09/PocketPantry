@@ -113,7 +113,11 @@ export default function InventoryPage() {
   const fetchInventory = useCallback(async () => {
     try {
       setError("");
-      const res = await fetch("/api/inventory");
+      // Only request the full 1000+ catalog when the operator explicitly
+      // ticks "Show empty products" — otherwise the API only ships the
+      // ~50 rows that actually have stock or sales (massive payload cut).
+      const url = showEmpty ? "/api/inventory?includeEmpty=1" : "/api/inventory";
+      const res = await fetch(url);
       const data = await res.json();
       if (!data.success) {
         setError(data.error || "Failed to load inventory");
@@ -128,7 +132,7 @@ export default function InventoryPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showEmpty]);
 
   useEffect(() => {
     fetchInventory();

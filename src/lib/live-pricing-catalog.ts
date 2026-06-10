@@ -61,6 +61,7 @@ type SupabaseProductRow = {
   sku: string;
   category: string;
   unit_size: string | null;
+  unit_cost: number | null;
 };
 
 type SupabasePriceRow = {
@@ -267,7 +268,7 @@ async function getSupabaseProducts(companyId: string) {
   const [{ data: products, error: productsError }, { data: prices, error: pricesError }] = await Promise.all([
     supabase
       .from("products")
-      .select("id,name,sku,category,unit_size")
+      .select("id,name,sku,category,unit_size,unit_cost")
       .eq("company_id", companyId)
       .order("name", { ascending: true }),
     supabase
@@ -329,6 +330,24 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
         ? (priceByProductId.get(supabaseProduct.id) ?? liveProduct.observed_price ?? liveProduct.vending_price ?? 0)
         : (liveProduct.observed_price ?? liveProduct.vending_price ?? 0));
 
+    // Cost source priority:
+    //   1. localStore.costOverrides — operator edited from the Pricing UI
+    //      directly (kept as the most recent intent if both exist)
+    //   2. products.unit_cost — canonical source of truth. Cost Fixer,
+    //      Products page edit, Exception Queue fix, /api/inventory/products
+    //      PATCH all write here. WAS MISSING — that's why a Cost Fixer
+    //      fix wasn't reflected on the Pricing page.
+    //   3. liveProduct.last_known_cost — scraper-fed fallback (Nayax /
+    //      HAHA most recent observation)
+    const localCostOverride = localCostById.get(fallbackProductId);
+    const productsUnitCost = supabaseProduct?.unit_cost;
+    const resolvedCost =
+      localCostOverride !== undefined
+        ? Number(localCostOverride)
+        : (productsUnitCost != null && productsUnitCost > 0
+            ? Number(productsUnitCost)
+            : (liveProduct.last_known_cost ?? 0));
+
     catalog.push({
       id: productId,
       productRefId: fallbackProductId,
@@ -337,9 +356,7 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
       searchTerm: liveProduct.search_term || liveProduct.name,
       category: liveProduct.category || "snack",
       currentPrice,
-      lastKnownCost: localCostById.get(fallbackProductId) !== undefined
-        ? Number(localCostById.get(fallbackProductId))
-        : (liveProduct.last_known_cost ?? 0),
+      lastKnownCost: resolvedCost,
       expectedPackSize: liveProduct.expected_pack_size ?? parsePackSize(supabaseProduct?.unit_size),
       observedPrice: liveProduct.observed_price ?? null,
       unitsSold: liveProduct.units_sold ?? 0,

@@ -90,11 +90,20 @@ async function buildTiles(): Promise<Record<string, unknown>> {
       ? Math.round(((thisWeekUnits - priorWeekUnits) / priorWeekUnits) * 100)
       : 0;
 
-    // Machines status — use Supabase directly (no scraper roundtrip).
-    // Subtle drift from /api/machines is acceptable for the tile; the
-    // Machines page itself stays authoritative.
-    const offlineMachines = machines.filter((m) => (m.status as string) === "offline");
-    const totalMachines = machines.length;
+    // Machines status — use the SAME source the Machines page uses
+    // (/api/machines, which merges scraper-fed status with the
+    // DB-side offline overlay). Originally I read machines.status from
+    // Supabase directly here to save a roundtrip, but operators saw
+    // Today showing 8/8 active while Machines showed 7/8 — divergence
+    // is unacceptable for the tile. /api/machines is itself cached
+    // (60s TTL) so the merged count is fast.
+    const mergedMachines = await fetchMergedMachineList();
+    const offlineMachines = mergedMachines.filter(
+      (m) => (m.status || "").toLowerCase() === "offline"
+    );
+    const totalMachines = mergedMachines.length > 0
+      ? mergedMachines.length
+      : machines.length; // fall back to Supabase if /api/machines is down
     const activeMachines = totalMachines - offlineMachines.length;
 
     // Warehouse — value + low-stock count (without buy-list compute).
@@ -135,7 +144,10 @@ async function buildTiles(): Promise<Record<string, unknown>> {
         total: totalMachines,
         active: activeMachines,
         offline: offlineMachines.length,
-        offlineList: offlineMachines.slice(0, 3).map((m) => ({ name: m.name as string, status: "Offline" })),
+        offlineList: offlineMachines.slice(0, 3).map((m) => ({
+          name: m.name || "(unknown)",
+          status: "Offline",
+        })),
       },
       alerts: {
         total: alerts.length,
@@ -156,5 +168,25 @@ async function buildTiles(): Promise<Record<string, unknown>> {
       success: false,
       error: error instanceof Error ? error.message : "Failed",
     };
+  }
+}
+
+type MergedMachine = { name?: string; status?: string };
+
+/**
+ * Pulls the SAME machine list the Machines page renders, by calling our
+ * own /api/machines proxy (cached, so this is cheap). Critical: the
+ * Today tile and the Machines page MUST agree on the offline count or
+ * operators lose trust in both numbers.
+ */
+async function fetchMergedMachineList(): Promise<MergedMachine[]> {
+  try {
+    const base = process.env.NEXT_PUBLIC_APP_URL || "https://pocketpantry.vercel.app";
+    const res = await fetch(`${base}/api/machines`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.machines || []) as MergedMachine[];
+  } catch {
+    return [];
   }
 }

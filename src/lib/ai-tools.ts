@@ -37,9 +37,15 @@ export const TOOL_DEFINITIONS = [
       name: "get_machine_details",
       description:
         "Look up one specific machine by name (partial match OK). Returns " +
-        "status, last sync, top products on the machine over the last 30 days " +
-        "with per-product units sold, and machine totals. Use this when the " +
-        "operator names a machine (e.g. 'Hartman 16300', 'Baker Nissan').",
+        "status, last sync, machine totals, AND THREE DISTINCT product lists:\n" +
+        "  - topProductsLast30Days: top 10 best sellers (highest units)\n" +
+        "  - lowestSellingProducts: bottom 10 sellers that had AT LEAST 1 sale\n" +
+        "  - stockedButNotSelling: products loaded in the machine with ZERO\n" +
+        "    sales in the window — likely the real waste/dead stock\n" +
+        "USE THE RIGHT LIST FOR THE QUESTION. If the operator asks 'lowest\n" +
+        "sellers' or 'worst performing', use lowestSellingProducts — NOT the\n" +
+        "bottom of topProductsLast30Days. If they ask 'what isn't selling',\n" +
+        "show stockedButNotSelling first.",
       parameters: {
         type: "object",
         properties: {
@@ -669,15 +675,45 @@ async function getMachineDetails(name: string): Promise<ToolResult> {
     totalRevenue += (r.revenue as number) || 0;
   }
 
-  const topProducts = Array.from(byProduct.values())
-    .sort((a, b) => b.units - a.units)
-    .slice(0, 10)
-    .map((p) => ({
-      name: p.name,
-      category: p.category,
-      units30d: p.units,
-      revenue30d: Math.round(p.revenue * 100) / 100,
-    }));
+  // Sort the full set once; slice the head + tail for top/bottom views.
+  // Previously the tool only returned the top 10 — so when the AI was asked
+  // "5 LOWEST sellers", it had to pick the bottom 5 from those top 10,
+  // which was just positions 6-10 (not real low-sellers). The genuine
+  // worst sellers (1-5 units) were invisible. Now we return both heads
+  // explicitly so the AI uses the right one for the question.
+  const allSorted = Array.from(byProduct.values()).sort((a, b) => b.units - a.units);
+  const shape = (p: typeof allSorted[0]) => ({
+    name: p.name,
+    category: p.category,
+    units30d: p.units,
+    revenue30d: Math.round(p.revenue * 100) / 100,
+  });
+  const topProducts = allSorted.slice(0, 10).map(shape);
+  // Bottom-10 = the worst sellers among products that HAD at least one
+  // sale. We exclude zero-sales separately because the distinction matters
+  // (a product with 0 sales is "not selling" not "selling poorly").
+  const withSales = allSorted.filter((p) => p.units > 0);
+  const lowestSelling = withSales.slice(-10).reverse().map(shape);
+
+  // Stocked-but-not-selling: products loaded in this machine that had ZERO
+  // sales in the 30-day window. These never appear in daily_sales so the
+  // AI couldn't see them before. They're often the real waste — taking up
+  // a slot without earning revenue.
+  const { data: stockedRows } = await supabase
+    .from("machine_inventory")
+    .select("product_id, estimated_remaining, products(name, category)")
+    .eq("machine_id", machineId);
+  const stockedButNotSelling: Array<{ name: string; category: string; estimatedRemaining: number }> = [];
+  for (const r of stockedRows || []) {
+    const pid = r.product_id as string;
+    if (byProduct.has(pid)) continue; // had sales; skip
+    const prod = (r as { products?: { name?: string; category?: string } }).products;
+    stockedButNotSelling.push({
+      name: prod?.name || "?",
+      category: prod?.category || "?",
+      estimatedRemaining: (r.estimated_remaining as number) || 0,
+    });
+  }
 
   return {
     machine: {
@@ -692,6 +728,12 @@ async function getMachineDetails(name: string): Promise<ToolResult> {
       productCount: byProduct.size,
     },
     topProductsLast30Days: topProducts,
+    lowestSellingProducts: lowestSelling,
+    stockedButNotSelling: stockedButNotSelling.slice(0, 20),
+    summary: {
+      productsWithAnySales: withSales.length,
+      productsLoadedButZeroSales: stockedButNotSelling.length,
+    },
   };
 }
 

@@ -57,9 +57,6 @@ function mapCatalogItem(
     firstFillCost: savedAnalysis?.firstFillCost ?? null,
     firstFillSupplier: savedAnalysis?.firstFillSupplier ?? null,
     firstFillPackSize: savedAnalysis?.firstFillPackSize ?? null,
-    _costSource: product._costSource,
-    _productsUnitCost: product._productsUnitCost,
-    _supabaseSku: product._supabaseSku,
   };
 }
 

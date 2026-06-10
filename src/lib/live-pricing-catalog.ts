@@ -4,6 +4,7 @@ import path from "path";
 import { readEnv } from "./runtime-env";
 import { PRICING_SYSTEM_LEAD_ID } from "./system-records";
 import { guardScrapedUnitCost } from "./cost-fixer";
+import { ensureDefaultCompany } from "./inventory-store";
 
 // outreach_log has a CHECK constraint that limits action_type to a small set
 // (call/email/email_agent_settings). We reuse "call" — the same pattern
@@ -53,11 +54,6 @@ export type PricingCatalogProduct = {
   lastSoldAt: string | null;
   platform: string;
   isManualOnly: boolean;
-  // Debug-only — exposed in the API for tracing the cost source while we
-  // hunt down the Pricing/Cost-Fixer disconnect. Remove once stable.
-  _costSource?: string;
-  _productsUnitCost?: number | null;
-  _supabaseSku?: string | null;
 };
 
 type SupabaseProductRow = {
@@ -205,25 +201,13 @@ async function writeLocalStore(store: LocalPricingStore) {
 }
 
 export async function getOrCreateCompanyId() {
-  const supabase = createServerClient();
-  const { data: existingCompany, error: existingError } = await supabase
-    .from("companies")
-    .select("id")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (existingError) throw existingError;
-  if (existingCompany?.id) return existingCompany.id;
-
-  const { data: insertedCompany, error: insertError } = await supabase
-    .from("companies")
-    .insert({ name: "PocketPantry", timezone: "America/Chicago" })
-    .select("id")
-    .single();
-
-  if (insertError) throw insertError;
-  return insertedCompany.id;
+  // CRITICAL: must return the same company the rest of the app uses
+  // (ensureDefaultCompany returns the hardcoded UUID 00000000-...-0001).
+  // The previous implementation did "ORDER BY created_at ASC LIMIT 1"
+  // which silently picked a DIFFERENT company row whenever multiple
+  // existed — that's why a Cost Fixer fix on the canonical company's
+  // products row never reached the Pricing module's catalog lookup.
+  return ensureDefaultCompany();
 }
 
 export async function fetchLiveMachineProducts(): Promise<LiveMachineProduct[]> {
@@ -378,22 +362,12 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
     //      HAHA most recent observation)
     const localCostOverride = localCostById.get(fallbackProductId);
     const productsUnitCost = supabaseProduct?.unit_cost;
-    let resolvedCost: number;
-    let costSource: string;
-    if (localCostOverride !== undefined) {
-      resolvedCost = Number(localCostOverride);
-      costSource = "localOverride";
-    } else if (productsUnitCost != null && productsUnitCost > 0) {
-      resolvedCost = Number(productsUnitCost);
-      costSource = supabaseProduct
-        ? `products.unit_cost (sku=${productBySku.get(sku) ? "matched" : "name-fallback"})`
-        : "products.unit_cost";
-    } else {
-      resolvedCost = liveProduct.last_known_cost ?? 0;
-      costSource = supabaseProduct
-        ? `scraper (supabaseProduct found but unit_cost=${productsUnitCost})`
-        : "scraper (no products row matched)";
-    }
+    const resolvedCost =
+      localCostOverride !== undefined
+        ? Number(localCostOverride)
+        : (productsUnitCost != null && productsUnitCost > 0
+            ? Number(productsUnitCost)
+            : (liveProduct.last_known_cost ?? 0));
 
     catalog.push({
       id: productId,
@@ -404,9 +378,6 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
       category: liveProduct.category || "snack",
       currentPrice,
       lastKnownCost: resolvedCost,
-      _costSource: costSource,
-      _productsUnitCost: productsUnitCost ?? null,
-      _supabaseSku: supabaseProduct?.sku ?? null,
       expectedPackSize: liveProduct.expected_pack_size ?? parsePackSize(supabaseProduct?.unit_size),
       observedPrice: liveProduct.observed_price ?? null,
       unitsSold: liveProduct.units_sold ?? 0,

@@ -54,15 +54,18 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: true, data: all, total: total || all.length });
     }
 
-    // Filter to "active" products. Definition: any of —
-    //   has warehouse stock           (sum stock_movements where location='warehouse')
-    //   has machine presence          (sum machine_inventory.estimated_remaining)
+    // Filter to "active" products. The UPC bulk import populated barcodes
+    // AND vendor strings on all 6000+ products, so those metadata fields
+    // don't separate "operator actually uses this" from "Excel import
+    // dump". The only honest signals are real activity:
+    //   has warehouse stock
+    //   has machine presence
     //   has sales in last 30 days
-    //   has operator-managed metadata (barcode, real vendor, non-zero vend price)
-    // We compute the first three via in-bulk queries below so each product
-    // gets a fast O(1) lookup.
+    //   has operator-set vend price (the import doesn't set price)
+    //   has any non-sale stock_movement (purchase, refill, count_correction —
+    //     proves an operator handled the product physically)
     const ids = all.map((p) => p.id as string);
-    const [warehouseRes, machineInvRes, salesRes] = await Promise.all([
+    const [warehouseRes, machineInvRes, salesRes, movementsRes] = await Promise.all([
       supabase
         .from("warehouse_inventory")
         .select("product_id, on_hand")
@@ -77,19 +80,24 @@ export async function GET(req: Request) {
         .select("product_id")
         .gte("sale_date", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
         .in("product_id", ids.length > 0 ? ids : ["00000000-0000-0000-0000-000000000000"]),
+      supabase
+        .from("stock_movements")
+        .select("product_id")
+        .in("reason", ["purchase", "refill", "count_correction", "spoilage", "damage"])
+        .limit(20000),
     ]);
     const hasWarehouse = new Set((warehouseRes.data || []).map((r) => r.product_id as string));
     const hasMachine = new Set((machineInvRes.data || []).map((r) => r.product_id as string));
     const hasSales = new Set((salesRes.data || []).map((r) => r.product_id as string));
+    const hasMovement = new Set((movementsRes.data || []).map((r) => r.product_id as string));
 
     const active = all.filter((p) => {
       const id = p.id as string;
-      if (hasWarehouse.has(id) || hasMachine.has(id) || hasSales.has(id)) return true;
-      // Operator-curated signals
-      const barcode = (p.barcode as string | null) || "";
-      const vendor = ((p.vendor as string | null) || "").trim();
+      if (hasWarehouse.has(id) || hasMachine.has(id) || hasSales.has(id) || hasMovement.has(id)) return true;
+      // Only operator-set price counts as a metadata signal (vendor + barcode
+      // both come from the UPC import and would re-include the dump).
       const price = (p.default_vend_price as number | null) || 0;
-      return !!barcode || (vendor.length > 0 && vendor !== "—") || price > 0;
+      return price > 0;
     });
 
     return NextResponse.json({

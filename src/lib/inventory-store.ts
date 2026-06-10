@@ -384,8 +384,13 @@ export async function getProductList(
     return allProducts.map((p) => ({ id: p.id, name: p.name, sku: p.sku }));
   }
 
+  // The UPC bulk-import set barcode + vendor on all 6000+ products, so
+  // those fields don't separate "actually used" from "Excel dump". The
+  // only honest signals are real activity: stock, machine presence,
+  // sales, non-sale stock movements (purchase/refill/correction), or an
+  // operator-set vend price.
   const ids = allProducts.map((p) => p.id);
-  const [warehouseRes, machineInvRes, salesRes] = await Promise.all([
+  const [warehouseRes, machineInvRes, salesRes, movementsRes] = await Promise.all([
     supabase
       .from("warehouse_inventory")
       .select("product_id")
@@ -400,20 +405,24 @@ export async function getProductList(
       .select("product_id")
       .gte("sale_date", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
       .in("product_id", ids.length > 0 ? ids : ["00000000-0000-0000-0000-000000000000"]),
+    supabase
+      .from("stock_movements")
+      .select("product_id")
+      .in("reason", ["purchase", "refill", "count_correction", "spoilage", "damage"])
+      .limit(20000),
   ]);
   const has = new Set<string>([
     ...((warehouseRes.data || []).map((r) => r.product_id as string)),
     ...((machineInvRes.data || []).map((r) => r.product_id as string)),
     ...((salesRes.data || []).map((r) => r.product_id as string)),
+    ...((movementsRes.data || []).map((r) => r.product_id as string)),
   ]);
 
   return allProducts
     .filter((p) => {
       if (has.has(p.id)) return true;
-      const barcode = p.barcode || "";
-      const vendor = (p.vendor || "").trim();
       const price = p.default_vend_price || 0;
-      return !!barcode || (vendor.length > 0 && vendor !== "—") || price > 0;
+      return price > 0;
     })
     .map((p) => ({ id: p.id, name: p.name, sku: p.sku }));
 }

@@ -759,28 +759,29 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
   const rows = candidates || [];
   if (rows.length === 0) return { matches: [], count: 0 };
 
-  // Active filter: warehouse stock, machine presence, recent sales, or
-  // operator-curated metadata (barcode / real vendor / vend price set).
-  // Without this the AI returns orphan UPC-import rows for every "tell me
-  // about X" question, confusing operators who only work with real SKUs.
+  // Active filter — see /api/inventory/products for the definition.
+  // The UPC bulk-import set barcode + vendor on every imported row, so
+  // those don't distinguish "real" from "orphan". Honest signals only:
+  // stock, machine presence, recent sales, non-sale stock movements,
+  // OR an operator-set vend price.
   const ids = rows.map((p) => p.id as string);
-  const [whRes, miRes, dsRes] = await Promise.all([
+  const [whRes, miRes, dsRes, mvRes] = await Promise.all([
     supabase.from("warehouse_inventory").select("product_id").eq("company_id", companyId).gt("on_hand", 0).in("product_id", ids),
     supabase.from("machine_inventory").select("product_id").gt("estimated_remaining", 0).in("product_id", ids),
     supabase.from("daily_sales").select("product_id").gte("sale_date", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)).in("product_id", ids),
+    supabase.from("stock_movements").select("product_id").in("reason", ["purchase", "refill", "count_correction", "spoilage", "damage"]).in("product_id", ids),
   ]);
   const hasSignal = new Set<string>([
     ...((whRes.data || []).map((r) => r.product_id as string)),
     ...((miRes.data || []).map((r) => r.product_id as string)),
     ...((dsRes.data || []).map((r) => r.product_id as string)),
+    ...((mvRes.data || []).map((r) => r.product_id as string)),
   ]);
 
   const isActive = (p: typeof rows[number]) => {
     if (hasSignal.has(p.id as string)) return true;
-    const barcode = (p.barcode as string | null) || "";
-    const vendor = ((p.vendor as string | null) || "").trim();
     const price = (p.default_vend_price as number | null) || 0;
-    return !!barcode || (vendor.length > 0 && vendor !== "—") || price > 0;
+    return price > 0;
   };
 
   const active = rows.filter(isActive);

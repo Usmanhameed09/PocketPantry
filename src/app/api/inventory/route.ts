@@ -18,15 +18,23 @@ export const dynamic = "force-dynamic";
  *
  * ?fresh=1 — bypass cache entirely (Refresh button + AI agent live mode).
  */
+/**
+ * Pagination:
+ *   ?page=N&pageSize=M — return the Mth slice. Default page=1, pageSize=50.
+ *   pageSize is capped at 200 server-side. The UI uses "Load more" — sends
+ *   page=2, 3, ... until pagination.hasMore is false.
+ *   The cache key is the full filter shape so each page is cached separately.
+ *   Stats counts are unchanged regardless of which page is requested.
+ */
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const bypass = searchParams.get("fresh") === "1";
     const includeEmpty = searchParams.get("includeEmpty") === "1";
-    const key = includeEmpty
-      ? `${CACHE_KEYS.inventoryOverview}:all`
-      : CACHE_KEYS.inventoryOverview;
-    const fetcher = () => buildOverview(includeEmpty);
+    const page = Math.max(1, Number(searchParams.get("page")) || 1);
+    const pageSize = Math.max(1, Math.min(200, Number(searchParams.get("pageSize")) || 50));
+    const key = `${CACHE_KEYS.inventoryOverview}${includeEmpty ? ":all" : ""}:p${page}:s${pageSize}`;
+    const fetcher = () => buildOverview(includeEmpty, page, pageSize);
     const payload = bypass ? await fetcher() : await withCache(key, TTL.inventoryOverview, fetcher);
     return NextResponse.json(payload);
   } catch (error: any) {
@@ -38,7 +46,7 @@ export async function GET(req: Request) {
   }
 }
 
-async function buildOverview(includeEmpty: boolean): Promise<Record<string, unknown>> {
+async function buildOverview(includeEmpty: boolean, page = 1, pageSize = 50): Promise<Record<string, unknown>> {
   const [allProducts, machines, productList] = await Promise.all([
     getInventoryOverview(),
     getMachineList(),
@@ -74,7 +82,7 @@ async function buildOverview(includeEmpty: boolean): Promise<Record<string, unkn
   // full machines[] array (avg ~200 bytes each) AND hasStockSignal, of
   // which the table only ever shows a machineCount + nothing for the
   // signal. Replacing those two saves ~25% off the wire.
-  const products = filtered.map((p) => ({
+  const slimmed = filtered.map((p) => ({
     id: p.id,
     name: p.name,
     sku: p.sku,
@@ -88,17 +96,30 @@ async function buildOverview(includeEmpty: boolean): Promise<Record<string, unkn
     machineCount: Array.isArray(p.machines) ? p.machines.length : 0,
   }));
 
+  // Pagination — slice the filtered+slimmed list. Default 50/page keeps
+  // the first paint under ~5 KB even for an operator with 1000 active SKUs.
+  const start = (page - 1) * pageSize;
+  const products = slimmed.slice(start, start + pageSize);
+  const total = slimmed.length;
+  const hasMore = start + products.length < total;
+
   return {
     success: true,
     products,
     machines,
     productList,
+    pagination: {
+      page,
+      pageSize,
+      total,
+      hasMore,
+    },
     stats: {
       totalProducts,
       lowStockCount,
       outOfStockCount,
       totalUnits: totalValue,
-      shownProducts: products.length,
+      shownProducts: total,
       hiddenEmpty: includeEmpty ? 0 : allProducts.length - filtered.length,
     },
   };

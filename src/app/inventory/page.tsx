@@ -57,6 +57,8 @@ interface Stats {
   lowStockCount: number;
   outOfStockCount: number;
   totalUnits: number;
+  shownProducts?: number;
+  hiddenEmpty?: number;
 }
 
 interface MachineOption {
@@ -114,32 +116,46 @@ export default function InventoryPage() {
   const [showRefill, setShowRefill] = useState(false);
   const [error, setError] = useState("");
 
-  const fetchInventory = useCallback(async () => {
+  // Pagination state — first page loads on mount, "Load more" appends.
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const PAGE_SIZE = 50;
+
+  const fetchInventory = useCallback(async (pageNum = 1, append = false) => {
     try {
       setError("");
-      // Only request the full 1000+ catalog when the operator explicitly
-      // ticks "Show empty products" — otherwise the API only ships the
-      // ~50 rows that actually have stock or sales (massive payload cut).
-      const url = showEmpty ? "/api/inventory?includeEmpty=1" : "/api/inventory";
+      if (append) setLoadingMore(true);
+      // Only request the full catalog when "Show empty products" is on.
+      // Server-side pagination cuts the first paint to ~5 KB.
+      const base = showEmpty ? "/api/inventory?includeEmpty=1" : "/api/inventory?includeEmpty=0";
+      const url = `${base}&page=${pageNum}&pageSize=${PAGE_SIZE}`;
       const res = await fetch(url);
       const data = await res.json();
       if (!data.success) {
         setError(data.error || "Failed to load inventory");
         return;
       }
-      setProducts(data.products || []);
-      setMachines(data.machines || []);
-      setProductList(data.productList || []);
+      const incoming = (data.products || []) as Product[];
+      setProducts((prev) => (append ? [...prev, ...incoming] : incoming));
+      if (!append) {
+        setMachines(data.machines || []);
+        setProductList(data.productList || []);
+      }
       setStats(data.stats || { totalProducts: 0, lowStockCount: 0, outOfStockCount: 0, totalUnits: 0 });
+      setHasMore(Boolean(data.pagination?.hasMore));
+      setPage(pageNum);
     } catch (err: any) {
       setError(err.message || "Failed to load inventory");
     } finally {
+      if (append) setLoadingMore(false);
       setLoading(false);
     }
   }, [showEmpty]);
 
   useEffect(() => {
-    fetchInventory();
+    // Reset to page 1 whenever the empty toggle changes.
+    fetchInventory(1, false);
   }, [fetchInventory]);
 
   const handleSync = async () => {
@@ -524,6 +540,26 @@ export default function InventoryPage() {
                 )}
               </div>
             </div>
+
+            {/* Load more — server pagination. First page = 50 rows. Click
+                to append the next 50. Hidden once all rows are loaded. */}
+            {hasMore && (
+              <div style={{ display: "flex", justifyContent: "center", marginTop: 14 }}>
+                <button
+                  onClick={() => fetchInventory(page + 1, true)}
+                  disabled={loadingMore}
+                  style={{
+                    padding: "10px 24px", borderRadius: 10,
+                    background: loadingMore ? "#e2e8f0" : "#fff",
+                    border: "1px solid #d5d9e2",
+                    fontSize: 13, fontWeight: 600, color: "#475569",
+                    cursor: loadingMore ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {loadingMore ? "Loading…" : `Load more (${products.length} of ${stats.shownProducts ?? "?"} shown)`}
+                </button>
+              </div>
+            )}
 
             {/* Explanation note */}
             <div style={{

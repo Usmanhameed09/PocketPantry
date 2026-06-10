@@ -20,8 +20,7 @@ import {
 } from "lucide-react";
 
 /* ────── Types ────── */
-type DashboardData = {
-  generatedAt: string;
+type TilesData = {
   sales: {
     todayRevenue: number; todayUnits: number; todayTransactions: number;
     yesterdayRevenue: number; wowPct: number; avgSale: number;
@@ -31,10 +30,23 @@ type DashboardData = {
   };
   machines: { total: number; active: number; offline: number; offlineList: Array<{ name: string; status: string }>; };
   alerts: { total: number; high: number; topAlerts: Array<{ message: string; severity: string; kind: string }>; };
+  warehouse: { value: number; itemsBelowThreshold: number };
+};
+type SectionsData = {
   refillStops: Array<{ machine: string; items: number; color: string }>;
-  warehouse: { value: number; itemsBelowThreshold: number; restockCost: number; buyListItems: number; };
+  restock: { cost: number; buyListItems: number };
   priceChanges: Array<{ product: string; suggestedPrice: number; cost: number }>;
   recentReply: { from: string; summary: string; intent: string; receivedAt: string } | null;
+};
+// Combined view used by the existing render path. Built from tiles + sections
+// as each arrives — render whatever fields we have, leave the rest as
+// loading skeletons.
+type DashboardData = TilesData & {
+  refillStops: SectionsData["refillStops"];
+  warehouse: TilesData["warehouse"] & { restockCost: number; buyListItems: number };
+  priceChanges: SectionsData["priceChanges"];
+  recentReply: SectionsData["recentReply"];
+  generatedAt: string;
 };
 
 /* ────── Style helpers ────── */
@@ -70,27 +82,59 @@ export default function Dashboard() {
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(1024);
   const router = useRouter();
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Progressive load: fetch the top tiles and the lower sections in parallel
+  // from two separate endpoints. The top tiles return in ~600ms; sections
+  // can take 3-5s (buy list compute + pricing analyses). UI renders each
+  // half as soon as its fetch resolves.
+  const [tiles, setTiles] = useState<TilesData | null>(null);
+  const [sections, setSections] = useState<SectionsData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/dashboard/today", { cache: "no-store" });
-        const json = await res.json();
+    fetch("/api/dashboard/today/tiles", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
         if (cancelled) return;
-        if (!json.success) throw new Error(json.error || "Failed to load");
-        setData(json);
-      } catch (err) {
+        if (!json.success) {
+          setError(json.error || "Failed to load tiles");
+          return;
+        }
+        setTiles(json);
+      })
+      .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
+      });
+    fetch("/api/dashboard/today/sections", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        if (!json.success) return; // sections failure is non-fatal
+        setSections(json);
+      })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  // Build the legacy combined view from whatever has arrived so far. Any
+  // field that isn't ready stays at a sensible "loading" sentinel so the
+  // existing render code doesn't crash.
+  const data: DashboardData | null = tiles ? {
+    generatedAt: new Date().toISOString(),
+    sales: tiles.sales,
+    machines: tiles.machines,
+    alerts: tiles.alerts,
+    warehouse: {
+      ...tiles.warehouse,
+      restockCost: sections?.restock.cost ?? 0,
+      buyListItems: sections?.restock.buyListItems ?? 0,
+    },
+    refillStops: sections?.refillStops ?? [],
+    priceChanges: sections?.priceChanges ?? [],
+    recentReply: sections?.recentReply ?? null,
+  } : null;
+  const loading = tiles === null;
+  const sectionsLoading = sections === null;
 
   if (loading) {
     return (
@@ -188,7 +232,9 @@ export default function Dashboard() {
               </div>
             </div>
             <div style={cardBody}>
-              {refillStops.length === 0 ? (
+              {sectionsLoading ? (
+                <EmptyHint message="Loading refill stops…" />
+              ) : refillStops.length === 0 ? (
                 <EmptyHint message="All machines stocked — no refills needed yet" />
               ) : (
                 <div style={{
@@ -220,7 +266,12 @@ export default function Dashboard() {
               </div>
             </div>
             <div style={cardBody}>
-              {warehouse.buyListItems > 0 ? (
+              {sectionsLoading ? (
+                <div style={{ background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 10, padding: "14px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                  <Loader2 size={14} color="#64748b" style={{ animation: "spin 1s linear infinite" }} />
+                  <div style={{ fontSize: 12, color: "#64748b" }}>Computing buy list…</div>
+                </div>
+              ) : warehouse.buyListItems > 0 ? (
                 <div style={{ background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>Order Recommended</div>
                   <div style={{ fontSize: 12, color: "#b45309", marginTop: 4 }}>
@@ -233,7 +284,7 @@ export default function Dashboard() {
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <InfoRow label="Warehouse Value" value={`$${warehouse.value.toFixed(2)}`} />
                 <InfoRow label="Items Below Threshold" value={`${warehouse.itemsBelowThreshold} products`} valueColor={warehouse.itemsBelowThreshold > 0 ? "#d97706" : "#059669"} />
-                <InfoRow label="Estimated Restock Cost" value={`$${warehouse.restockCost.toFixed(2)}`} />
+                <InfoRow label="Estimated Restock Cost" value={sectionsLoading ? "…" : `$${warehouse.restockCost.toFixed(2)}`} />
               </div>
             </div>
             <div style={cardFooter}><button style={greenBtn} onClick={() => router.push("/inventory/buy-list")}>Open Buy List</button></div>
@@ -251,7 +302,9 @@ export default function Dashboard() {
               </div>
             </div>
             <div style={cardBody}>
-              {priceChanges.length === 0 ? (
+              {sectionsLoading ? (
+                <EmptyHint message="Loading price suggestions…" />
+              ) : priceChanges.length === 0 ? (
                 <EmptyHint message="No pending price changes — margins are healthy" />
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

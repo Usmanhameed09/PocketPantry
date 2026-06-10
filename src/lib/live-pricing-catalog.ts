@@ -54,6 +54,16 @@ export type PricingCatalogProduct = {
   lastSoldAt: string | null;
   platform: string;
   isManualOnly: boolean;
+  _debug?: {
+    companyId: string;
+    productsCount: number;
+    skuTried: string;
+    normalizedName: string;
+    productsHasName: boolean;
+    productsHasSku: boolean;
+    matchedSku: string | null;
+    matchedUnitCost: number | null;
+  };
 };
 
 type SupabaseProductRow = {
@@ -283,6 +293,7 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
   const localStore = await readLocalStore();
   let products: SupabaseProductRow[] = [];
   let prices: SupabasePriceRow[] = [];
+  let debugCompanyId = "";
 
   try {
     if (liveProducts.length > 0) {
@@ -290,6 +301,7 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
     }
 
     const companyId = await getOrCreateCompanyId();
+    debugCompanyId = companyId;
     const supabaseData = await getSupabaseProducts(companyId);
     products = supabaseData.products;
     prices = supabaseData.prices;
@@ -369,6 +381,11 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
             ? Number(productsUnitCost)
             : (liveProduct.last_known_cost ?? 0));
 
+    const debugNormalizedName = normalizeName(liveProduct.name);
+    const productNameLower = liveProduct.name.toLowerCase();
+    const productsHasName = products.some((p) => p.name.toLowerCase() === productNameLower);
+    const productsHasSku = products.some((p) => p.sku === sku);
+
     catalog.push({
       id: productId,
       productRefId: fallbackProductId,
@@ -378,6 +395,16 @@ export async function getPricingCatalog(): Promise<PricingCatalogProduct[]> {
       category: liveProduct.category || "snack",
       currentPrice,
       lastKnownCost: resolvedCost,
+      _debug: {
+        companyId: debugCompanyId,
+        productsCount: products.length,
+        skuTried: sku,
+        normalizedName: debugNormalizedName,
+        productsHasName,
+        productsHasSku,
+        matchedSku: supabaseProduct?.sku ?? null,
+        matchedUnitCost: supabaseProduct?.unit_cost ?? null,
+      },
       expectedPackSize: liveProduct.expected_pack_size ?? parsePackSize(supabaseProduct?.unit_size),
       observedPrice: liveProduct.observed_price ?? null,
       unitsSold: liveProduct.units_sold ?? 0,

@@ -33,14 +33,24 @@ export default function ProductsPage() {
   const [editing, setEditing] = useState<Partial<Product> | null>(null);
   const [saving, setSaving] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  // Default: hide the 6000+ catalog-only orphans from the bulk Excel
+  // import. They show only when the operator ticks "Show inactive".
+  const [showInactive, setShowInactive] = useState(false);
+  const [hiddenCount, setHiddenCount] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await fetch("/api/inventory/products", { cache: "no-store" });
+    const url = showInactive
+      ? "/api/inventory/products?includeAll=1"
+      : "/api/inventory/products";
+    const res = await fetch(url, { cache: "no-store" });
     const data = await res.json();
-    if (data.success) setProducts(data.data || []);
+    if (data.success) {
+      setProducts(data.data || []);
+      setHiddenCount(data.hiddenInactive || 0);
+    }
     setLoading(false);
-  }, []);
+  }, [showInactive]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -117,6 +127,19 @@ export default function ProductsPage() {
               }}
             />
           </div>
+          <label style={{
+            display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "#475569",
+            cursor: "pointer", userSelect: "none",
+          }}>
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+              style={{ cursor: "pointer" }}
+            />
+            Show inactive products
+            {!showInactive && hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ""}
+          </label>
           <div style={{ display: "flex", gap: 8 }}>
             <BtnSecondary onClick={() => setShowImport(true)}>
               <Upload size={16} /> Bulk import

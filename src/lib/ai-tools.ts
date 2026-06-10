@@ -746,15 +746,48 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
   const companyId = await ensureDefaultCompany();
   const supabase = createServerClient();
 
-  const { data } = await supabase
+  // Pull a wider candidate pool so that after the active-product filter
+  // we still have `limit` results — without this, an unfiltered query
+  // would return 6000+ candidates dominated by inactive bulk-imports.
+  const { data: candidates } = await supabase
     .from("products")
     .select("id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, barcode, status")
     .eq("company_id", companyId)
     .or(`name.ilike.%${query}%,sku.ilike.%${query}%,vendor.ilike.%${query}%`)
-    .limit(Math.min(Math.max(limit, 1), 25));
+    .limit(100);
+
+  const rows = candidates || [];
+  if (rows.length === 0) return { matches: [], count: 0 };
+
+  // Active filter: warehouse stock, machine presence, recent sales, or
+  // operator-curated metadata (barcode / real vendor / vend price set).
+  // Without this the AI returns orphan UPC-import rows for every "tell me
+  // about X" question, confusing operators who only work with real SKUs.
+  const ids = rows.map((p) => p.id as string);
+  const [whRes, miRes, dsRes] = await Promise.all([
+    supabase.from("warehouse_inventory").select("product_id").eq("company_id", companyId).gt("on_hand", 0).in("product_id", ids),
+    supabase.from("machine_inventory").select("product_id").gt("estimated_remaining", 0).in("product_id", ids),
+    supabase.from("daily_sales").select("product_id").gte("sale_date", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)).in("product_id", ids),
+  ]);
+  const hasSignal = new Set<string>([
+    ...((whRes.data || []).map((r) => r.product_id as string)),
+    ...((miRes.data || []).map((r) => r.product_id as string)),
+    ...((dsRes.data || []).map((r) => r.product_id as string)),
+  ]);
+
+  const isActive = (p: typeof rows[number]) => {
+    if (hasSignal.has(p.id as string)) return true;
+    const barcode = (p.barcode as string | null) || "";
+    const vendor = ((p.vendor as string | null) || "").trim();
+    const price = (p.default_vend_price as number | null) || 0;
+    return !!barcode || (vendor.length > 0 && vendor !== "—") || price > 0;
+  };
+
+  const active = rows.filter(isActive);
+  const inactiveCount = rows.length - active.length;
 
   return {
-    matches: (data || []).map((p) => ({
+    matches: active.slice(0, Math.min(Math.max(limit, 1), 25)).map((p) => ({
       id: p.id,
       name: p.name,
       sku: p.sku,
@@ -766,7 +799,11 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
       barcode: p.barcode,
       status: p.status,
     })),
-    count: (data || []).length,
+    count: Math.min(active.length, Math.min(Math.max(limit, 1), 25)),
+    hiddenInactiveMatches: inactiveCount,
+    note: inactiveCount > 0
+      ? `Filtered out ${inactiveCount} catalog-only matches (no stock, no sales, no operator metadata).`
+      : undefined,
   };
 }
 

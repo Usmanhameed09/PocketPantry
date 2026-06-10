@@ -348,17 +348,72 @@ export async function getMachineList(): Promise<
 
 // ─── Product List (for dropdowns) ───────────────────────────────────
 
-export async function getProductList(): Promise<
-  Array<{ id: string; name: string; sku: string }>
-> {
+/**
+ * getProductList — feeds the RefillModal dropdown + similar pickers.
+ *
+ * Default: only returns ACTIVE products (~30-50) so the operator isn't
+ * scrolling past 6000+ bulk-imported orphan SKUs to log a refill. Active
+ * = has on-hand stock, machine presence, recent sales, OR operator-set
+ * metadata (barcode / vendor / vend price).
+ *
+ * Pass `{ includeAll: true }` when you genuinely need the full catalog
+ * (e.g. an admin tool that's looking up an orphan SKU by name).
+ */
+export async function getProductList(
+  opts: { includeAll?: boolean } = {}
+): Promise<Array<{ id: string; name: string; sku: string }>> {
   const companyId = await ensureDefaultCompany();
   const supabase = createServerClient();
   const { data, error } = await supabase
     .from("products")
-    .select("id, name, sku")
+    .select("id, name, sku, vendor, barcode, default_vend_price")
     .eq("company_id", companyId)
     .order("name");
 
   if (error) throw new Error(`getProductList: ${error.message}`);
-  return data || [];
+  const allProducts = (data || []) as Array<{
+    id: string;
+    name: string;
+    sku: string;
+    vendor?: string | null;
+    barcode?: string | null;
+    default_vend_price?: number | null;
+  }>;
+
+  if (opts.includeAll) {
+    return allProducts.map((p) => ({ id: p.id, name: p.name, sku: p.sku }));
+  }
+
+  const ids = allProducts.map((p) => p.id);
+  const [warehouseRes, machineInvRes, salesRes] = await Promise.all([
+    supabase
+      .from("warehouse_inventory")
+      .select("product_id")
+      .eq("company_id", companyId)
+      .gt("on_hand", 0),
+    supabase
+      .from("machine_inventory")
+      .select("product_id")
+      .gt("estimated_remaining", 0),
+    supabase
+      .from("daily_sales")
+      .select("product_id")
+      .gte("sale_date", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
+      .in("product_id", ids.length > 0 ? ids : ["00000000-0000-0000-0000-000000000000"]),
+  ]);
+  const has = new Set<string>([
+    ...((warehouseRes.data || []).map((r) => r.product_id as string)),
+    ...((machineInvRes.data || []).map((r) => r.product_id as string)),
+    ...((salesRes.data || []).map((r) => r.product_id as string)),
+  ]);
+
+  return allProducts
+    .filter((p) => {
+      if (has.has(p.id)) return true;
+      const barcode = p.barcode || "";
+      const vendor = (p.vendor || "").trim();
+      const price = p.default_vend_price || 0;
+      return !!barcode || (vendor.length > 0 && vendor !== "—") || price > 0;
+    })
+    .map((p) => ({ id: p.id, name: p.name, sku: p.sku }));
 }

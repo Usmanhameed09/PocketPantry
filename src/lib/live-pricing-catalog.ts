@@ -5,6 +5,7 @@ import { readEnv } from "./runtime-env";
 import { PRICING_SYSTEM_LEAD_ID } from "./system-records";
 import { guardScrapedUnitCost } from "./cost-fixer";
 import { ensureDefaultCompany } from "./inventory-store";
+import { invalidateOnPriceWrite } from "./cache";
 
 // outreach_log has a CHECK constraint that limits action_type to a small set
 // (call/email/email_agent_settings). We reuse "call" — the same pattern
@@ -748,6 +749,10 @@ export async function savePricingAnalyses(analyses: SavedPricingAnalysis[]) {
       localStore.savedAnalyses[analysis.productId] = analysis;
     }
     await writeLocalStore(localStore);
+    // Even the local-fallback path is a write the operator initiated —
+    // wipe the catalog cache so the next load re-reads (and picks up
+    // anything the scrape did manage to persist).
+    await invalidateOnPriceWrite();
     return { updated: analyses.length, local: true as const, supabaseError: errorMsg };
   }
 
@@ -762,6 +767,12 @@ export async function savePricingAnalyses(analyses: SavedPricingAnalysis[]) {
   } catch {
     // ignore — Supabase is the source of truth
   }
+
+  // CRITICAL: invalidate the Pricing catalog cache so the next /api/pricing/catalog
+  // read picks up the scraped data. Without this, the operator ran a scrape,
+  // we persisted everything, then the UI re-fetched and got the cached
+  // pre-scrape catalog — making it look like the scrape silently lost data.
+  await invalidateOnPriceWrite();
 
   return { updated: analyses.length };
 }

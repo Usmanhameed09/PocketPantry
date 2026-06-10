@@ -168,10 +168,15 @@ export default function PricingPage() {
     });
   };
 
-  const loadCatalog = useCallback(async () => {
+  const loadCatalog = useCallback(async (forceFresh = false) => {
     setCatalogLoading(true);
     try {
-      const res = await fetch("/api/pricing/catalog", { cache: "no-store" });
+      // After a scrape we explicitly bypass the catalog cache. The save
+      // path also invalidates the cache key, but the operator may have
+      // multiple tabs / a race against another visitor — ?fresh=1 is
+      // belt-and-suspenders to make sure they see their own writes.
+      const url = forceFresh ? "/api/pricing/catalog?fresh=1" : "/api/pricing/catalog";
+      const res = await fetch(url, { cache: "no-store" });
       const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
         setItems(data.data);
@@ -518,9 +523,10 @@ export default function PricingPage() {
       } else if (msg.type === "scrape-complete") {
         cleanup();
         // All per-product saves already happened during progress events.
-        // Just refresh the catalog one more time to pick up the final state
-        // and clear the extension's stored state.
-        await loadCatalog();
+        // Force-fresh the catalog so we definitely see the scraped data
+        // (the cache invalidation hook also fires, but this is the explicit
+        // belt-and-suspenders).
+        await loadCatalog(true);
         window.postMessage({ source: "pp-dashboard", type: "clear-state" }, "*");
         setScraping(false);
         setLastScraped(new Date().toLocaleTimeString());

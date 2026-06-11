@@ -59,9 +59,26 @@ export function buildPricingFromScrape(
   product: PricingCatalogProduct,
   scrape: ExtensionScrapeResult,
 ): ComputedPricingRow {
-  const unitCost = scrape.scraped && typeof scrape.unitPrice === "number" && scrape.unitPrice > 0
-    ? scrape.unitPrice
-    : product.lastKnownCost;
+  // Resolve the scraped UNIT cost. Priority:
+  //   1. scrape.unitPrice if the scraper pre-computed one (> 0)
+  //   2. packPrice / packSize — the common case. The Sam's Club /
+  //      Walmart scraper returns a PACK price ($15.98) + pack size (24)
+  //      but NOT a unit price. Previously we only checked unitPrice, so
+  //      these scrapes fell through to product.lastKnownCost (often 0),
+  //      which is why Coca-Cola showed $0.00 cost after a successful
+  //      $15.98/24pk scrape.
+  //   3. packPrice alone if packSize is missing/1 (cost == pack == unit)
+  //   4. product.lastKnownCost — last resort when the scrape gave nothing
+  let scrapedUnitCost = 0;
+  if (scrape.scraped) {
+    if (typeof scrape.unitPrice === "number" && scrape.unitPrice > 0) {
+      scrapedUnitCost = scrape.unitPrice;
+    } else if (typeof scrape.packPrice === "number" && scrape.packPrice > 0) {
+      const size = scrape.packSize && scrape.packSize > 1 ? scrape.packSize : 1;
+      scrapedUnitCost = Math.round((scrape.packPrice / size) * 100) / 100;
+    }
+  }
+  const unitCost = scrapedUnitCost > 0 ? scrapedUnitCost : product.lastKnownCost;
   const prevCost = product.lastKnownCost;
   const targetMargin = CATEGORY_MARGINS[product.category] ?? DEFAULT_MARGIN;
   const hasCostBasis = unitCost > 0;

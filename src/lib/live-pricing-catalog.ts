@@ -675,6 +675,41 @@ async function writeSupabaseAnalysisItems(analyses: SavedPricingAnalysis[]) {
   if (error) throw error;
 }
 
+/**
+ * Persist each scraped unit cost into products.unit_cost so the rest of
+ * the app (Cost Fixer, Buy List, Inventory Overview, Reports, AI tools,
+ * etc.) immediately sees the new cost. Skips zeros + non-positive numbers
+ * so a failed scrape result can't blank out an existing good cost.
+ */
+async function syncCostsToProductsTable(analyses: SavedPricingAnalysis[]) {
+  if (analyses.length === 0) return;
+  const supabase = createServerClient();
+  // One UPDATE per product. Could be batched via .upsert if this proves
+  // slow on bigger scrapes, but per-product keeps the failure mode clean
+  // (one bad row doesn't drop the whole batch).
+  for (const a of analyses) {
+    if (!a.productId) continue;
+    const cost = Number(a.cost);
+    if (!Number.isFinite(cost) || cost <= 0) continue;
+    const update: Record<string, unknown> = {
+      unit_cost: Math.round(cost * 100) / 100,
+      updated_at: new Date().toISOString(),
+    };
+    // If the scrape inferred a pack size, propagate it to case_size so
+    // Buy List math improves automatically.
+    if (a.packSize != null && Number.isFinite(Number(a.packSize)) && Number(a.packSize) > 1) {
+      update.case_size = Math.round(Number(a.packSize));
+    }
+    const { error } = await supabase
+      .from("products")
+      .update(update)
+      .eq("id", a.productId);
+    if (error) {
+      console.warn("[pricing-catalog] products update failed for", a.productId, error.message);
+    }
+  }
+}
+
 async function applyScrapeTimeCostGuard(analyses: SavedPricingAnalysis[]) {
   if (analyses.length === 0) return;
   const supabase = createServerClient();
@@ -733,6 +768,18 @@ export async function savePricingAnalyses(analyses: SavedPricingAnalysis[]) {
     await applyScrapeTimeCostGuard(analyses);
   } catch (err) {
     console.warn("[pricing-catalog] cost guard failed:", err);
+  }
+
+  // ALSO write the scraped cost into products.unit_cost. Without this,
+  // the Pricing catalog reads cost from products.unit_cost — which the
+  // scraper never updated — so after the scrape completed and the UI
+  // re-fetched, the old pre-scrape values came back and operators saw
+  // their scrape "revert". The savedAnalysis snapshot still gets written
+  // below for the history record + diff context.
+  try {
+    await syncCostsToProductsTable(analyses);
+  } catch (err) {
+    console.warn("[pricing-catalog] products.unit_cost sync failed:", err);
   }
 
   // Append per-product rows to Supabase (race-safe). Each call only inserts

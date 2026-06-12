@@ -18,6 +18,7 @@ import {
   getPricingCatalog,
   getSavedPricingAnalyses,
 } from "@/lib/live-pricing-catalog";
+import { ensureDefaultCompany } from "@/lib/inventory-store";
 import { invalidateOnPriceWrite } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
@@ -35,59 +36,71 @@ export const maxDuration = 60;
  * by id; if the saved analysis productId IS a products.id we update directly,
  * otherwise we resolve through the catalog's productRefId.
  */
+const normalizeName = (s: string) =>
+  s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+
 async function computeBackfill() {
   const [catalog, saved] = await Promise.all([
     getPricingCatalog(),
     getSavedPricingAnalyses(),
   ]);
   const supabase = createServerClient();
+  const companyId = await ensureDefaultCompany();
 
-  // Map catalog id -> the real products.id (productRefId) to write to.
-  const refById = new Map(catalog.map((c) => [c.id, c.productRefId]));
+  // Catalog synthetic-id -> canonical product name (the catalog row name
+  // is the operator-facing product name, which matches the products table).
   const nameById = new Map(catalog.map((c) => [c.id, c.name]));
 
-  // Collect target (products.id -> cost) from the saved analyses.
-  const writes: Array<{ productId: string; cost: number; name: string }> = [];
+  // Load the WHOLE products table (paginated past the 1000-row cap) so we
+  // can resolve a scraped product to its real UUID by normalized name.
+  type Prod = { id: string; name: string; unit_cost: number | null };
+  const products: Prod[] = [];
+  const PAGE = 1000;
+  for (let from = 0; from < 50000; from += PAGE) {
+    const { data } = await supabase
+      .from("products")
+      .select("id, name, unit_cost")
+      .eq("company_id", companyId)
+      .range(from, from + PAGE - 1);
+    if (!data || data.length === 0) break;
+    products.push(...(data as Prod[]));
+    if (data.length < PAGE) break;
+  }
+  // normalized name -> products row, preferring one that already has a cost
+  // (mirrors the catalog's duplicate-resolution so we hit the same row).
+  const prodByName = new Map<string, Prod>();
+  for (const p of products) {
+    const key = normalizeName(p.name);
+    const existing = prodByName.get(key);
+    if (!existing) { prodByName.set(key, p); continue; }
+    const eHas = (existing.unit_cost ?? 0) > 0;
+    const cHas = (p.unit_cost ?? 0) > 0;
+    if (cHas && !eHas) prodByName.set(key, p);
+  }
+
+  const fixes: Array<{ productId: string; cost: number; name: string; oldCost: number }> = [];
   for (const [savedId, a] of Object.entries(saved)) {
     const cost = Number(a.cost) || 0;
     if (cost <= 0) continue;
-    // Prefer the catalog's productRefId (the canonical products.id). If the
-    // saved key isn't in the catalog, assume it's already a products.id.
-    const targetId = refById.get(savedId) || savedId;
-    if (!targetId) continue;
-    writes.push({
-      productId: targetId,
+    // Resolve the product name: prefer the catalog's canonical name.
+    const name = nameById.get(savedId) || a.scrapedProduct || "";
+    if (!name) continue;
+    const prod = prodByName.get(normalizeName(name));
+    if (!prod) continue; // no matching products row — skip
+    const oldCost = prod.unit_cost ?? 0;
+    if (Math.abs(oldCost - cost) < 0.01) continue; // already correct
+    fixes.push({
+      productId: prod.id,
       cost: Math.round(cost * 100) / 100,
-      name: nameById.get(savedId) || a.scrapedProduct || targetId,
+      name: prod.name,
+      oldCost,
     });
   }
-
-  // Read current products.unit_cost for those ids so we only update the
-  // ones that are actually stale (0 or different).
-  const ids = [...new Set(writes.map((w) => w.productId))];
-  const currentCostById = new Map<string, number>();
-  const PAGE = 200;
-  for (let i = 0; i < ids.length; i += PAGE) {
-    const chunk = ids.slice(i, i + PAGE);
-    const { data } = await supabase
-      .from("products")
-      .select("id, unit_cost")
-      .in("id", chunk);
-    for (const r of data || []) {
-      currentCostById.set(r.id as string, (r.unit_cost as number) || 0);
-    }
-  }
-
-  const fixes = writes.filter((w) => {
-    const cur = currentCostById.get(w.productId);
-    // Only count rows that exist in products AND whose cost differs.
-    return cur !== undefined && Math.abs(cur - w.cost) >= 0.01;
-  });
 
   return { fixes };
 }
 
-async function applyBackfill(fixes: Array<{ productId: string; cost: number; name: string }>) {
+async function applyBackfill(fixes: Array<{ productId: string; cost: number; name: string; oldCost: number }>) {
   const supabase = createServerClient();
   let applied = 0;
   for (const f of fixes) {

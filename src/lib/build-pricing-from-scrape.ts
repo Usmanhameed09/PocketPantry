@@ -19,6 +19,41 @@ function roundToQuarter(n: number): number {
   return Math.round(n * 4) / 4;
 }
 
+/**
+ * Parse the pack/case count out of a retail product TITLE. Walmart / Sam's
+ * Club titles almost always state it, e.g.:
+ *   "Mrs Freshleys Crunch Mini Donut, 3.4 Ounce -- 72 per case."   -> 72
+ *   "Coca-Cola Soda Soft Drink, 12 fl oz, 35 Pack"                 -> 35
+ *   "Doritos Nacho Cheese, 1 oz, Pack of 40"                       -> 40
+ *   "Lays Classic Chips 1oz 50ct"                                  -> 50
+ *   "case of 24"                                                   -> 24
+ *
+ * The hard part is NOT matching the volume/weight (3.4 Ounce, 12 fl oz).
+ * We only accept a number that is explicitly tied to a COUNT word
+ * (case/pack/count/ct/pc/box/cans/bottles/bags/bars/per case), and we
+ * reject numbers immediately followed by a unit (oz, ounce, fl, ml, g, lb).
+ */
+export function parsePackFromTitle(title: string | null | undefined): number | null {
+  if (!title) return null;
+  const t = title.toLowerCase();
+
+  // Ordered patterns, strongest signal first.
+  const patterns: RegExp[] = [
+    /(\d{1,3})\s*(?:per\s*case|\/\s*case|\/\s*cs)\b/, // "72 per case", "72/case"
+    /(?:case|pack)\s*of\s*(\d{1,3})\b/,                // "case of 24", "pack of 40"
+    /(\d{1,3})\s*[-\s]?(?:ct|count|pk|pack|pcs|pieces?|cans?|bottles?|bags?|bars?|cups?|boxes?|box|tin)\b/, // "50ct", "24 pack", "12 cans"
+  ];
+
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n >= 2 && n <= 288) return n;
+    }
+  }
+  return null;
+}
+
 export type ExtensionScrapeResult = {
   productId: string;
   scraped: boolean;
@@ -69,13 +104,22 @@ export function buildPricingFromScrape(
   //      $15.98/24pk scrape.
   //   3. packPrice alone if packSize is missing/1 (cost == pack == unit)
   //   4. product.lastKnownCost — last resort when the scrape gave nothing
+  // Resolve the effective pack size. The scraper's packSize is often wrong
+  // (1 when the listing is actually a 72-count case), but the product TITLE
+  // almost always states the real count ("72 per case"). When the scraper
+  // size is missing/1, parse the title and prefer that.
+  let effectivePackSize = scrape.packSize && scrape.packSize > 1 ? scrape.packSize : 1;
+  if (effectivePackSize <= 1) {
+    const fromTitle = parsePackFromTitle(scrape.scrapedName);
+    if (fromTitle && fromTitle > 1) effectivePackSize = fromTitle;
+  }
+
   let scrapedUnitCost = 0;
   if (scrape.scraped) {
     if (typeof scrape.unitPrice === "number" && scrape.unitPrice > 0) {
       scrapedUnitCost = scrape.unitPrice;
     } else if (typeof scrape.packPrice === "number" && scrape.packPrice > 0) {
-      const size = scrape.packSize && scrape.packSize > 1 ? scrape.packSize : 1;
-      scrapedUnitCost = Math.round((scrape.packPrice / size) * 100) / 100;
+      scrapedUnitCost = Math.round((scrape.packPrice / effectivePackSize) * 100) / 100;
     }
   }
   const unitCost = scrapedUnitCost > 0 ? scrapedUnitCost : product.lastKnownCost;
@@ -140,7 +184,9 @@ export function buildPricingFromScrape(
     trigger,
     sourceUrl: scrape.scraped ? scrape.sourceUrl : undefined,
     packPrice: scrape.scraped ? scrape.packPrice ?? null : null,
-    packSize: scrape.scraped ? scrape.packSize ?? null : null,
+    // Store the EFFECTIVE pack size (title-parsed when the scraper's was
+    // wrong) so case_size + the "$X / Npk" display reflect reality.
+    packSize: scrape.scraped ? effectivePackSize : null,
     scraped: !!scrape.scraped,
     scrapedProduct: scrape.scraped ? scrape.scrapedName || null : null,
     error: scrape.error || null,

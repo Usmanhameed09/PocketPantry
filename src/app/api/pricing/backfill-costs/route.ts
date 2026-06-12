@@ -20,6 +20,7 @@ import {
 } from "@/lib/live-pricing-catalog";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
 import { invalidateOnPriceWrite } from "@/lib/cache";
+import { parsePackFromTitle } from "@/lib/build-pricing-from-scrape";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -78,50 +79,56 @@ async function computeBackfill() {
     if (cHas && !eHas) prodByName.set(key, p);
   }
 
-  const fixes: Array<{ productId: string; cost: number; name: string; oldCost: number }> = [];
+  const fixes: Array<{ productId: string; cost: number; name: string; oldCost: number; via?: string }> = [];
   const skipped: Array<{ name: string; cost: number; reason: string }> = [];
   for (const [savedId, a] of Object.entries(saved)) {
-    const cost = Number(a.cost) || 0;
+    let cost = Number(a.cost) || 0;
+    let via = "stored cost";
+    const category = (catById.get(savedId) || "snack").toLowerCase();
+    const caseCeiling = category.includes("meal") ? 8 : 5;
+
+    // RECOVERY: if the stored cost looks like a case price (too high) but we
+    // have a pack price + a parseable count in the scraped title, recompute
+    // the real unit cost. This rescues e.g. Mrs Freshleys Mini Donut where
+    // the scraper saved $171.01 (a 72-count case) as the unit cost — the
+    // title "72 per case" gives 171.01/72 = $2.37.
+    if (cost > caseCeiling && a.packPrice && a.packPrice > 0) {
+      const titleCount = parsePackFromTitle(a.scrapedProduct);
+      const size = titleCount && titleCount > 1
+        ? titleCount
+        : (a.packSize && a.packSize > 1 ? a.packSize : 1);
+      if (size > 1) {
+        const recomputed = Math.round((a.packPrice / size) * 100) / 100;
+        if (recomputed > 0) { cost = recomputed; via = `title pack ${size}`; }
+      }
+    }
+
     if (cost <= 0) continue;
-    // Resolve the product name: prefer the catalog's canonical name.
     const name = nameById.get(savedId) || a.scrapedProduct || "";
     if (!name) continue;
     const prod = prodByName.get(normalizeName(name));
-    if (!prod) continue; // no matching products row — skip
+    if (!prod) continue;
     const oldCost = prod.unit_cost ?? 0;
     if (Math.abs(oldCost - cost) < 0.01) continue; // already correct
 
-    // SANITY GUARDS — these scraped costs include some that are clearly
-    // CASE prices (packSize was wrongly 1, so cost = full pack price). We
-    // must not import them or we'd blow up a good unit cost.
-    const category = (catById.get(savedId) || "snack").toLowerCase();
-    const caseCeiling = category.includes("meal") ? 8 : 5;
-    // 1. A vending UNIT almost never costs more than ~$5 ($8 for meals).
-    //    Anything above is a case price misread — reject.
+    // After recovery, anything STILL above the ceiling is genuinely
+    // unparseable (no count in title) — skip rather than import garbage.
     if (cost > caseCeiling) {
-      skipped.push({ name: prod.name, cost, reason: `> $${caseCeiling} (likely case price)` });
+      skipped.push({ name: prod.name, cost, reason: `> $${caseCeiling}, no pack count in title` });
       continue;
     }
-    // 2. Don't overwrite an already-reasonable cost with a much higher one.
-    //    (protects e.g. Croissant Brown $1.26 from a bad $355 scrape — that
-    //    one is caught by guard #1 anyway, but this covers subtler cases.)
     if (oldCost > 0 && cost > oldCost * 1.5) {
       skipped.push({ name: prod.name, cost, reason: `${cost} > 1.5× existing ${oldCost}` });
       continue;
     }
 
-    fixes.push({
-      productId: prod.id,
-      cost: Math.round(cost * 100) / 100,
-      name: prod.name,
-      oldCost,
-    });
+    fixes.push({ productId: prod.id, cost: Math.round(cost * 100) / 100, name: prod.name, oldCost, via });
   }
 
   return { fixes, skipped };
 }
 
-async function applyBackfill(fixes: Array<{ productId: string; cost: number; name: string; oldCost: number }>) {
+async function applyBackfill(fixes: Array<{ productId: string; cost: number; name: string; oldCost: number; via?: string }>) {
   const supabase = createServerClient();
   let applied = 0;
   const errors: string[] = [];

@@ -489,11 +489,20 @@ export default function PricingPage() {
     setScrapeStats(null);
     setScrapeProgress({ completed: 0, total: items.length });
 
-    // 1. Build payload from current catalog
+    // 1. Build payload from current catalog.
+    //    SEARCH TERM = the clean canonical product name, NEVER the previous
+    //    scrape's title. Using scrapedProduct (a retailer-specific result
+    //    title like "Mrs Freshleys Crunch Mini Donut, 3.4 Ounce -- 72 per
+    //    case.") as the search input caused a snowball: once a product got a
+    //    Walmart result, the next scrape searched SAM'S with that Walmart
+    //    title, Sam's couldn't match it, so it fell to Walmart again and
+    //    STAYED there. Over successive scrapes everything drifted to Walmart.
+    //    The canonical name matches across all retailers, so Sam's (primary)
+    //    gets a fair shot every time.
     const products = items.map((it) => ({
       id: it.id,
       name: it.product,
-      search_term: it.scrapedProduct || it.product,
+      search_term: it.product,
       vending_price: it.currentPrice,
       last_known_cost: it.cost,
       expected_pack_size: it.packSize ?? null,

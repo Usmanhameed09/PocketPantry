@@ -42,6 +42,9 @@ export function parsePackFromTitle(title: string | null | undefined): number | n
     /(\d{1,3})\s*(?:per\s*case|\/\s*case|\/\s*cs)\b/, // "72 per case", "72/case"
     /(?:case|pack)\s*of\s*(\d{1,3})\b/,                // "case of 24", "pack of 40"
     /(\d{1,3})\s*[-\s]?(?:ct|count|pk|pack|pcs|pieces?|cans?|bottles?|bags?|bars?|cups?|boxes?|box|tin)\b/, // "50ct", "24 pack", "12 cans"
+    // "104/1.00oz" — count "/" per-unit weight. Common on Sam's Club case
+    // listings: "Sun Chips 104/1.00oz" means 104 bags of 1 oz.
+    /(\d{1,3})\s*\/\s*\d*\.?\d+\s*(?:oz|fl\s*oz|g|ml|gram|grams)\b/,
   ];
 
   for (const re of patterns) {

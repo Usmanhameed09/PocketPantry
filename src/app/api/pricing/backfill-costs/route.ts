@@ -85,7 +85,7 @@ async function computeBackfill() {
     packSize: number; via: string; savedId: string;
   };
   const fixes: Fix[] = [];
-  const skipped: Array<{ name: string; cost: number; reason: string }> = [];
+  const skipped: Array<{ name: string; cost: number; reason: string; title?: string; packPrice?: number | null; packSize?: number | null }> = [];
 
   for (const [savedId, a] of Object.entries(saved)) {
     // Skip non-scraped rows (no supplier data to recompute from).
@@ -117,7 +117,13 @@ async function computeBackfill() {
     // Anything STILL above the case ceiling has no usable count in its
     // title (bestSize stayed 1) — skip rather than import a case price.
     if (cost > caseCeiling) {
-      skipped.push({ name: prod.name, cost, reason: `> $${caseCeiling}, no pack count in title` });
+      skipped.push({
+        name: prod.name, cost,
+        reason: `> $${caseCeiling}, no pack count in title`,
+        title: a.scrapedProduct || null,
+        packPrice: a.packPrice,
+        packSize: a.packSize,
+      });
       continue;
     }
 

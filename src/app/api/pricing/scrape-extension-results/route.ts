@@ -77,6 +77,9 @@ export async function POST(request: Request) {
 
       analyses.push({
         productId: product.id,
+        // Canonical product name so the cost can be resolved to the real
+        // products.id (the analysis productId is a synthetic scraper id).
+        productName: product.name,
         supplier: computed.supplier,
         cost: computed.cost,
         prevCost: computed.prevCost,

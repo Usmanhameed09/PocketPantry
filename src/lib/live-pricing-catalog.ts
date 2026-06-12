@@ -91,6 +91,10 @@ export type SavedSupplierPrice = {
 
 export type SavedPricingAnalysis = {
   productId: string;
+  // Canonical product name (operator-facing). Used to resolve the real
+  // products.id when productId is a synthetic scraper id. Optional for
+  // backward-compat with older saved rows.
+  productName?: string;
   supplier: string;
   cost: number;
   prevCost: number;
@@ -684,28 +688,56 @@ async function writeSupabaseAnalysisItems(analyses: SavedPricingAnalysis[]) {
 async function syncCostsToProductsTable(analyses: SavedPricingAnalysis[]) {
   if (analyses.length === 0) return;
   const supabase = createServerClient();
-  // One UPDATE per product. Could be batched via .upsert if this proves
-  // slow on bigger scrapes, but per-product keeps the failure mode clean
-  // (one bad row doesn't drop the whole batch).
+  const companyId = await ensureDefaultCompany();
+
+  // The analysis productId is a synthetic scraper id, so we CANNOT update
+  // by .eq("id", productId). Resolve the real products row by normalized
+  // product name instead (same approach the catalog read path uses).
+  const norm = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  type Prod = { id: string; name: string; unit_cost: number | null; category: string | null };
+  const products: Prod[] = [];
+  const PAGE = 1000;
+  for (let from = 0; from < 50000; from += PAGE) {
+    const { data } = await supabase
+      .from("products")
+      .select("id, name, unit_cost, category")
+      .eq("company_id", companyId)
+      .range(from, from + PAGE - 1);
+    if (!data || data.length === 0) break;
+    products.push(...(data as Prod[]));
+    if (data.length < PAGE) break;
+  }
+  // normalized name -> products row, preferring one that already has a cost
+  const byName = new Map<string, Prod>();
+  for (const p of products) {
+    const k = norm(p.name);
+    const e = byName.get(k);
+    if (!e || ((p.unit_cost ?? 0) > 0 && (e.unit_cost ?? 0) <= 0)) byName.set(k, p);
+  }
+
   for (const a of analyses) {
-    if (!a.productId) continue;
     const cost = Number(a.cost);
     if (!Number.isFinite(cost) || cost <= 0) continue;
-    const update: Record<string, unknown> = {
-      unit_cost: Math.round(cost * 100) / 100,
-      updated_at: new Date().toISOString(),
-    };
-    // If the scrape inferred a pack size, propagate it to case_size so
-    // Buy List math improves automatically.
+    const name = a.productName || "";
+    if (!name) continue;
+    const prod = byName.get(norm(name));
+    if (!prod) continue;
+    const category = (prod.category || "snack").toLowerCase();
+    const caseCeiling = category.includes("meal") ? 8 : 5;
+    // Sanity guards (same as the backfill): reject obvious case prices and
+    // don't blow up a reasonable existing cost.
+    if (cost > caseCeiling) continue;
+    const oldCost = prod.unit_cost ?? 0;
+    if (oldCost > 0 && cost > oldCost * 1.5) continue;
+
+    const update: Record<string, unknown> = { unit_cost: Math.round(cost * 100) / 100 };
     if (a.packSize != null && Number.isFinite(Number(a.packSize)) && Number(a.packSize) > 1) {
       update.case_size = Math.round(Number(a.packSize));
     }
-    const { error } = await supabase
-      .from("products")
-      .update(update)
-      .eq("id", a.productId);
+    const { error } = await supabase.from("products").update(update).eq("id", prod.id);
     if (error) {
-      console.warn("[pricing-catalog] products update failed for", a.productId, error.message);
+      console.warn("[pricing-catalog] products update failed for", prod.name, error.message);
     }
   }
 }

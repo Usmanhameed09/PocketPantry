@@ -99,7 +99,33 @@ async function computeBackfill() {
 
 export async function GET(req: Request) {
   try {
-    const dry = new URL(req.url).searchParams.get("dry") === "1";
+    const sp = new URL(req.url).searchParams;
+    // Debug: dump the raw saved analyses so we can see what's actually
+    // stored (cost, packPrice, packSize) for the supposedly-broken rows.
+    if (sp.get("debug") === "1") {
+      const saved = await getSavedPricingAnalyses();
+      const entries = Object.entries(saved);
+      const sample = entries.slice(0, 20).map(([id, a]) => ({
+        id: id.slice(0, 8),
+        scrapedProduct: a.scrapedProduct,
+        cost: a.cost,
+        packPrice: a.packPrice,
+        packSize: a.packSize,
+        scraped: a.scraped,
+      }));
+      const zeroCost = entries.filter(([, a]) => (Number(a.cost) || 0) === 0).length;
+      const zeroCostWithPack = entries.filter(([, a]) =>
+        (Number(a.cost) || 0) === 0 && (a.packPrice ?? 0) > 0).length;
+      return NextResponse.json({
+        success: true,
+        debug: true,
+        totalSaved: entries.length,
+        zeroCost,
+        zeroCostWithPack,
+        sample,
+      });
+    }
+    const dry = sp.get("dry") === "1";
     const { fixes, analyses } = await computeBackfill();
     if (dry) {
       return NextResponse.json({ success: true, dryRun: true, count: fixes.length, fixes });

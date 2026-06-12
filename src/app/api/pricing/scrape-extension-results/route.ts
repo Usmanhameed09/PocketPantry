@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getPricingCatalog, savePricingAnalyses } from "@/lib/live-pricing-catalog";
 import { buildPricingFromScrape, type ExtensionScrapeResult } from "@/lib/build-pricing-from-scrape";
+import { fetchSamsClubFallback } from "@/lib/samsclub-fallback";
+
+// SerpAPI Sam's fallback can take a while for a large batch.
+export const maxDuration = 300;
 
 type RequestBody = {
   results?: ExtensionScrapeResult[];
@@ -25,10 +29,41 @@ export async function POST(request: Request) {
     const catalog = await getPricingCatalog();
     const catalogMap = new Map(catalog.map((p) => [p.id, p]));
 
+    // SAM'S CLUB IS THE PRIMARY SOURCE. The browser extension gets blocked by
+    // Sam's Akamai for many products (mostly snacks) and falls to Walmart.
+    // For every product the extension did NOT get from Sam's, retry it through
+    // the server SerpAPI Sam's-only scrape (site:samsclub.com — not Akamai
+    // blocked). When SerpAPI finds it at Sam's, we use that result instead;
+    // otherwise the extension's Walmart result stands (Sam's truly lacks it).
+    const needsSams = results.filter((r) => {
+      const retailer = (r.retailer || "").toLowerCase();
+      return !r.scraped || !retailer.includes("sam");
+    });
+    let samsFallback = new Map<string, ExtensionScrapeResult>();
+    if (needsSams.length > 0) {
+      const fallbackProducts = needsSams
+        .map((r) => catalogMap.get(r.productId))
+        .filter((p): p is NonNullable<typeof p> => Boolean(p))
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          // Clean canonical name, NEVER a prior scrape title — avoids the
+          // search-term snowball that drifted everything to Walmart.
+          searchTerm: p.name,
+          category: p.category,
+          vendingPrice: p.currentPrice,
+          lastKnownCost: p.lastKnownCost,
+          expectedPackSize: p.expectedPackSize,
+        }));
+      samsFallback = await fetchSamsClubFallback(fallbackProducts);
+    }
+
     const mappedRows: Record<string, unknown>[] = [];
     const analyses = [];
 
-    for (const result of results) {
+    for (const rawResult of results) {
+      // Prefer a SerpAPI Sam's hit over the extension's non-Sam's result.
+      const result = samsFallback.get(rawResult.productId) ?? rawResult;
       const product = catalogMap.get(result.productId);
       if (!product) continue;
 

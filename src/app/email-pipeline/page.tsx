@@ -2980,7 +2980,10 @@ function GoogleMapsModal({
         let enrichedEmployeeCount = "";
         let enrichedVertical = "";
 
-        if (candidate.website || candidate.business) {
+        // Emails are now enriched during the Maps SEARCH, so most candidates
+        // already carry one. Only call enrichment again when the email is
+        // still blank — avoids paying Apollo/Hunter twice for the same lead.
+        if (!candidate.email && (candidate.website || candidate.business)) {
           try {
             const enrichRes = await fetch("/api/lead-enrichment/enrich", {
               method: "POST",

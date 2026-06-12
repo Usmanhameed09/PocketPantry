@@ -1,5 +1,13 @@
+import { enrichLeadContact } from "./lead-enrichment";
+
 const GOOGLE_GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json";
 const GOOGLE_PLACES_URL = "https://places.googleapis.com/v1";
+
+// How many Maps results to enrich with an email per search. Each enrichment
+// is an Apollo/Hunter lookup (costs credits), so cap it. Businesses with no
+// website are skipped — there's no domain to look up.
+const MAX_EMAIL_ENRICH = 15;
+const ENRICH_CONCURRENCY = 5;
 
 type LatLng = {
   latitude: number;
@@ -47,6 +55,7 @@ export type GoogleMapsLeadCandidate = {
   placeId: string;
   business: string;
   contact: string;
+  contactTitle?: string;
   phone: string;
   email: string;
   address: string;
@@ -351,6 +360,46 @@ function normalizePlaceToLeadCandidate(place: GooglePlace, searchCenter: LatLng)
   };
 }
 
+/**
+ * Google Maps never returns email addresses. To show emails in the search
+ * results (so the operator can pick leads worth emailing), look each business
+ * up by its website domain via Apollo/Hunter and fill in email + contact name
+ * + title when found. Best-effort and capped — businesses with no website, or
+ * with no record in Apollo/Hunter, simply keep a blank email.
+ */
+async function enrichCandidateEmails(candidates: GoogleMapsLeadCandidate[]) {
+  const targets = candidates
+    .filter((c) => c.website && !c.email)
+    .slice(0, MAX_EMAIL_ENRICH);
+
+  for (let i = 0; i < targets.length; i += ENRICH_CONCURRENCY) {
+    const batch = targets.slice(i, i + ENRICH_CONCURRENCY);
+    await Promise.all(
+      batch.map(async (candidate) => {
+        try {
+          const result = await enrichLeadContact({
+            website: candidate.website,
+            company: candidate.business,
+          });
+          const e = result.enrichment;
+          if (!e) return;
+          if (e.email) candidate.email = e.email;
+          if (e.contactName && candidate.contact === "Front Desk") candidate.contact = e.contactName;
+          if (e.contactTitle) candidate.contactTitle = e.contactTitle;
+          // A business with no Maps phone but an enriched phone becomes importable.
+          if (e.phone && !candidate.phone) {
+            candidate.phone = e.phone;
+            candidate.importable = true;
+            candidate.reason = undefined;
+          }
+        } catch {
+          // Best-effort — keep the candidate with a blank email.
+        }
+      })
+    );
+  }
+}
+
 export async function searchGoogleMapsLeads(params: {
   zipcode: string;
   radiusMiles: number;
@@ -413,6 +462,9 @@ export async function searchGoogleMapsLeads(params: {
 
     return candidate.distanceMiles <= radiusMiles;
   });
+
+  // Fill in emails (and contact names) so they show in the results table.
+  await enrichCandidateEmails(strictRadiusCandidates);
 
   return {
     center,

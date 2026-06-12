@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchGoogleMapsLeads } from "@/lib/google-maps";
 
+// Search now enriches results with emails (Apollo/Hunter lookups), so give
+// it room beyond the default function timeout.
+export const maxDuration = 120;
+export const dynamic = "force-dynamic";
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();

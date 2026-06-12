@@ -124,15 +124,17 @@ async function computeBackfill() {
 async function applyBackfill(fixes: Array<{ productId: string; cost: number; name: string; oldCost: number }>) {
   const supabase = createServerClient();
   let applied = 0;
+  const errors: string[] = [];
   for (const f of fixes) {
     const { error } = await supabase
       .from("products")
-      .update({ unit_cost: f.cost, updated_at: new Date().toISOString() })
+      .update({ unit_cost: f.cost })
       .eq("id", f.productId);
     if (!error) applied++;
+    else if (errors.length < 5) errors.push(`${f.name}: ${error.message}`);
   }
   if (applied > 0) await invalidateOnPriceWrite();
-  return applied;
+  return { applied, errors };
 }
 
 export async function GET(req: Request) {
@@ -175,8 +177,8 @@ export async function GET(req: Request) {
         skipped: skipped.slice(0, 50),
       });
     }
-    const applied = await applyBackfill(fixes);
-    return NextResponse.json({ success: true, applied, total: fixes.length, skipped: skipped.length });
+    const { applied, errors } = await applyBackfill(fixes);
+    return NextResponse.json({ success: true, applied, total: fixes.length, skipped: skipped.length, errors });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : "Failed" },

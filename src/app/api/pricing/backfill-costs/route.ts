@@ -15,6 +15,7 @@
 import { NextResponse } from "next/server";
 import {
   getPricingCatalog,
+  getSavedPricingAnalyses,
   savePricingAnalyses,
   type SavedPricingAnalysis,
 } from "@/lib/live-pricing-catalog";
@@ -27,7 +28,15 @@ const DEFAULT_MARGIN = 0.5;
 const roundQuarter = (n: number) => Math.round(n * 4) / 4;
 
 async function computeBackfill() {
-  const catalog = await getPricingCatalog();
+  // The saved analyses carry the scraped packPrice + packSize. The catalog
+  // object doesn't — so we read the analyses directly and use the catalog
+  // only for the product name / category / current price lookup.
+  const [catalog, saved] = await Promise.all([
+    getPricingCatalog(),
+    getSavedPricingAnalyses(),
+  ]);
+  const catById = new Map(catalog.map((c) => [c.id, c]));
+
   const fixes: Array<{
     product: string;
     productId: string;
@@ -38,26 +47,31 @@ async function computeBackfill() {
   }> = [];
   const analyses: SavedPricingAnalysis[] = [];
 
-  for (const p of catalog) {
-    const cost = p.lastKnownCost || 0;
-    // Only touch rows that look broken: zero/no cost but real pack data.
-    const packPrice = (p as unknown as { packPrice?: number | null }).packPrice ?? null;
-    const packSize = (p as unknown as { packSize?: number | null }).packSize ?? null;
+  for (const [productId, a] of Object.entries(saved)) {
+    const cost = Number(a.cost) || 0;
+    const packPrice = a.packPrice ?? null;
+    const packSize = a.packSize ?? null;
+    // Only touch rows that look broken: zero cost but real pack data.
     if (cost > 0) continue;
     if (!packPrice || packPrice <= 0) continue;
     const size = packSize && packSize > 1 ? packSize : 1;
     const newCost = Math.round((packPrice / size) * 100) / 100;
     if (newCost <= 0) continue;
 
+    const cat = catById.get(productId);
+    const category = cat?.category || "snack";
+    const currentPrice = cat?.currentPrice ?? 0;
+    const productName = cat?.name || a.scrapedProduct || productId;
+
     // Recompute suggested price + margin off the corrected cost.
-    const targetMargin = CATEGORY_MARGINS[p.category] ?? DEFAULT_MARGIN;
+    const targetMargin = CATEGORY_MARGINS[category] ?? DEFAULT_MARGIN;
     const rawSuggested = newCost / (1 - targetMargin);
-    const suggested = Math.max(roundQuarter(rawSuggested), p.currentPrice);
+    const suggested = Math.max(roundQuarter(rawSuggested), currentPrice);
     const margin = suggested > 0 ? Math.round(((suggested - newCost) / suggested) * 100) : 0;
 
     fixes.push({
-      product: p.name,
-      productId: p.id,
+      product: productName,
+      productId,
       oldCost: cost,
       newCost,
       packPrice,
@@ -65,21 +79,18 @@ async function computeBackfill() {
     });
 
     analyses.push({
-      productId: p.id,
-      supplier: "Sam's Club",
+      ...a,
+      productId,
       cost: newCost,
       prevCost: cost,
       suggestedPrice: suggested,
       margin,
       status: "Cost Margin",
-      trigger: `Backfill: ${packPrice} / ${size}pk = $${newCost.toFixed(2)}/unit`,
+      trigger: `Backfill: $${packPrice} / ${size}pk = $${newCost.toFixed(2)}/unit`,
       packPrice,
       packSize: size,
       scraped: true,
-      scrapedProduct: p.name,
-      error: null,
       updatedAt: new Date().toISOString(),
-      allPrices: [],
     });
   }
 

@@ -164,7 +164,9 @@ export async function findApolloContact(params: { website?: string; company?: st
 
   const warnings: string[] = [];
 
-  const titles = [
+  // Decision-maker titles are operator-tunable (US6.3). Falls back to a sane
+  // default list when the config table is empty/missing.
+  let titles = [
     "manager",
     "operations manager",
     "office manager",
@@ -174,6 +176,13 @@ export async function findApolloContact(params: { website?: string; company?: st
     "director of operations",
     "administrator",
   ];
+  try {
+    const { loadOutreachConfig } = await import("./outreach-config");
+    const config = await loadOutreachConfig();
+    if (config.apolloTitles.length) titles = config.apolloTitles;
+  } catch {
+    /* keep defaults */
+  }
 
   // Apollo deprecated GET /people/search and (older) POST /mixed_people/search
   // for API callers — both now return HTTP 422 with the message "use the new

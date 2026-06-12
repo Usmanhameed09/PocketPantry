@@ -186,6 +186,42 @@ export default function PipelineV2Page() {
     void load();
   }
 
+  // Pipeline UI #5 — "Requeue with alternate DM titles". Apollo-searches a new
+  // decision-maker for each selected lead and queues a fresh call to them.
+  async function bulkRequeueAltDm() {
+    setBulkBusy(true); setBulkResult(null);
+    const r = await fetch("/api/leads/requeue-alt-dm", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: Array.from(selectedIds) }),
+    }).then((x) => x.json());
+    setBulkBusy(false);
+    if (r.ok) {
+      setBulkResult(`Requeued ${r.requeued} with a new DM · ${r.noAlternate} had no alternate found`);
+      setSelectedIds(new Set());
+    } else {
+      setBulkResult(`Requeue failed: ${r.error || "unknown"}`);
+    }
+    void load();
+  }
+
+  // Manual call disposition (calls are dialed manually now). Logs the outcome,
+  // which drives stage, retry cadence, closer hand-off, and wrong-contact
+  // recovery via /api/leads/[id]/disposition.
+  const [dispoBusyId, setDispoBusyId] = useState<string | null>(null);
+  async function logDisposition(leadId: string, outcome: string) {
+    if (!outcome) return;
+    setDispoBusyId(leadId);
+    try {
+      await fetch(`/api/leads/${leadId}/disposition`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outcome }),
+      });
+    } finally {
+      setDispoBusyId(null);
+      void load();
+    }
+  }
+
   return (
     <main style={{ padding: 32, maxWidth: 1400, margin: "0 auto" }}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
@@ -271,6 +307,7 @@ export default function PipelineV2Page() {
             {queue.length === 0 && <div style={emptyState}>No calls due right now. Nice.</div>}
             {queue.slice(0, 12).map((t) => {
               const lead = leads.find((l) => l.id === t.leadId);
+              const dialNumber = (lead?.apolloMobile || lead?.phone || "").replace(/[^\d+]/g, "");
               return (
                 <div key={t.id} style={queueRow}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -279,8 +316,29 @@ export default function PipelineV2Page() {
                       {lead?.tier && <span style={{ ...badge(TIER_COLOR[lead.tier]), marginLeft: 8 }}>{lead.tier}</span>}
                     </div>
                     <div style={{ fontSize: 12, color: "#64748b" }}>
-                      {lead?.apolloMobile || lead?.phone || "(no phone)"} · {t.reason || ""}
+                      {/* Click-to-dial — calls are made manually now. */}
+                      {dialNumber ? (
+                        <a href={`tel:${dialNumber}`} style={{ color: "#2563eb", textDecoration: "none", fontWeight: 600 }}>
+                          {lead?.apolloMobile || lead?.phone}
+                        </a>
+                      ) : "(no phone)"} · {t.reason || ""}
                     </div>
+                    {/* Manual disposition — log the call outcome after dialing. */}
+                    <select
+                      defaultValue=""
+                      disabled={dispoBusyId === t.leadId}
+                      onChange={(e) => { void logDisposition(t.leadId, e.target.value); e.target.value = ""; }}
+                      style={{ ...selectInput, marginTop: 6, fontSize: 11, padding: "3px 6px" }}
+                    >
+                      <option value="" disabled>{dispoBusyId === t.leadId ? "Saving…" : "Log outcome…"}</option>
+                      <option value="no_answer">No answer</option>
+                      <option value="voicemail">Voicemail</option>
+                      <option value="gatekeeper">Gatekeeper</option>
+                      <option value="interested">Interested</option>
+                      <option value="callback">Callback requested</option>
+                      <option value="not_interested">Not interested</option>
+                      <option value="wrong_number">Wrong contact</option>
+                    </select>
                   </div>
                   <div style={{ fontSize: 11, color: "#94a3b8" }}>P{t.priority}</div>
                   <Link href={`/email-pipeline?lead=${t.leadId}`} style={btn("ghost-sm")}>Open</Link>
@@ -406,6 +464,9 @@ export default function PipelineV2Page() {
             </button>
             <button onClick={bulkEnrichMissing} disabled={bulkBusy} style={btn("ghost-sm")}>
               Enrich missing
+            </button>
+            <button onClick={bulkRequeueAltDm} disabled={bulkBusy} style={btn("ghost-sm")}>
+              Requeue alt DM
             </button>
             <button
               onClick={() => setNotInterestedOpen((v) => !v)}

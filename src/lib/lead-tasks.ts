@@ -143,6 +143,8 @@ export function nextTaskForOutcome(params: {
   maxAttempts: number;
   callbackDate?: string;
   callbackTime?: string;
+  /** Spacing between no-answer retries, configurable (default [1,2,4]). */
+  cadenceDays?: number[];
   now?: Date;
 }): { taskType: TaskType; scheduledFor: Date; priority: number; reason: string } | null {
   const now = params.now || new Date();
@@ -160,7 +162,11 @@ export function nextTaskForOutcome(params: {
   }
   if (o === "voicemail" || o === "no_answer") {
     if (params.attempts >= params.maxAttempts) return null;
-    const days = params.attempts <= 1 ? 1 : params.attempts <= 3 ? 2 : 4;
+    // Pick the gap for this attempt from the configured cadence, clamping to
+    // the last entry once attempts exceed the list length.
+    const cadence = params.cadenceDays && params.cadenceDays.length ? params.cadenceDays : [1, 2, 4];
+    const idx = Math.min(Math.max(params.attempts - 1, 0), cadence.length - 1);
+    const days = cadence[idx];
     return { taskType: "call", scheduledFor: addBusinessDays(now, days), priority: 50, reason: `Retry — ${o} attempt ${params.attempts}` };
   }
   if (o === "gatekeeper") {

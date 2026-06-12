@@ -11,31 +11,57 @@ type Weights = {
 
 type Thresholds = { A: number; B: number };
 
+type OutreachCfg = {
+  autoAssignEnabled: boolean;
+  callers: string[];
+  closers: string[];
+  maxCallAttempts: number;
+  retryCadenceDays: number[];
+  apolloTitles: string[];
+};
+
 export default function ScoringConfigPage() {
   const [weights, setWeights] = useState<Weights | null>(null);
   const [thresholds, setThresholds] = useState<Thresholds | null>(null);
   const [defaults, setDefaults] = useState<{ weights: Weights; thresholds: Thresholds } | null>(null);
+  const [outreach, setOutreach] = useState<OutreachCfg | null>(null);
+  const [outreachDefaults, setOutreachDefaults] = useState<OutreachCfg | null>(null);
   const [saving, setSaving] = useState(false);
   const [rescoreAll, setRescoreAll] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => { void load(); }, []);
   async function load() {
-    const r = await fetch("/api/leads/scoring-config").then((x) => x.json());
+    const [r, o] = await Promise.all([
+      fetch("/api/leads/scoring-config").then((x) => x.json()),
+      fetch("/api/leads/outreach-config").then((x) => x.json()).catch(() => null),
+    ]);
     if (r.ok) {
       setWeights(r.weights);
       setThresholds(r.thresholds);
       setDefaults(r.defaults);
+    }
+    if (o?.ok) {
+      setOutreach(o.config);
+      setOutreachDefaults(o.defaults);
     }
   }
 
   async function save() {
     setSaving(true);
     setMsg(null);
-    const r = await fetch("/api/leads/scoring-config", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ weights, thresholds, rescoreAll }),
-    }).then((x) => x.json());
+    const [r] = await Promise.all([
+      fetch("/api/leads/scoring-config", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ weights, thresholds, rescoreAll }),
+      }).then((x) => x.json()),
+      outreach
+        ? fetch("/api/leads/outreach-config", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(outreach),
+          }).then((x) => x.json())
+        : Promise.resolve(null),
+    ]);
     setSaving(false);
     if (r.ok) setMsg(`Saved. ${r.rescored ? `Re-scored ${r.rescored} leads.` : ""}`);
     else setMsg(r.error || "Save failed");
@@ -45,6 +71,7 @@ export default function ScoringConfigPage() {
     if (!defaults) return;
     setWeights(JSON.parse(JSON.stringify(defaults.weights)));
     setThresholds(JSON.parse(JSON.stringify(defaults.thresholds)));
+    if (outreachDefaults) setOutreach(JSON.parse(JSON.stringify(outreachDefaults)));
   }
 
   if (!weights || !thresholds) {
@@ -122,6 +149,55 @@ export default function ScoringConfigPage() {
         </div>
       </section>
 
+      {outreach && (
+        <section style={{ ...panel, marginTop: 16 }}>
+          <h2 style={panelHeader}>Outreach routing &amp; cadence</h2>
+          <div style={{ padding: "0 16px 16px" }}>
+            <label style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 14, color: "#0f172a", marginBottom: 14 }}>
+              <input
+                type="checkbox"
+                checked={outreach.autoAssignEnabled}
+                onChange={(e) => setOutreach({ ...outreach, autoAssignEnabled: e.target.checked })}
+              />
+              Auto-assign leads (Tier A → caller, Interested → closer)
+            </label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <ListField
+                label="Callers (Tier A round-robin)"
+                hint="Comma-separated names"
+                value={outreach.callers}
+                onChange={(v) => setOutreach({ ...outreach, callers: v })}
+              />
+              <ListField
+                label="Closers (Interested round-robin)"
+                hint="Comma-separated names"
+                value={outreach.closers}
+                onChange={(v) => setOutreach({ ...outreach, closers: v })}
+              />
+              <Field
+                label="Max call attempts"
+                value={outreach.maxCallAttempts}
+                onChange={(n) => setOutreach({ ...outreach, maxCallAttempts: n })}
+              />
+              <NumListField
+                label="Retry cadence (days between attempts)"
+                hint="e.g. 1, 2, 4"
+                value={outreach.retryCadenceDays}
+                onChange={(v) => setOutreach({ ...outreach, retryCadenceDays: v })}
+              />
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <ListField
+                label="Apollo decision-maker titles"
+                hint="Comma-separated — what Apollo searches for"
+                value={outreach.apolloTitles}
+                onChange={(v) => setOutreach({ ...outreach, apolloTitles: v })}
+              />
+            </div>
+          </div>
+        </section>
+      )}
+
       <section style={{ ...panel, marginTop: 16 }}>
         <h2 style={panelHeader}>On save</h2>
         <label style={{ display: "flex", gap: 10, padding: "0 16px 16px", alignItems: "center", fontSize: 14, color: "#0f172a" }}>
@@ -143,6 +219,36 @@ function Field({ label, value, onChange }: { label: string; value: number; onCha
         onChange={(e) => onChange(Number(e.target.value))}
         style={{ padding: "6px 10px", fontSize: 14, borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}
       />
+    </label>
+  );
+}
+
+function ListField({ label, hint, value, onChange }: { label: string; hint?: string; value: string[]; onChange: (v: string[]) => void }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 12, color: "#475569", fontWeight: 600 }}>{label}</span>
+      <input
+        type="text"
+        value={value.join(", ")}
+        onChange={(e) => onChange(e.target.value.split(",").map((s) => s.trim()).filter(Boolean))}
+        style={{ padding: "6px 10px", fontSize: 14, borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}
+      />
+      {hint && <span style={{ fontSize: 11, color: "#94a3b8" }}>{hint}</span>}
+    </label>
+  );
+}
+
+function NumListField({ label, hint, value, onChange }: { label: string; hint?: string; value: number[]; onChange: (v: number[]) => void }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 12, color: "#475569", fontWeight: 600 }}>{label}</span>
+      <input
+        type="text"
+        value={value.join(", ")}
+        onChange={(e) => onChange(e.target.value.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n >= 0))}
+        style={{ padding: "6px 10px", fontSize: 14, borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}
+      />
+      {hint && <span style={{ fontSize: 11, color: "#94a3b8" }}>{hint}</span>}
     </label>
   );
 }

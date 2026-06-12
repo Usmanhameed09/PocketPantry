@@ -410,9 +410,13 @@ export async function addCallLogAndUpdateStage(
 
   // Pull max_call_attempts + callback fields so we can compute next_action.
   const { data: leadRow } = await supabase.from("leads")
-    .select("max_call_attempts, callback_date, callback_time")
+    .select("max_call_attempts, callback_date, callback_time, owner")
     .eq("id", leadId).maybeSingle();
-  const maxAttempts = (leadRow?.max_call_attempts as number) ?? 6;
+  // Config drives the attempt cap + retry cadence (US6.3). A per-lead
+  // max_call_attempts override still wins when set.
+  const { loadOutreachConfig } = await import("./outreach-config");
+  const config = await loadOutreachConfig();
+  const maxAttempts = (leadRow?.max_call_attempts as number) ?? config.maxCallAttempts;
   const cbDate = (leadRow?.callback_date as string) || undefined;
   const cbTime = (leadRow?.callback_time as string) || undefined;
 
@@ -422,6 +426,7 @@ export async function addCallLogAndUpdateStage(
     maxAttempts,
     callbackDate: cbDate,
     callbackTime: cbTime,
+    cadenceDays: config.retryCadenceDays,
   });
 
   // Build the update with next-action + last_touch fields. Wrapped in try/catch
@@ -459,45 +464,21 @@ export async function addCallLogAndUpdateStage(
     } catch { /* table may not exist yet */ }
   }
 
-  // Wrong-contact recovery (US4.3) — fire Apollo re-search with alternate DM
-  // titles so the operator gets a new contact suggestion. Best-effort; runs
-  // async so the call-log save isn't blocked on Apollo's response.
+  // Wrong-contact recovery (US4.3) — Apollo re-search for an alternate DM and
+  // re-queue a call. Shared with the bulk "Requeue alt DM" action.
   if (outcome === "wrong_number" || outcome === "wrong_contact") {
     try {
-      const { data: leadForRecover } = await supabase.from("leads")
-        .select("website, business").eq("id", leadId).maybeSingle();
-      const website = (leadForRecover?.website as string) || undefined;
-      const business = (leadForRecover?.business as string) || undefined;
-      if (website || business) {
-        const { enrichLeadContact } = await import("./lead-enrichment");
-        const recovery = await enrichLeadContact({ website, company: business });
-        if (recovery.enrichment) {
-          const e = recovery.enrichment;
-          const recoverUpdate: Record<string, unknown> = {
-            apollo_last_enriched_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            next_action: "Try alternate DM (from Apollo)",
-            next_action_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-            is_call_ready: true,
-          };
-          if (e.contactName) recoverUpdate.decision_maker_name = e.contactName;
-          if (e.mobile) recoverUpdate.apollo_mobile = e.mobile;
-          if (e.contactTitle) recoverUpdate.apollo_title = e.contactTitle;
-          if (e.email) recoverUpdate.decision_maker_email = e.email;
-          await supabase.from("leads").update(recoverUpdate).eq("id", leadId);
-          // Queue a follow-up call for the new contact
-          try {
-            await createTask({
-              leadId, taskType: "call",
-              scheduledFor: new Date(Date.now() + 30 * 60 * 1000),
-              priority: 85,
-              reason: `Try alternate DM: ${e.contactName || e.contactTitle || "Apollo match"}`,
-            });
-          } catch { /* table may not exist */ }
-        }
-      }
+      const { requeueAlternateDM } = await import("./lead-routing");
+      await requeueAlternateDM(leadId);
     } catch { /* recovery is best-effort */ }
   }
+
+  // Closer hand-off (US5.1) — if this outcome warmed the lead into Interested /
+  // Site Visit Requested / Proposal Requested, route it to a closer.
+  try {
+    const { assignCloserForStage } = await import("./lead-routing");
+    await assignCloserForStage(leadId, stage, (leadRow?.owner as string) || undefined);
+  } catch { /* best-effort */ }
 
   await supabase.from("outreach_log").insert({
     lead_id: leadId, action_type: "call",

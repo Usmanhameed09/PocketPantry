@@ -484,7 +484,7 @@ async function _doInboxScan(result: InboxCheckResult): Promise<InboxCheckResult>
   // 1. Load leads
   const { data: leads } = await supabase
     .from("leads")
-    .select("id, email, contact, business, stage")
+    .select("id, email, contact, business, stage, owner")
     .neq("email", "");
 
   if (!leads || leads.length === 0) return result;
@@ -661,6 +661,26 @@ async function _doInboxScan(result: InboxCheckResult): Promise<InboxCheckResult>
           last_activity: activityText,
           updated_at: new Date().toISOString(),
         }).eq("id", lead.id);
+
+        // Reply triggers (US3.3): an actionable inbound reply makes the lead
+        // HOT — set call-ready + queue a "call within 1 hour" task. Then, if
+        // the reply warmed it into a closer stage, hand it to a closer (US5.1).
+        const positiveIntent =
+          classification.intent === "interested" ||
+          classification.intent === "needs_info" ||
+          classification.intent === "booked";
+        if (positiveIntent) {
+          try {
+            const { fireHotLeadTrigger } = await import("./lead-tasks");
+            await fireHotLeadTrigger(lead.id, `Email reply (${classification.intent}) — call within 1 hour`);
+          } catch { /* best-effort */ }
+        }
+        if (newStage) {
+          try {
+            const { assignCloserForStage } = await import("./lead-routing");
+            await assignCloserForStage(lead.id, newStage, (lead.owner as string) || undefined);
+          } catch { /* best-effort */ }
+        }
 
         const classified: ClassifiedReply = {
           ...classification, fromEmail: fromAddr, fromName, subject,

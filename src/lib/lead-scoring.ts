@@ -190,5 +190,14 @@ export async function scoreAndPersist(leadId: string, leadData: Lead): Promise<S
     updated_at: new Date().toISOString(),
   }).eq("id", leadId);
 
+  // Auto-route by tier (US2.2): A → caller + call-ready queue, B → queued,
+  // C → parked. Best-effort so scoring never fails on a routing hiccup.
+  try {
+    const { applyTierRouting } = await import("./lead-routing");
+    await applyTierRouting(leadId, result.tier, leadData.stage, leadData.owner);
+  } catch (e) {
+    console.warn("[lead-scoring] tier routing skipped:", e instanceof Error ? e.message : e);
+  }
+
   return result;
 }

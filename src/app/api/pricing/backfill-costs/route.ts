@@ -47,9 +47,9 @@ async function computeBackfill() {
   const supabase = createServerClient();
   const companyId = await ensureDefaultCompany();
 
-  // Catalog synthetic-id -> canonical product name (the catalog row name
-  // is the operator-facing product name, which matches the products table).
+  // Catalog synthetic-id -> canonical product name + category.
   const nameById = new Map(catalog.map((c) => [c.id, c.name]));
+  const catById = new Map(catalog.map((c) => [c.id, c.category]));
 
   // Load the WHOLE products table (paginated past the 1000-row cap) so we
   // can resolve a scraped product to its real UUID by normalized name.
@@ -79,6 +79,7 @@ async function computeBackfill() {
   }
 
   const fixes: Array<{ productId: string; cost: number; name: string; oldCost: number }> = [];
+  const skipped: Array<{ name: string; cost: number; reason: string }> = [];
   for (const [savedId, a] of Object.entries(saved)) {
     const cost = Number(a.cost) || 0;
     if (cost <= 0) continue;
@@ -89,6 +90,26 @@ async function computeBackfill() {
     if (!prod) continue; // no matching products row — skip
     const oldCost = prod.unit_cost ?? 0;
     if (Math.abs(oldCost - cost) < 0.01) continue; // already correct
+
+    // SANITY GUARDS — these scraped costs include some that are clearly
+    // CASE prices (packSize was wrongly 1, so cost = full pack price). We
+    // must not import them or we'd blow up a good unit cost.
+    const category = (catById.get(savedId) || "snack").toLowerCase();
+    const caseCeiling = category.includes("meal") ? 8 : 5;
+    // 1. A vending UNIT almost never costs more than ~$5 ($8 for meals).
+    //    Anything above is a case price misread — reject.
+    if (cost > caseCeiling) {
+      skipped.push({ name: prod.name, cost, reason: `> $${caseCeiling} (likely case price)` });
+      continue;
+    }
+    // 2. Don't overwrite an already-reasonable cost with a much higher one.
+    //    (protects e.g. Croissant Brown $1.26 from a bad $355 scrape — that
+    //    one is caught by guard #1 anyway, but this covers subtler cases.)
+    if (oldCost > 0 && cost > oldCost * 1.5) {
+      skipped.push({ name: prod.name, cost, reason: `${cost} > 1.5× existing ${oldCost}` });
+      continue;
+    }
+
     fixes.push({
       productId: prod.id,
       cost: Math.round(cost * 100) / 100,
@@ -97,7 +118,7 @@ async function computeBackfill() {
     });
   }
 
-  return { fixes };
+  return { fixes, skipped };
 }
 
 async function applyBackfill(fixes: Array<{ productId: string; cost: number; name: string; oldCost: number }>) {
@@ -143,17 +164,19 @@ export async function GET(req: Request) {
       });
     }
     const dry = sp.get("dry") === "1";
-    const { fixes } = await computeBackfill();
+    const { fixes, skipped } = await computeBackfill();
     if (dry) {
       return NextResponse.json({
         success: true,
         dryRun: true,
         count: fixes.length,
-        fixes: fixes.slice(0, 100),
+        skippedCount: skipped.length,
+        fixes: fixes.slice(0, 150),
+        skipped: skipped.slice(0, 50),
       });
     }
     const applied = await applyBackfill(fixes);
-    return NextResponse.json({ success: true, applied, total: fixes.length });
+    return NextResponse.json({ success: true, applied, total: fixes.length, skipped: skipped.length });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : "Failed" },

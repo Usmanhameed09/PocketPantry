@@ -153,23 +153,14 @@ async function applyBackfill(
     else if (errors.length < 5) errors.push(`${f.name}: ${error.message}`);
   }
 
-  // 2. Re-save the analyses with the corrected packSize so the "$X / Npk"
-  //    display on the Pricing page reflects the real pack (was showing the
-  //    scraper's wrong 4pk/5pk). Persisted via savePricingAnalyses which
-  //    re-writes the per-product outreach_log rows.
-  const corrected = fixes.map((f) => {
-    const a = saved[f.savedId];
-    return {
-      ...a,
-      cost: f.cost,
-      packSize: f.packSize,
-      productName: f.name,
-      updatedAt: new Date().toISOString(),
-    };
-  });
-  if (corrected.length > 0) {
-    try { await savePricingAnalyses(corrected); } catch { /* products already updated above */ }
-  }
+  // NOTE: we deliberately do NOT re-save the analyses here. Routing through
+  // savePricingAnalyses triggers the AI cost-guard per product, which times
+  // out the request for large batches. The displayed "$X / Npk" label comes
+  // from the saved analysis packSize and will stay showing the scraper's
+  // original (wrong) pack until the next scrape — which now stores the
+  // title-parsed pack size. The COST + margin are corrected here, which is
+  // the functional fix. (saved param kept for signature compat.)
+  void saved;
 
   if (applied > 0) await invalidateOnPriceWrite();
   return { applied, errors };

@@ -104,15 +104,17 @@ export function buildPricingFromScrape(
   //      $15.98/24pk scrape.
   //   3. packPrice alone if packSize is missing/1 (cost == pack == unit)
   //   4. product.lastKnownCost — last resort when the scrape gave nothing
-  // Resolve the effective pack size. The scraper's packSize is often wrong
-  // (1 when the listing is actually a 72-count case), but the product TITLE
-  // almost always states the real count ("72 per case"). When the scraper
-  // size is missing/1, parse the title and prefer that.
-  let effectivePackSize = scrape.packSize && scrape.packSize > 1 ? scrape.packSize : 1;
-  if (effectivePackSize <= 1) {
-    const fromTitle = parsePackFromTitle(scrape.scrapedName);
-    if (fromTitle && fromTitle > 1) effectivePackSize = fromTitle;
-  }
+  // Resolve the effective pack size. The product TITLE is the ground truth
+  // — Walmart / Sam's titles literally state "32 pk", "72 per case", etc.
+  // The scraper's packSize field is frequently WRONG (it returned 5 for a
+  // 32-pack of Hostess Donettes, 4 for a 15-pack of OTIS), which produced
+  // costs that were too HIGH but still under the case-price ceiling, so
+  // they slipped through. So: TITLE COUNT WINS whenever it parses. Fall
+  // back to the scraper's packSize only when the title has no count.
+  const titleCount = parsePackFromTitle(scrape.scrapedName);
+  let effectivePackSize = 1;
+  if (titleCount && titleCount > 1) effectivePackSize = titleCount;
+  else if (scrape.packSize && scrape.packSize > 1) effectivePackSize = scrape.packSize;
 
   let scrapedUnitCost = 0;
   if (scrape.scraped) {

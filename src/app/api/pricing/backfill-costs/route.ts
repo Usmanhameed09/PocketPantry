@@ -17,6 +17,7 @@ import { NextResponse } from "next/server";
 import {
   getPricingCatalog,
   getSavedPricingAnalyses,
+  savePricingAnalyses,
 } from "@/lib/live-pricing-catalog";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
 import { invalidateOnPriceWrite } from "@/lib/cache";
@@ -79,31 +80,33 @@ async function computeBackfill() {
     if (cHas && !eHas) prodByName.set(key, p);
   }
 
-  const fixes: Array<{ productId: string; cost: number; name: string; oldCost: number; via?: string }> = [];
+  type Fix = {
+    productId: string; cost: number; name: string; oldCost: number;
+    packSize: number; via: string; savedId: string;
+  };
+  const fixes: Fix[] = [];
   const skipped: Array<{ name: string; cost: number; reason: string }> = [];
+
   for (const [savedId, a] of Object.entries(saved)) {
-    let cost = Number(a.cost) || 0;
-    let via = "stored cost";
+    // Skip non-scraped rows (no supplier data to recompute from).
+    if (!a.scraped || !a.packPrice || a.packPrice <= 0) continue;
     const category = (catById.get(savedId) || "snack").toLowerCase();
     const caseCeiling = category.includes("meal") ? 8 : 5;
 
-    // RECOVERY: if the stored cost looks like a case price (too high) but we
-    // have a pack price + a parseable count in the scraped title, recompute
-    // the real unit cost. This rescues e.g. Mrs Freshleys Mini Donut where
-    // the scraper saved $171.01 (a 72-count case) as the unit cost — the
-    // title "72 per case" gives 171.01/72 = $2.37.
-    if (cost > caseCeiling && a.packPrice && a.packPrice > 0) {
-      const titleCount = parsePackFromTitle(a.scrapedProduct);
-      const size = titleCount && titleCount > 1
-        ? titleCount
-        : (a.packSize && a.packSize > 1 ? a.packSize : 1);
-      if (size > 1) {
-        const recomputed = Math.round((a.packPrice / size) * 100) / 100;
-        if (recomputed > 0) { cost = recomputed; via = `title pack ${size}`; }
-      }
-    }
-
+    // ALWAYS recompute from packPrice using the TITLE pack count (ground
+    // truth). The scraper's packSize is unreliable — it returned 5 for a
+    // 32-pack of Hostess, giving $4.60 (wrong, under the ceiling so it
+    // wasn't caught before). The title "32 pk" gives $23/32 = $0.72.
+    const titleCount = parsePackFromTitle(a.scrapedProduct);
+    const bestSize = titleCount && titleCount > 1
+      ? titleCount
+      : (a.packSize && a.packSize > 1 ? a.packSize : 1);
+    const cost = Math.round((a.packPrice / bestSize) * 100) / 100;
+    const via = titleCount && titleCount > 1
+      ? `title pack ${titleCount}`
+      : `scraper pack ${bestSize}`;
     if (cost <= 0) continue;
+
     const name = nameById.get(savedId) || a.scrapedProduct || "";
     if (!name) continue;
     const prod = prodByName.get(normalizeName(name));
@@ -111,35 +114,63 @@ async function computeBackfill() {
     const oldCost = prod.unit_cost ?? 0;
     if (Math.abs(oldCost - cost) < 0.01) continue; // already correct
 
-    // After recovery, anything STILL above the ceiling is genuinely
-    // unparseable (no count in title) — skip rather than import garbage.
+    // Anything STILL above the case ceiling has no usable count in its
+    // title (bestSize stayed 1) — skip rather than import a case price.
     if (cost > caseCeiling) {
       skipped.push({ name: prod.name, cost, reason: `> $${caseCeiling}, no pack count in title` });
       continue;
     }
-    if (oldCost > 0 && cost > oldCost * 1.5) {
-      skipped.push({ name: prod.name, cost, reason: `${cost} > 1.5× existing ${oldCost}` });
-      continue;
-    }
 
-    fixes.push({ productId: prod.id, cost: Math.round(cost * 100) / 100, name: prod.name, oldCost, via });
+    fixes.push({
+      productId: prod.id,
+      cost,
+      name: prod.name,
+      oldCost,
+      packSize: bestSize,
+      via,
+      savedId,
+    });
   }
 
-  return { fixes, skipped };
+  return { fixes, skipped, saved };
 }
 
-async function applyBackfill(fixes: Array<{ productId: string; cost: number; name: string; oldCost: number; via?: string }>) {
+async function applyBackfill(
+  fixes: Array<{ productId: string; cost: number; name: string; oldCost: number; packSize: number; via: string; savedId: string }>,
+  saved: Awaited<ReturnType<typeof getSavedPricingAnalyses>>,
+) {
   const supabase = createServerClient();
   let applied = 0;
   const errors: string[] = [];
+
+  // 1. Write the corrected cost + case_size to the products table (drives
+  //    margin, Buy List, Reports, Cost Fixer).
   for (const f of fixes) {
-    const { error } = await supabase
-      .from("products")
-      .update({ unit_cost: f.cost })
-      .eq("id", f.productId);
+    const update: Record<string, unknown> = { unit_cost: f.cost };
+    if (f.packSize > 1) update.case_size = f.packSize;
+    const { error } = await supabase.from("products").update(update).eq("id", f.productId);
     if (!error) applied++;
     else if (errors.length < 5) errors.push(`${f.name}: ${error.message}`);
   }
+
+  // 2. Re-save the analyses with the corrected packSize so the "$X / Npk"
+  //    display on the Pricing page reflects the real pack (was showing the
+  //    scraper's wrong 4pk/5pk). Persisted via savePricingAnalyses which
+  //    re-writes the per-product outreach_log rows.
+  const corrected = fixes.map((f) => {
+    const a = saved[f.savedId];
+    return {
+      ...a,
+      cost: f.cost,
+      packSize: f.packSize,
+      productName: f.name,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  if (corrected.length > 0) {
+    try { await savePricingAnalyses(corrected); } catch { /* products already updated above */ }
+  }
+
   if (applied > 0) await invalidateOnPriceWrite();
   return { applied, errors };
 }
@@ -173,18 +204,18 @@ export async function GET(req: Request) {
       });
     }
     const dry = sp.get("dry") === "1";
-    const { fixes, skipped } = await computeBackfill();
+    const { fixes, skipped, saved } = await computeBackfill();
     if (dry) {
       return NextResponse.json({
         success: true,
         dryRun: true,
         count: fixes.length,
         skippedCount: skipped.length,
-        fixes: fixes.slice(0, 150),
+        fixes: fixes.slice(0, 200),
         skipped: skipped.slice(0, 50),
       });
     }
-    const { applied, errors } = await applyBackfill(fixes);
+    const { applied, errors } = await applyBackfill(fixes, saved);
     return NextResponse.json({ success: true, applied, total: fixes.length, skipped: skipped.length, errors });
   } catch (error) {
     return NextResponse.json(

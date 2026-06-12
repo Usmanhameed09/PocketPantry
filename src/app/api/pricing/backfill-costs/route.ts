@@ -120,7 +120,7 @@ async function computeBackfill() {
       skipped.push({
         name: prod.name, cost,
         reason: `> $${caseCeiling}, no pack count in title`,
-        title: a.scrapedProduct || null,
+        title: a.scrapedProduct || undefined,
         packPrice: a.packPrice,
         packSize: a.packSize,
       });

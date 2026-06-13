@@ -31,9 +31,10 @@ const SCRAPER_API_URL = process.env.SCRAPER_API_URL || "https://arbersaas.duckdn
  * number is consistent with what daily_sales will eventually hold. Returns null
  * on any failure (scraper down, timeout) so we fall back to the synced number.
  */
-async function fetchLiveTodaySales(
+async function fetchLiveSales(
   todayStr: string,
-): Promise<{ units: number; revenue: number; transactions: number } | null> {
+  yesterdayStr: string,
+): Promise<{ today: { units: number; revenue: number; transactions: number }; yesterdayRevenue: number } | null> {
   try {
     const res = await fetch(`${SCRAPER_API_URL}/api/machines/inventory-status`, {
       headers: { "x-api-key": process.env.SCRAPER_BACKEND_KEY || process.env.API_KEY || "" },
@@ -48,6 +49,7 @@ async function fetchLiveTodaySales(
     let units = 0;
     let revenue = 0;
     let transactions = 0; // product-machine pairs that sold today (matches the synced row-count semantics)
+    let yesterdayRevenue = 0;
     let foundAnyDate = false;
     for (const m of machines) {
       for (const p of m.products || []) {
@@ -60,12 +62,13 @@ async function fetchLiveTodaySales(
           revenue += dr[todayStr] || 0;
           transactions += 1;
         }
+        yesterdayRevenue += dr[yesterdayStr] || 0;
       }
     }
     // If the breakdown carried no dates at all, treat as no live data (don't
     // overwrite a synced number with a bogus 0).
     if (!foundAnyDate) return null;
-    return { units, revenue, transactions };
+    return { today: { units, revenue, transactions }, yesterdayRevenue };
   } catch {
     return null;
   }
@@ -130,15 +133,21 @@ async function buildTiles(): Promise<Record<string, unknown>> {
     let todayTransactions = todayRows.length;
     let liveDataAt: string | null = null;
 
-    const live = await fetchLiveTodaySales(todayStr);
+    // Yesterday from the synced snapshot is the fallback; the live pull (below)
+    // overrides it so the figure is real even when no sync cron has run.
+    let yesterdayRevenue = yesterdayRows.reduce((s, r) => s + ((r.revenue as number) || 0), 0);
+
+    const live = await fetchLiveSales(todayStr, yesterdayStr);
     if (live) {
-      todayUnits = live.units;
-      todayRevenue = live.revenue;
-      todayTransactions = live.transactions;
+      todayUnits = live.today.units;
+      todayRevenue = live.today.revenue;
+      todayTransactions = live.today.transactions;
+      // Only trust live yesterday if it actually carried data for that day;
+      // otherwise keep the synced figure.
+      if (live.yesterdayRevenue > 0) yesterdayRevenue = live.yesterdayRevenue;
       liveDataAt = new Date().toISOString();
     }
 
-    const yesterdayRevenue = yesterdayRows.reduce((s, r) => s + ((r.revenue as number) || 0), 0);
     const wowPct = yesterdayRevenue > 0
       ? Math.round(((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100)
       : 0;

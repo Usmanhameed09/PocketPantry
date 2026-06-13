@@ -12,8 +12,6 @@ import {
   WifiOff,
   TrendingUp,
   AlertTriangle,
-  ArrowUpRight,
-  ArrowDownRight,
   CheckCircle2,
   Loader2,
   Bot,
@@ -185,12 +183,7 @@ export default function Dashboard() {
             value={numOrSkel(`$${displayRevenue.toFixed(2)}`)}
             tag={tilesLoading
               ? <span style={{ color: "#94a3b8", fontSize: 12 }}>loading…</span>
-              : !sales.todayHasData && !sales.liveDataAt
-                ? <span style={{ color: "#94a3b8", fontSize: 12 }}>today not synced yet</span>
-                : sales.wowPct === 0 ? <span style={{ color: "#64748b", fontSize: 12 }}>vs yesterday</span>
-                : sales.wowPct > 0
-                  ? <span style={{ color: "#059669", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 2 }}><ArrowUpRight size={14} /> {sales.wowPct}% vs yesterday</span>
-                  : <span style={{ color: "#dc2626", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 2 }}><ArrowDownRight size={14} /> {Math.abs(sales.wowPct)}% vs yesterday</span>
+              : <span style={{ color: "#64748b", fontSize: 12 }}>Yesterday: ${sales.yesterdayRevenue.toFixed(2)}</span>
             }
           />
           <StatCard
@@ -429,15 +422,11 @@ export default function Dashboard() {
                   {sales.liveDataAt ? "Today's Revenue · LIVE" : sales.todayHasData ? "Today's Revenue" : `Most recent day with data${sales.lastSaleDate ? ` — ${sales.lastSaleDate}` : ""}`}
                 </div>
                 <div style={{ fontSize: 36, fontWeight: 800, color: "#0f172a", letterSpacing: -1 }}>${displayRevenue.toFixed(2)}</div>
-                {(sales.liveDataAt || sales.todayHasData) && sales.wowPct !== 0 && (
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, marginTop: 4 }}>
-                    {sales.wowPct > 0
-                      ? <><ArrowUpRight size={14} color="#059669" /><span style={{ fontSize: 13, fontWeight: 600, color: "#059669" }}>Up {sales.wowPct}%</span></>
-                      : <><ArrowDownRight size={14} color="#dc2626" /><span style={{ fontSize: 13, fontWeight: 600, color: "#dc2626" }}>Down {Math.abs(sales.wowPct)}%</span></>
-                    }
-                    <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 2 }}>vs. yesterday</span>
-                  </div>
-                )}
+                {/* Show yesterday's actual sales (fully synced, accurate) rather
+                    than a % delta that's misleading before today syncs. */}
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                  Yesterday: <span style={{ fontWeight: 600 }}>${sales.yesterdayRevenue.toFixed(2)}</span>
+                </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <MiniStat label="Transactions" value={String(sales.todayTransactions)} />

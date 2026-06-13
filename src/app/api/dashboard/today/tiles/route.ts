@@ -39,7 +39,7 @@ async function fetchLiveSales(
     const res = await fetch(`${SCRAPER_API_URL}/api/machines/inventory-status`, {
       headers: { "x-api-key": process.env.SCRAPER_BACKEND_KEY || process.env.API_KEY || "" },
       cache: "no-store",
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -262,7 +262,10 @@ type MergedMachine = { name?: string; status?: string };
 async function fetchMergedMachineList(): Promise<MergedMachine[]> {
   try {
     const base = process.env.NEXT_PUBLIC_APP_URL || "https://pocketpantry.vercel.app";
-    const res = await fetch(`${base}/api/machines`, { cache: "no-store" });
+    // Hard timeout — without it, a hung /api/machines (which itself hits the
+    // scraper) would block the whole tiles function past its platform limit,
+    // making Vercel return a non-JSON 504 the client can't parse.
+    const res = await fetch(`${base}/api/machines`, { cache: "no-store", signal: AbortSignal.timeout(8_000) });
     if (!res.ok) return [];
     const data = await res.json();
     return (data.machines || []) as MergedMachine[];

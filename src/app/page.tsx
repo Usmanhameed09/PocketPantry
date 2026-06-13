@@ -90,25 +90,44 @@ export default function Dashboard() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/dashboard/today/tiles", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((json) => {
+
+    // Parse a response as JSON defensively. On a function timeout Vercel
+    // returns a plain-text "An error occurred…" page, not JSON — calling
+    // res.json() on that throws "Unexpected token 'A'". Read text first and
+    // only parse if it actually looks like JSON.
+    async function readJson(res: Response): Promise<Record<string, unknown> | null> {
+      const text = await res.text();
+      const trimmed = text.trimStart();
+      if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+      try { return JSON.parse(text); } catch { return null; }
+    }
+
+    // Load tiles with one automatic retry — a transient 504 shouldn't show a
+    // scary error if the next attempt succeeds.
+    async function loadTiles(attempt = 0): Promise<void> {
+      try {
+        const res = await fetch("/api/dashboard/today/tiles", { cache: "no-store" });
+        const json = await readJson(res);
         if (cancelled) return;
-        if (!json.success) {
-          setError(json.error || "Failed to load tiles");
+        if (!json || json.success !== true) {
+          if (attempt < 1) return loadTiles(attempt + 1);
+          setError((json && (json.error as string)) || "The dashboard timed out. Refresh to try again.");
           return;
         }
-        setTiles(json);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed");
-      });
-    fetch("/api/dashboard/today/sections", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((json) => {
+        setTiles(json as unknown as TilesData);
+      } catch (err) {
         if (cancelled) return;
-        if (!json.success) return; // sections failure is non-fatal
-        setSections(json);
+        if (attempt < 1) return loadTiles(attempt + 1);
+        setError(err instanceof Error ? err.message : "Failed");
+      }
+    }
+    void loadTiles();
+
+    fetch("/api/dashboard/today/sections", { cache: "no-store" })
+      .then((r) => readJson(r))
+      .then((json) => {
+        if (cancelled || !json || json.success !== true) return; // sections failure is non-fatal
+        setSections(json as unknown as SectionsData);
       })
       .catch(() => {});
     return () => { cancelled = true; };

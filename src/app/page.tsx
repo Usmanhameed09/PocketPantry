@@ -25,7 +25,7 @@ type TilesData = {
     todayRevenue: number; todayUnits: number; todayTransactions: number;
     yesterdayRevenue: number; wowPct: number; avgSale: number;
     thisWeekUnits: number; priorWeekUnits: number; weekWoWPct: number;
-    lastSaleDate: string | null; todayHasData: boolean;
+    lastSaleDate: string | null; lastDayRevenue: number; todayHasData: boolean;
     liveDataAt: string | null;
   };
   machines: { total: number; active: number; offline: number; offlineList: Array<{ name: string; status: string }>; };
@@ -131,7 +131,7 @@ export default function Dashboard() {
       todayRevenue: 0, todayUnits: 0, todayTransactions: 0,
       yesterdayRevenue: 0, wowPct: 0, avgSale: 0,
       thisWeekUnits: 0, priorWeekUnits: 0, weekWoWPct: 0,
-      lastSaleDate: null, todayHasData: false, liveDataAt: null,
+      lastSaleDate: null, lastDayRevenue: 0, todayHasData: false, liveDataAt: null,
     },
     machines: tiles?.machines ?? { total: 0, active: 0, offline: 0, offlineList: [] },
     alerts: tiles?.alerts ?? { total: 0, high: 0, topAlerts: [] },
@@ -162,6 +162,11 @@ export default function Dashboard() {
   const { sales, machines, alerts, refillStops, warehouse, priceChanges, recentReply } = data;
   // Helper: render placeholder text for a number while tiles is loading.
   const numOrSkel = (val: string) => tilesLoading ? "—" : val;
+  // Revenue to display: live today (matches Nayax), else today's synced number,
+  // else the most recent synced day's actual revenue (never a misleading $0).
+  const displayRevenue = (sales.liveDataAt || sales.todayHasData)
+    ? sales.todayRevenue
+    : sales.lastDayRevenue;
 
   return (
     <div style={{ minHeight: "100vh" }}>
@@ -177,7 +182,7 @@ export default function Dashboard() {
                 ? "Today's Revenue · LIVE"
                 : sales.todayHasData ? "Today's Revenue" : `Last data ${sales.lastSaleDate || "—"}`
             }
-            value={numOrSkel(`$${sales.todayRevenue.toFixed(2)}`)}
+            value={numOrSkel(`$${displayRevenue.toFixed(2)}`)}
             tag={tilesLoading
               ? <span style={{ color: "#94a3b8", fontSize: 12 }}>loading…</span>
               : !sales.todayHasData && !sales.liveDataAt
@@ -421,10 +426,10 @@ export default function Dashboard() {
             <div style={cardBody}>
               <div style={{ textAlign: "center", padding: "8px 0 16px" }}>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 4 }}>
-                  {sales.todayHasData ? "Today's Revenue" : `Most recent day with data${sales.lastSaleDate ? ` — ${sales.lastSaleDate}` : ""}`}
+                  {sales.liveDataAt ? "Today's Revenue · LIVE" : sales.todayHasData ? "Today's Revenue" : `Most recent day with data${sales.lastSaleDate ? ` — ${sales.lastSaleDate}` : ""}`}
                 </div>
-                <div style={{ fontSize: 36, fontWeight: 800, color: "#0f172a", letterSpacing: -1 }}>${sales.todayRevenue.toFixed(2)}</div>
-                {sales.wowPct !== 0 && (
+                <div style={{ fontSize: 36, fontWeight: 800, color: "#0f172a", letterSpacing: -1 }}>${displayRevenue.toFixed(2)}</div>
+                {(sales.liveDataAt || sales.todayHasData) && sales.wowPct !== 0 && (
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, marginTop: 4 }}>
                     {sales.wowPct > 0
                       ? <><ArrowUpRight size={14} color="#059669" /><span style={{ fontSize: 13, fontWeight: 600, color: "#059669" }}>Up {sales.wowPct}%</span></>

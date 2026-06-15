@@ -50,8 +50,49 @@ async function fetchMachines(): Promise<Record<string, unknown>> {
       }
       return m;
     });
+    // Persist the scraper-derived offline/healthy status back into the DB so
+    // machines.status is CORRECT for every other consumer (AI assistant,
+    // alerts, exceptions). Without this, those read a stale column — the offline
+    // detector measures staleness from the sync timestamp, which refreshes even
+    // for a dead machine, so the column can wrongly say "healthy". Best-effort.
+    await persistScraperStatus(data.machines as Array<Record<string, unknown>>);
   }
   return data;
+}
+
+/**
+ * Write each machine's scraper-derived status ("offline" / "healthy") into
+ * machines.status when it differs. Runs on the /api/machines cache-miss (~60s).
+ */
+async function persistScraperStatus(machines: Array<Record<string, unknown>>): Promise<void> {
+  try {
+    const companyId = await ensureDefaultCompany();
+    const supabase = createServerClient();
+    const { data: rows } = await supabase
+      .from("machines")
+      .select("id, nayax_device_id, status")
+      .eq("company_id", companyId);
+    if (!rows?.length) return;
+
+    const byDevice = new Map<string, { id: string; status: string }>();
+    for (const r of rows) {
+      const dev = (r.nayax_device_id as string) || "";
+      if (dev) byDevice.set(dev, { id: r.id as string, status: ((r.status as string) || "").toLowerCase() });
+    }
+
+    for (const m of machines) {
+      const dev = String(m.nayaxDeviceId || m.nayax_device_id || "");
+      if (!dev) continue;
+      const row = byDevice.get(dev);
+      if (!row) continue;
+      const desired = String(m.status || "").toLowerCase() === "offline" ? "offline" : "healthy";
+      if (row.status !== desired) {
+        await supabase.from("machines").update({ status: desired }).eq("id", row.id);
+      }
+    }
+  } catch {
+    // best-effort — never fail the machine list because of a status write
+  }
 }
 
 async function getOfflineMachineIds(): Promise<Map<string, { lastSeen: string | null; ageHours: number }>> {

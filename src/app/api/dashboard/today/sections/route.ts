@@ -85,13 +85,23 @@ async function buildSections(): Promise<Record<string, unknown>> {
       const trimmed = s.replace(/\s+/g, "");
       return trimmed.length > 0 && /^[\x20-\x7E]+$/.test(trimmed);
     }
+    // Realistic vending bounds. A single vended snack/drink/meal never costs
+    // $85 / $178 / $355 — anything above these is a scraper MIS-MATCH (a luxury
+    // handbag matched to "Croissant", a mattress matched to "Full Size") or a
+    // CASE price, not a unit price. Without these guards the card sorts those
+    // absurd numbers to the top. Filtering them keeps it 100% authentic.
+    const MAX_UNIT_COST = 8;          // generous — covers premium meal items
+    const MAX_SUGGESTED_PRICE = 20;
+    const isCasePrice = (name: string) =>
+      /\(\s*price\s*\/\s*case\s*\)|\bper\s*case\b|\/\s*case\b|\bcase\s*of\b/i.test(name);
     const priceChanges = Object.values(analyses)
       .filter((a) =>
         a.status === "Pending Approval" &&
-        a.suggestedPrice > 0 &&
-        a.cost > 0 &&
+        a.suggestedPrice > 0 && a.suggestedPrice <= MAX_SUGGESTED_PRICE &&
+        a.cost > 0 && a.cost <= MAX_UNIT_COST &&
         a.scrapedProduct &&
-        isPrintable(a.scrapedProduct)
+        isPrintable(a.scrapedProduct) &&
+        !isCasePrice(a.scrapedProduct)
       )
       .sort((a, b) => (b.suggestedPrice - b.cost) - (a.suggestedPrice - a.cost))
       .slice(0, 3)

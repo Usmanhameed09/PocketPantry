@@ -57,7 +57,13 @@ export default function AIChatWidget() {
     setInput("");
     setBusy(true);
     try {
-      const res = await fetch("/api/inventory/assistant", {
+      // Use the v2 agent (tool-calling) instead of the v1 snapshot endpoint.
+      // v1 stuffs a ~17k-token snapshot into every message, so a couple of
+      // questions blow OpenAI's 30k tokens/min limit and the widget errored
+      // out ("no access"). v2 calls small focused tools on demand — far fewer
+      // tokens, no rate-limit — and has full access to leads, predictions,
+      // inventory, machines, and pricing. Same { success, reply } response.
+      const res = await fetch("/api/inventory/assistant-v2", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

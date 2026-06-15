@@ -177,12 +177,18 @@ async function buildTiles(): Promise<Record<string, unknown>> {
     // is unacceptable for the tile. /api/machines is itself cached
     // (60s TTL) so the merged count is fast.
     const mergedMachines = await fetchMergedMachineList();
-    const offlineMachines = mergedMachines.filter(
+    // Prefer the merged list (same source as the Machines page). If it's empty
+    // — the proxy call timed out or the scraper is slow — fall back to the
+    // Supabase machines.status (set by the alerts-scan offline detector), NOT
+    // to "assume everything healthy". That bad fallback is exactly why this
+    // tile kept showing 10/10 while the Machines page showed a machine offline.
+    const sourceMachines: MergedMachine[] = mergedMachines.length > 0
+      ? mergedMachines
+      : machines.map((m) => ({ name: (m.name as string) || "(unknown)", status: (m.status as string) || "" }));
+    const offlineMachines = sourceMachines.filter(
       (m) => (m.status || "").toLowerCase() === "offline"
     );
-    const totalMachines = mergedMachines.length > 0
-      ? mergedMachines.length
-      : machines.length; // fall back to Supabase if /api/machines is down
+    const totalMachines = sourceMachines.length;
     const activeMachines = totalMachines - offlineMachines.length;
 
     // Warehouse — value + low-stock count (without buy-list compute).

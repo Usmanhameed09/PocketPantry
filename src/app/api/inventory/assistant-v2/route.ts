@@ -21,6 +21,8 @@
 import { NextResponse } from "next/server";
 import { TOOL_DEFINITIONS, executeTool, buildMiniSnapshot } from "@/lib/ai-tools";
 
+import { openAiChat } from "@/lib/openai-chat";
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
@@ -190,24 +192,24 @@ export async function POST(req: Request) {
     let lastUsage: Record<string, unknown> | null = null;
 
     for (let turn = 0; turn < MAX_TURNS; turn++) {
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4o",
-          temperature: 0,
-          max_tokens: 700,
-          messages: apiMessages,
-          tools: TOOL_DEFINITIONS,
-          tool_choice: "auto",
-        }),
-      });
+      const res = await openAiChat({
+        model: "gpt-4o",
+        temperature: 0,
+        max_tokens: 700,
+        messages: apiMessages,
+        tools: TOOL_DEFINITIONS,
+        tool_choice: "auto",
+      }, apiKey);
 
       if (!res.ok) {
         const text = await res.text();
+        // A 429 that survived all retries means the org is genuinely over its
+        // rate limit — return a friendly, retryable message, not a raw 502.
+        if (res.status === 429) {
+          return NextResponse.json(
+            { success: true, reply: "I'm handling a lot of requests right now — give me a few seconds and ask again." },
+          );
+        }
         return NextResponse.json(
           { success: false, error: `OpenAI ${res.status}: ${text.slice(0, 300)}` },
           { status: 502 }

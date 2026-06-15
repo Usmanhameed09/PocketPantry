@@ -9,6 +9,7 @@
 
 import { NextResponse } from "next/server";
 import { buildAssistantContext } from "@/lib/assistant-context";
+import { openAiChat } from "@/lib/openai-chat";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -212,28 +213,27 @@ export async function POST(req: Request) {
       ...messages,
     ];
 
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        // gpt-4o (full model, not mini) — empirically more reliable at copying
-        // exact numbers out of a JSON snapshot. mini was hallucinating values
-        // for products not in the visible top-N, even when asked about specific
-        // items. Slightly more expensive but worth it for numeric accuracy.
-        model: "gpt-4o",
-        // Temperature 0 — we want the SAME answer to the same question every
-        // time. Any creativity here is a footgun: it's data lookup, not prose.
-        temperature: 0,
-        max_tokens: 700,
-        messages: apiMessages,
-      }),
-    });
+    const res = await openAiChat({
+      // gpt-4o (full model, not mini) — empirically more reliable at copying
+      // exact numbers out of a JSON snapshot. mini was hallucinating values
+      // for products not in the visible top-N, even when asked about specific
+      // items. Slightly more expensive but worth it for numeric accuracy.
+      model: "gpt-4o",
+      // Temperature 0 — we want the SAME answer to the same question every
+      // time. Any creativity here is a footgun: it's data lookup, not prose.
+      temperature: 0,
+      max_tokens: 700,
+      messages: apiMessages,
+    }, apiKey);
 
     if (!res.ok) {
       const text = await res.text();
+      if (res.status === 429) {
+        return NextResponse.json({
+          success: true,
+          reply: "I'm handling a lot of requests right now — give me a few seconds and ask again.",
+        });
+      }
       return NextResponse.json(
         { success: false, error: `OpenAI ${res.status}: ${text.slice(0, 300)}` },
         { status: 502 }

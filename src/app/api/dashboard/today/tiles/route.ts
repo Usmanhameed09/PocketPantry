@@ -169,26 +169,38 @@ async function buildTiles(): Promise<Record<string, unknown>> {
       ? Math.round(((thisWeekUnits - priorWeekUnits) / priorWeekUnits) * 100)
       : 0;
 
-    // Machines status — use the SAME source the Machines page uses
-    // (/api/machines, which merges scraper-fed status with the
-    // DB-side offline overlay). Originally I read machines.status from
-    // Supabase directly here to save a roundtrip, but operators saw
-    // Today showing 8/8 active while Machines showed 7/8 — divergence
-    // is unacceptable for the tile. /api/machines is itself cached
-    // (60s TTL) so the merged count is fast.
-    const mergedMachines = await fetchMergedMachineList();
-    // Prefer the merged list (same source as the Machines page). If it's empty
-    // — the proxy call timed out or the scraper is slow — fall back to the
-    // Supabase machines.status (set by the alerts-scan offline detector), NOT
-    // to "assume everything healthy". That bad fallback is exactly why this
-    // tile kept showing 10/10 while the Machines page showed a machine offline.
-    const sourceMachines: MergedMachine[] = mergedMachines.length > 0
-      ? mergedMachines
-      : machines.map((m) => ({ name: (m.name as string) || "(unknown)", status: (m.status as string) || "" }));
-    const offlineMachines = sourceMachines.filter(
-      (m) => (m.status || "").toLowerCase() === "offline"
+    // Machines status — SOURCE OF TRUTH is the Supabase machines.status column
+    // (written by the alerts-scan offline detector). The Machines page derives
+    // its offline overlay from the SAME column, so reading it directly here
+    // can't diverge from that page.
+    //
+    // We deliberately do NOT depend on the in-function /api/machines HTTP call
+    // for the count: that chain (proxy -> its own cache -> a separate offline-id
+    // query) has several flaky links, and ANY hiccup made every machine come
+    // back "healthy" -> the tile snapped to 10/10 while a machine was down.
+    // That intermittency is the bug operators kept re-reporting.
+    const dbOffline = machines.filter(
+      (m) => ((m.status as string) || "").toLowerCase() === "offline"
     );
-    const totalMachines = sourceMachines.length;
+    let totalMachines = machines.length;
+    let offlineMachines = dbOffline.map((m) => ({
+      name: (m.name as string) || "(unknown)",
+      status: "Offline",
+    }));
+
+    // Only consult the scraper list to reconcile the TOTAL upward if it knows
+    // of more devices than we've persisted (a brand-new machine). DB status
+    // stays the truth for offline.
+    const mergedMachines = await fetchMergedMachineList();
+    if (mergedMachines.length > totalMachines) {
+      totalMachines = mergedMachines.length;
+      const mergedOffline = mergedMachines.filter(
+        (m) => (m.status || "").toLowerCase() === "offline"
+      );
+      if (mergedOffline.length > offlineMachines.length) {
+        offlineMachines = mergedOffline.map((m) => ({ name: m.name || "(unknown)", status: "Offline" }));
+      }
+    }
     const activeMachines = totalMachines - offlineMachines.length;
 
     // Warehouse — value + low-stock count (without buy-list compute).

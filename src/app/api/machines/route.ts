@@ -74,16 +74,22 @@ async function persistScraperStatus(machines: Array<Record<string, unknown>>): P
       .eq("company_id", companyId);
     if (!rows?.length) return;
 
-    const byDevice = new Map<string, { id: string; status: string }>();
+    // Key DB rows by BOTH nayax_device_id AND id, since the scraper may put the
+    // matching identifier in m.nayaxDeviceId, m.nayax_device_id, or m.id (the
+    // overlay above uses the same fallback chain). Keying only by device id —
+    // when the scraper actually returns it as m.id — matched nothing, so the
+    // persist silently did nothing and the column stayed stale.
+    const byKey = new Map<string, { id: string; status: string }>();
     for (const r of rows) {
-      const dev = (r.nayax_device_id as string) || "";
-      if (dev) byDevice.set(dev, { id: r.id as string, status: ((r.status as string) || "").toLowerCase() });
+      const entry = { id: r.id as string, status: ((r.status as string) || "").toLowerCase() };
+      if (r.nayax_device_id) byKey.set(String(r.nayax_device_id), entry);
+      byKey.set(String(r.id), entry);
     }
 
     for (const m of machines) {
-      const dev = String(m.nayaxDeviceId || m.nayax_device_id || "");
-      if (!dev) continue;
-      const row = byDevice.get(dev);
+      const key = String(m.nayaxDeviceId || m.nayax_device_id || m.id || "");
+      if (!key) continue;
+      const row = byKey.get(key);
       if (!row) continue;
       const desired = String(m.status || "").toLowerCase() === "offline" ? "offline" : "healthy";
       if (row.status !== desired) {

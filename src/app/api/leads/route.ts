@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAllLeads, getLead, updateLead, deleteLead } from "@/lib/leads-store";
 import { createServerClient } from "@/lib/supabase";
+import { invalidateOnLeadWrite } from "@/lib/cache";
 
 type LeadInsertInput = {
   business: string;
@@ -222,6 +223,9 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "Lead not found or update failed" }, { status: 404 });
     }
 
+    // Refresh the cached Lead Dashboard stats (tiers/funnel/owners/SLA) so a
+    // stage/owner change shows up immediately instead of after the 60s TTL.
+    await invalidateOnLeadWrite();
     const updated = await getLead(id);
     return NextResponse.json(updated);
   } catch (error) {
@@ -247,6 +251,9 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Lead not found" }, { status: 404 });
     }
 
+    // Clear the cached Lead Dashboard stats so the deleted lead disappears from
+    // the tiles/funnel/owner counts immediately, not after the 60s cache TTL.
+    await invalidateOnLeadWrite();
     return NextResponse.json({ ok: true, deleted: id });
   } catch (error) {
     console.error("[API /leads DELETE] Error:", error);

@@ -25,6 +25,7 @@ export type AssistantContext = {
     machines: number;
     activeMachines: number;
     offlineMachines: number;
+    offlineMachineNames: string[];
     productsWithSales: number;
     openAlerts: number;
     underperformers: number;
@@ -464,7 +465,15 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       categoryMix,
     };
   });
-  const offlineMachines = machines.filter((m) => (m.status as string) === "offline").length;
+  // Offline count from the scraper (same source as the dashboards) rather than
+  // the stale machines.status column, so the assistant doesn't claim "no
+  // machines offline" while one is actually down.
+  const { getOfflineMachines } = await import("./machine-offline");
+  const scraperOffline = await getOfflineMachines();
+  const offlineMachines = scraperOffline.total > 0
+    ? scraperOffline.offline.length
+    : machines.filter((m) => (m.status as string) === "offline").length;
+  const offlineMachineNames = scraperOffline.offline;
 
   // ─── WEEKLY TRENDS ────────────────────────────────────────────────
   const weeklyTrends = await buildWeeklyTrends(supabase);
@@ -777,6 +786,7 @@ export async function buildAssistantContext(): Promise<AssistantContext> {
       machines: machines.length,
       activeMachines: machines.length - offlineMachines,
       offlineMachines,
+      offlineMachineNames,
       productsWithSales: withVelocity.length,
       openAlerts: alerts.length,
       underperformers: underperformersRaw.length,

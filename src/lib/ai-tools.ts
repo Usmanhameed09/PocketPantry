@@ -1830,7 +1830,14 @@ export async function buildMiniSnapshot(): Promise<Record<string, unknown>> {
   ]);
 
   const machines = machinesRes.data || [];
-  const offline = machines.filter((m) => (m.status as string) === "offline").length;
+  // Offline count from the scraper (same source as the dashboards), not the
+  // stale DB status — otherwise the assistant says "no machines offline" while
+  // a machine is actually down.
+  const { getOfflineMachines } = await import("./machine-offline");
+  const scraperOffline = await getOfflineMachines();
+  const offline = scraperOffline.total > 0
+    ? scraperOffline.offline.length
+    : machines.filter((m) => (m.status as string) === "offline").length;
   const todayRevenue = (todayRows.data || []).reduce((s, r) => s + ((r.revenue as number) || 0), 0);
   const todayUnits = (todayRows.data || []).reduce((s, r) => s + ((r.units_sold as number) || 0), 0);
   const ydayRevenue = (ydayRows.data || []).reduce((s, r) => s + ((r.revenue as number) || 0), 0);
@@ -1841,6 +1848,7 @@ export async function buildMiniSnapshot(): Promise<Record<string, unknown>> {
       products: productsRes.count || 0,
       machines: machines.length,
       machinesOffline: offline,
+      offlineMachineNames: scraperOffline.offline,
       openAlerts: alertsRes.count || 0,
     },
     todaysSales: {

@@ -169,37 +169,28 @@ async function buildTiles(): Promise<Record<string, unknown>> {
       ? Math.round(((thisWeekUnits - priorWeekUnits) / priorWeekUnits) * 100)
       : 0;
 
-    // Machines status — SOURCE OF TRUTH is the Supabase machines.status column
-    // (written by the alerts-scan offline detector). The Machines page derives
-    // its offline overlay from the SAME column, so reading it directly here
-    // can't diverge from that page.
-    //
-    // We deliberately do NOT depend on the in-function /api/machines HTTP call
-    // for the count: that chain (proxy -> its own cache -> a separate offline-id
-    // query) has several flaky links, and ANY hiccup made every machine come
-    // back "healthy" -> the tile snapped to 10/10 while a machine was down.
-    // That intermittency is the bug operators kept re-reporting.
-    const dbOffline = machines.filter(
-      (m) => ((m.status as string) || "").toLowerCase() === "offline"
-    );
-    let totalMachines = machines.length;
-    let offlineMachines = dbOffline.map((m) => ({
-      name: (m.name as string) || "(unknown)",
-      status: "Offline",
-    }));
-
-    // Only consult the scraper list to reconcile the TOTAL upward if it knows
-    // of more devices than we've persisted (a brand-new machine). DB status
-    // stays the truth for offline.
+    // Machines status — MIRROR the Machines page exactly. Its source of truth
+    // is /api/machines, where the offline signal comes from the SCRAPER's
+    // per-machine status (Nayax/Chinese last-seen). Our Supabase machines.status
+    // column is NOT reliable for this (a machine the scraper reports offline can
+    // still be "healthy" in our DB), so we must use the scraper list, not the DB
+    // column — that mismatch is exactly why the tile read 10/10 while Machines
+    // read 9/10.
     const mergedMachines = await fetchMergedMachineList();
-    if (mergedMachines.length > totalMachines) {
+    let totalMachines: number;
+    let offlineMachines: Array<{ name: string; status: string }>;
+    if (mergedMachines.length > 0) {
+      offlineMachines = mergedMachines
+        .filter((m) => (m.status || "").toLowerCase() === "offline")
+        .map((m) => ({ name: m.name || "(unknown)", status: "Offline" }));
       totalMachines = mergedMachines.length;
-      const mergedOffline = mergedMachines.filter(
-        (m) => (m.status || "").toLowerCase() === "offline"
-      );
-      if (mergedOffline.length > offlineMachines.length) {
-        offlineMachines = mergedOffline.map((m) => ({ name: m.name || "(unknown)", status: "Offline" }));
-      }
+    } else {
+      // Proxy unavailable — best-effort from Supabase status. Do NOT assume all
+      // healthy (that fallback is what kept snapping the tile back to 10/10).
+      offlineMachines = machines
+        .filter((m) => ((m.status as string) || "").toLowerCase() === "offline")
+        .map((m) => ({ name: (m.name as string) || "(unknown)", status: "Offline" }));
+      totalMachines = machines.length;
     }
     const activeMachines = totalMachines - offlineMachines.length;
 
@@ -283,7 +274,10 @@ async function fetchMergedMachineList(): Promise<MergedMachine[]> {
     // Hard timeout — without it, a hung /api/machines (which itself hits the
     // scraper) would block the whole tiles function past its platform limit,
     // making Vercel return a non-JSON 504 the client can't parse.
-    const res = await fetch(`${base}/api/machines`, { cache: "no-store", signal: AbortSignal.timeout(8_000) });
+    // Generous timeout: the machine count is the source of truth for the tile,
+    // and an empty return forces the unreliable Supabase-status fallback. Better
+    // to wait than to show a wrong count. (Tile maxDuration is 30s.)
+    const res = await fetch(`${base}/api/machines`, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
     if (!res.ok) return [];
     const data = await res.json();
     return (data.machines || []) as MergedMachine[];

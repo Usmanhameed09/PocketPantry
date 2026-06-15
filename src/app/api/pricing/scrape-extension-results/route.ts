@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getPricingCatalog, savePricingAnalyses } from "@/lib/live-pricing-catalog";
 import { buildPricingFromScrape, type ExtensionScrapeResult } from "@/lib/build-pricing-from-scrape";
 import { fetchSamsClubFallback } from "@/lib/samsclub-fallback";
+import { aiMatchProduct } from "@/lib/ai-product-match";
 
 // SerpAPI Sam's fallback can take a while for a large batch.
 export const maxDuration = 300;
@@ -28,6 +29,53 @@ export async function POST(request: Request) {
 
     const catalog = await getPricingCatalog();
     const catalogMap = new Map(catalog.map((p) => [p.id, p]));
+
+    // ── AI re-match (strict) ────────────────────────────────────────────────
+    // The extension's brand-token heuristic misses products whose retail name
+    // differs from ours ("Reeses Cups" vs "REESE'S … Peanut Butter Cups"). For
+    // every UNMATCHED result that still carries the raw candidate list, ask the
+    // AI matcher to find the same product. It only returns a match that passes
+    // strict guards (confidence + keyword overlap + sane unit price), so a wrong
+    // match can't slip through — the product just stays unmatched.
+    const unmatched = results.filter(
+      (r) => !r.scraped && Array.isArray(r.allCandidates) && r.allCandidates.length > 0,
+    );
+    if (unmatched.length > 0) {
+      const CONCURRENCY = 4;
+      for (let i = 0; i < unmatched.length; i += CONCURRENCY) {
+        const batch = unmatched.slice(i, i + CONCURRENCY);
+        await Promise.all(
+          batch.map(async (r) => {
+            const product = catalogMap.get(r.productId);
+            if (!product) return;
+            const match = await aiMatchProduct({
+              productName: product.name,
+              category: product.category,
+              candidates: r.allCandidates!,
+            });
+            if (!match) return;
+            // Promote this previously-unmatched result to a real match. Leave
+            // unitPrice null so buildPricingFromScrape recomputes from packPrice
+            // and the title pack count (same path as every other match).
+            r.scraped = true;
+            r.retailer = match.candidate.retailer || "Sam's Club";
+            r.scrapedName = match.candidate.name;
+            r.packPrice = match.candidate.price;
+            r.packSize = match.candidate.pack_size ?? null;
+            r.unitPrice = null;
+            r.sourceUrl = match.candidate.url;
+            r.error = undefined;
+            r.candidates = [{
+              name: match.candidate.name,
+              price: match.candidate.price,
+              pack_size: match.candidate.pack_size ?? null,
+              url: match.candidate.url || "",
+              retailer: match.candidate.retailer,
+            }];
+          }),
+        );
+      }
+    }
 
     // SAM'S CLUB IS THE PRIMARY SOURCE. The browser extension gets blocked by
     // Sam's Akamai for many products (mostly snacks) and falls to Walmart.

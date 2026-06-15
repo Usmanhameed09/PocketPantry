@@ -74,6 +74,15 @@ export type ExtensionScrapeResult = {
     url: string;
     retailer?: string;
   }>;
+  // Full scraped list the extension saw (capped). Used only by the dashboard's
+  // AI re-matcher to recover products the brand-token heuristic missed.
+  allCandidates?: Array<{
+    name: string;
+    price: number;
+    pack_size: number | null;
+    url?: string;
+    retailer?: string;
+  }>;
 };
 
 export type ComputedPricingRow = {

@@ -10,7 +10,7 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
 import { generateBuyList } from "@/lib/buy-list-generator";
-import { getSavedPricingAnalyses } from "@/lib/live-pricing-catalog";
+import { getSavedPricingAnalyses, getPricingCatalog } from "@/lib/live-pricing-catalog";
 import { withCache, TTL } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
@@ -38,11 +38,12 @@ async function buildSections(): Promise<Record<string, unknown>> {
     const companyId = await ensureDefaultCompany();
     const supabase = createServerClient();
 
-    const [machinesRes, machineInvRes, analyses, replyRes] = await Promise.all([
+    const [machinesRes, machineInvRes, analyses, replyRes, catalog] = await Promise.all([
       supabase.from("machines").select("id, name").eq("company_id", companyId),
       supabase.from("machine_inventory").select("machine_id, estimated_remaining, daily_sales_rate"),
       getSavedPricingAnalyses(),
       fetchRecentReplies(supabase),
+      getPricingCatalog(),
     ]);
 
     const machines = machinesRes.data || [];
@@ -81,35 +82,47 @@ async function buildSections(): Promise<Record<string, unknown>> {
     }
 
     // ─── Pricing suggestions ────────────────────────────────────────
-    function isPrintable(s: string): boolean {
-      const trimmed = s.replace(/\s+/g, "");
-      return trimmed.length > 0 && /^[\x20-\x7E]+$/.test(trimmed);
-    }
-    // Realistic vending bounds. A single vended snack/drink/meal never costs
-    // $85 / $178 / $355 — anything above these is a scraper MIS-MATCH (a luxury
-    // handbag matched to "Croissant", a mattress matched to "Full Size") or a
-    // CASE price, not a unit price. Without these guards the card sorts those
-    // absurd numbers to the top. Filtering them keeps it 100% authentic.
+    // This card must mirror the REAL price changes from the Pricing page, not
+    // raw scraped junk. Three rules make it authentic:
+    //   1. Resolve each analysis to a REAL catalog product by name and show
+    //      that product's name — never the raw scraped retailer title (which
+    //      can be junk like "Grocery in Bullhead City, AZ"). If it doesn't map
+    //      to a real product, drop it.
+    //   2. Only show a GENUINE increase: suggested price must exceed the
+    //      product's current vend price (otherwise it isn't a "change").
+    //   3. Dedupe by product so the same item can't appear twice.
+    // Plus the vending sanity bounds (a single unit never costs $85+).
     const MAX_UNIT_COST = 8;          // generous — covers premium meal items
     const MAX_SUGGESTED_PRICE = 20;
-    const isCasePrice = (name: string) =>
-      /\(\s*price\s*\/\s*case\s*\)|\bper\s*case\b|\/\s*case\b|\bcase\s*of\b/i.test(name);
+    const normName = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+    const catByName = new Map(catalog.map((c) => [normName(c.name), c]));
+
+    const seenProducts = new Set<string>();
     const priceChanges = Object.values(analyses)
       .filter((a) =>
         a.status === "Pending Approval" &&
         a.suggestedPrice > 0 && a.suggestedPrice <= MAX_SUGGESTED_PRICE &&
-        a.cost > 0 && a.cost <= MAX_UNIT_COST &&
-        a.scrapedProduct &&
-        isPrintable(a.scrapedProduct) &&
-        !isCasePrice(a.scrapedProduct)
+        a.cost > 0 && a.cost <= MAX_UNIT_COST,
       )
+      .map((a) => {
+        // Prefer the real product name; fall back to the scraped title only to
+        // attempt a catalog match (it usually won't match if it's junk).
+        const prod = catByName.get(normName(a.productName || a.scrapedProduct || ""));
+        if (!prod) return null; // not a real catalog product → drop
+        return { product: prod.name, cost: a.cost, suggestedPrice: a.suggestedPrice, current: prod.currentPrice };
+      })
+      .filter((x): x is { product: string; cost: number; suggestedPrice: number; current: number } =>
+        x !== null && x.suggestedPrice > x.current + 0.01) // genuine increase only
+      .filter((x) => {
+        const k = normName(x.product);
+        if (seenProducts.has(k)) return false; // dedupe
+        seenProducts.add(k);
+        return true;
+      })
       .sort((a, b) => (b.suggestedPrice - b.cost) - (a.suggestedPrice - a.cost))
       .slice(0, 3)
-      .map((a) => ({
-        product: a.scrapedProduct || a.productId,
-        suggestedPrice: a.suggestedPrice,
-        cost: a.cost,
-      }));
+      .map((x) => ({ product: x.product, suggestedPrice: x.suggestedPrice, cost: x.cost }));
 
     // ─── Recent reply ───────────────────────────────────────────────
     const recentReply = replyRes.length > 0 ? {

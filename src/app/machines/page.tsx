@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import Header from "@/components/Header";
+import { usePagination } from "@/hooks/usePagination";
+import Pagination from "@/components/Pagination";
 import {
   Plus,
   Search,
@@ -286,6 +288,7 @@ export default function MachinesPage() {
         return `${Math.floor(mins / 60)} h ago`;
       })()
     : null;
+  const ordersPg = usePagination(machineOrders, 25);
   const paidMachineOrders = machineOrders.filter((order) => (order.status || "").toLowerCase() === "paid");
   const modalRevenue = paidMachineOrders.reduce((sum, order) => sum + Number(order.amount || 0), 0);
   const modalItemsSold = machineOrders.reduce((sum, order) => sum + Number(order.totalItems || 0), 0);
@@ -886,7 +889,7 @@ export default function MachinesPage() {
                       <TableHead>Items</TableHead>
                       <TableHead>Qty</TableHead>
                     </div>
-                    {machineOrders.map((order) => (
+                    {ordersPg.pageItems.map((order) => (
                       <div
                         key={order.orderNo}
                         style={{
@@ -922,6 +925,15 @@ export default function MachinesPage() {
                         <div style={{ fontWeight: 700, color: "#0f172a" }}>{order.totalItems ?? "--"}</div>
                       </div>
                     ))}
+                    <Pagination
+                      page={ordersPg.page}
+                      totalPages={ordersPg.totalPages}
+                      onPageChange={ordersPg.setPage}
+                      from={ordersPg.from}
+                      to={ordersPg.to}
+                      total={ordersPg.total}
+                      label="orders"
+                    />
                   </div>
                 </div>
                 </div>

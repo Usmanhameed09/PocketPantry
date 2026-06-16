@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { usePagination } from "@/hooks/usePagination";
+import Pagination from "@/components/Pagination";
 import {
   Search,
   DollarSign,
@@ -739,6 +741,7 @@ export default function PricingPage() {
   const costChanges = items.filter((p) => p.prevCost !== p.cost).length;
   const avgMargin = items.length ? Math.round(items.reduce((s, p) => s + p.margin, 0) / items.length) : 0;
   const pendingCount = items.filter((p) => p.status === "Pending Approval").length;
+  const pg = usePagination(filtered, 25);
   return (
     <div style={{ minHeight: "100vh", background: "#f8fafc" }}>
       <Header title="Pricing" />
@@ -1042,7 +1045,7 @@ export default function PricingPage() {
             ) : (
               /* Product List */
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {filtered.map((p) => {
+                {pg.pageItems.map((p) => {
                   const ss = statusStyles[p.status];
                   const costChanged = p.prevCost !== p.cost;
                   const costDiff = p.cost - p.prevCost;
@@ -1430,6 +1433,15 @@ export default function PricingPage() {
                     </div>
                   );
                 })}
+                <Pagination
+                  page={pg.page}
+                  totalPages={pg.totalPages}
+                  onPageChange={pg.setPage}
+                  from={pg.from}
+                  to={pg.to}
+                  total={pg.total}
+                  label="products"
+                />
               </div>
             )}
 

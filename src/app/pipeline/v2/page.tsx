@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { usePagination } from "@/hooks/usePagination";
+import Pagination from "@/components/Pagination";
 
 type DashboardData = {
   tiers: Record<"A" | "B" | "C", { total: number; won: number; conversionPct: number }>;
@@ -95,6 +97,8 @@ export default function PipelineV2Page() {
       return true;
     });
   }, [leads, filterTier, filterOwner]);
+
+  const leadPg = usePagination(filtered, 25);
 
   const ownerOptions = useMemo(() => {
     const s = new Set<string>(["Unassigned"]);
@@ -535,7 +539,7 @@ export default function PipelineV2Page() {
               </tr>
             </thead>
             <tbody>
-              {filtered.slice(0, 100).map((lead) => (
+              {leadPg.pageItems.map((lead) => (
                 <tr key={lead.id} style={{
                   borderBottom: "1px solid #f1f5f9",
                   background: selectedIds.has(lead.id) ? "#fffbeb" : (lead.isCallReady ? "#fff7ed" : "#fff"),
@@ -580,6 +584,15 @@ export default function PipelineV2Page() {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={leadPg.page}
+          totalPages={leadPg.totalPages}
+          onPageChange={leadPg.setPage}
+          from={leadPg.from}
+          to={leadPg.to}
+          total={leadPg.total}
+          label="leads"
+        />
       </section>
     </main>
   );

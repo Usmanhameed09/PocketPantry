@@ -10,6 +10,8 @@ import {
   Modal, Field, Select, BtnPrimary, BtnSecondary, Badge, pageContainer,
 } from "../ui";
 import BulkImportModal from "./BulkImportModal";
+import { usePagination } from "@/hooks/usePagination";
+import Pagination from "@/components/Pagination";
 
 type Product = {
   id: string; name: string; sku: string; category: string;
@@ -73,6 +75,8 @@ export default function ProductsPage() {
       const d = score(b) - score(a);
       return d !== 0 ? d : a.name.localeCompare(b.name);
     });
+
+  const pg = usePagination(filtered, 25);
 
   async function save() {
     if (!editing?.name) return;
@@ -167,7 +171,7 @@ export default function ProductsPage() {
                   <Th width={48}></Th>
                 </tr></thead>
                 <tbody>
-                  {filtered.map((p, idx) => (
+                  {pg.pageItems.map((p, idx) => (
                     <tr key={p.id} style={{ borderTop: idx === 0 ? "none" : "1px solid #f1f5f9" }}>
                       <Td>
                         <div style={{ fontWeight: 600 }}>{p.name}</div>
@@ -190,6 +194,15 @@ export default function ProductsPage() {
                   ))}
                 </tbody>
               </table>
+              <Pagination
+                page={pg.page}
+                totalPages={pg.totalPages}
+                onPageChange={pg.setPage}
+                from={pg.from}
+                to={pg.to}
+                total={pg.total}
+                label="products"
+              />
             </div>
           )}
         </div>

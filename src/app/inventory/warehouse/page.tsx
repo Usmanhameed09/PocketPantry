@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import InventoryTabs from "../InventoryTabs";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { usePagination } from "@/hooks/usePagination";
+import Pagination from "@/components/Pagination";
 import {
   Loader2, Search, Warehouse, Plus, Minus, Package, AlertTriangle,
   History, Save, X,
@@ -94,6 +96,7 @@ export default function WarehousePage() {
   const totalValue = filtered.reduce((s, r) => s + r.onHand * (r.product.unit_cost || 0), 0);
   const stockedCount = filtered.filter((r) => r.onHand > 0).length;
   const zeroCount = filtered.filter((r) => r.onHand === 0).length;
+  const pg = usePagination(filtered, 25);
 
   return (
     <div style={{ minHeight: "100vh", background: PAGE_BG }}>
@@ -147,7 +150,7 @@ export default function WarehousePage() {
                   <Th width={220}></Th>
                 </tr></thead>
                 <tbody>
-                  {filtered.map((r, idx) => (
+                  {pg.pageItems.map((r, idx) => (
                     <tr key={r.product.id} style={{ borderTop: idx === 0 ? "none" : "1px solid #f1f5f9" }}>
                       <Td>
                         <div style={{ fontWeight: 600 }}>{r.product.name}</div>
@@ -183,6 +186,15 @@ export default function WarehousePage() {
                   ))}
                 </tbody>
               </table>
+              <Pagination
+                page={pg.page}
+                totalPages={pg.totalPages}
+                onPageChange={pg.setPage}
+                from={pg.from}
+                to={pg.to}
+                total={pg.total}
+                label="products"
+              />
             </div>
           )}
         </div>

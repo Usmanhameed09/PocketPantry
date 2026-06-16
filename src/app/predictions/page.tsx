@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef, type ChangeEvent } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import Header from "@/components/Header";
+import { usePagination } from "@/hooks/usePagination";
+import Pagination from "@/components/Pagination";
 import {
   Brain,
   TrendingUp,
@@ -306,6 +308,8 @@ export default function PredictionsPage() {
   const totalCurrentWeekly = machineForecast.reduce((s, m) => s + m.currentWeekly, 0);
   const overallChangePct = ((totalPredictedWeekly - totalCurrentWeekly) / totalCurrentWeekly * 100);
   const deadProducts = productPerformance.filter(p => p.recommendation === "Remove").length;
+  const perfVisible = productPerformance.filter((p) => !dismissedProducts.has(p.product));
+  const perfPg = usePagination(perfVisible, 25);
   const generatedDate = new Date(data.generatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   const maxWeekly = Math.max(...machineForecast.map(m => Math.max(m.currentWeekly, m.predictedWeekly)));
 
@@ -667,7 +671,7 @@ export default function PredictionsPage() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {productPerformance.filter((p) => !dismissedProducts.has(p.product)).map((p, i) => {
+              {perfPg.pageItems.map((p, i) => {
                 const rec = p.recommendation ? actionConfig[p.recommendation] : null;
                 const RecIcon = rec?.icon || Package;
                 const maxRev = Math.max(...productPerformance.map(pp => pp.totalRevenue));
@@ -775,6 +779,15 @@ export default function PredictionsPage() {
                   }}>Restore all</button>
                 </div>
               )}
+              <Pagination
+                page={perfPg.page}
+                totalPages={perfPg.totalPages}
+                onPageChange={perfPg.setPage}
+                from={perfPg.from}
+                to={perfPg.to}
+                total={perfPg.total}
+                label="products"
+              />
             </div>
           </div>
         )}

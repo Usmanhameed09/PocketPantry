@@ -259,6 +259,13 @@ export default function PredictionsPage() {
     }
   };
 
+  // Pagination for the product-performance list. This is a HOOK, so it must run
+  // on every render BEFORE the early returns below (loading / error / no-data) —
+  // otherwise the hook count changes between renders and React crashes the page.
+  // Reads from data optionally so it's safe before data has loaded.
+  const perfVisible = (data?.productPerformance ?? []).filter((p) => !dismissedProducts.has(p.product));
+  const perfPg = usePagination(perfVisible, 25);
+
   /* Loading */
   if (loading) {
     return (
@@ -308,8 +315,6 @@ export default function PredictionsPage() {
   const totalCurrentWeekly = machineForecast.reduce((s, m) => s + m.currentWeekly, 0);
   const overallChangePct = ((totalPredictedWeekly - totalCurrentWeekly) / totalCurrentWeekly * 100);
   const deadProducts = productPerformance.filter(p => p.recommendation === "Remove").length;
-  const perfVisible = productPerformance.filter((p) => !dismissedProducts.has(p.product));
-  const perfPg = usePagination(perfVisible, 25);
   const generatedDate = new Date(data.generatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   const maxWeekly = Math.max(...machineForecast.map(m => Math.max(m.currentWeekly, m.predictedWeekly)));
 

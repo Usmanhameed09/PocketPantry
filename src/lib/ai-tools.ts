@@ -1724,6 +1724,16 @@ const QUERYABLE_SCHEMA: Record<string, { columns: string[]; defaultOrderBy?: str
     columns: ["refill_id", "product_id", "qty_loaded"],
     description: "Per-product lines on a refill event.",
   },
+  lead_tasks: {
+    columns: ["id", "lead_id", "task_type", "scheduled_for", "priority", "status", "reason", "completed_at", "completed_outcome", "created_at"],
+    defaultOrderBy: "scheduled_for",
+    description: "Forward-looking outreach tasks per lead (call/email/follow-up) with status + cadence.",
+  },
+  outreach_log: {
+    columns: ["id", "lead_id", "action_type", "action_data", "performed_at"],
+    defaultOrderBy: "performed_at",
+    description: "History of outreach actions per lead — calls, emails, replies (action_data holds outcome/subtype/summary).",
+  },
 };
 
 const ALLOWED_OPS = new Set(["eq", "neq", "gt", "gte", "lt", "lte", "ilike"]);

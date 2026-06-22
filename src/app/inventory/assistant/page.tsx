@@ -4,18 +4,17 @@ import { useState, useRef, useEffect } from "react";
 import Header from "@/components/Header";
 import InventoryTabs from "../InventoryTabs";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useAssistantChat } from "@/hooks/useAssistantChat";
 import { Loader2, Send, Sparkles, Trash2, Bot, User } from "lucide-react";
 import { PAGE_BG, CARD, pageContainer } from "../ui";
 
-type ChatMessage = { role: "user" | "assistant"; content: string; ts: string };
-
 const SUGGESTED_PROMPTS = [
   { label: "What should I remove?", q: "Which products should I consider removing from the catalog? Look at sales velocity and margins." },
-  { label: "Top performers this week", q: "Show me the top 10 best-selling products this week with their velocity and margin." },
-  { label: "Where to place a new product?", q: "If I introduce a new energy drink targeting office workers, which machines should I put it in first based on current demographics and what's selling there?" },
-  { label: "Velocity spikes & declines", q: "What products are spiking or declining in sales this week vs last? Should I take any action?" },
+  { label: "Top sellers this week", q: "Show me the top 10 best-selling products this week with their velocity and margin." },
+  { label: "Spikes & declines", q: "What products are spiking or declining in sales this week vs last? Should I take any action?" },
   { label: "Which machines need restocking?", q: "Which machines are running low or need attention soon based on current stock and sales rate?" },
-  { label: "Category mix balance", q: "Is my category mix (Snacks/Drinks/Meals/Health) balanced based on sales? What should I add or remove to balance?" },
+  { label: "Category mix + what to add", q: "Is my category mix (Snacks/Drinks/Meals/Health) balanced based on sales? What should I add or remove to balance it?" },
+  { label: "Ideas to lift a slow machine", q: "What are some practical ways to boost sales at my slowest machine? Use my data plus general best practices." },
 ];
 
 /* Simple markdown renderer — bold, italic, bullets, headers */
@@ -76,50 +75,20 @@ function renderInline(text: string): React.ReactNode {
 
 export default function AssistantPage() {
   const isMobile = useIsMobile();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // ONE unified assistant — same hook the floating widget uses.
+  const { messages, sending, error, send: sendMessage, clear } = useAssistantChat();
   const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [snapshotMeta, setSnapshotMeta] = useState<{ productsTracked: number; productsWithSales: number } | null>(null);
-  // Agent mode toggle: v2 uses tool-calling (cheaper, can drill into any
-  // entity in the DB on demand); v1 uses the static snapshot. Defaults
-  // to v2. Operator can flip back if they hit something v2 can't answer.
-  const [useV2, setUseV2] = useState(true);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, sending]);
 
-  async function send(text?: string) {
+  function send(text?: string) {
     const q = (text ?? input).trim();
     if (!q || sending) return;
-    setError(null);
     setInput("");
-    const userMsg: ChatMessage = { role: "user", content: q, ts: new Date().toISOString() };
-    const next = [...messages, userMsg];
-    setMessages(next);
-    setSending(true);
-
-    try {
-      const endpoint = useV2 ? "/api/inventory/assistant-v2" : "/api/inventory/assistant";
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: next.map((m) => ({ role: m.role, content: m.content })),
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Assistant failed");
-      const reply: ChatMessage = { role: "assistant", content: data.reply, ts: new Date().toISOString() };
-      setMessages((cur) => [...cur, reply]);
-      if (data.snapshotMeta) setSnapshotMeta(data.snapshotMeta);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed");
-    } finally {
-      setSending(false);
-    }
+    void sendMessage(q);
   }
 
   return (
@@ -135,28 +104,11 @@ export default function AssistantPage() {
         }}>
           <Sparkles size={20} color="#6366f1" />
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#3730a3", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              AI-powered inventory advisor
-              <label style={{
-                display: "inline-flex", alignItems: "center", gap: 6,
-                fontSize: 11, fontWeight: 600, color: useV2 ? "#15803d" : "#6b7280",
-                background: useV2 ? "#dcfce7" : "#f1f5f9",
-                padding: "3px 10px", borderRadius: 12, cursor: "pointer",
-                border: `1px solid ${useV2 ? "#86efac" : "#d5d9e2"}`,
-              }}>
-                <input
-                  type="checkbox"
-                  checked={useV2}
-                  onChange={(e) => setUseV2(e.target.checked)}
-                  style={{ margin: 0, cursor: "pointer" }}
-                />
-                {useV2 ? "Agent mode (v2)" : "Snapshot mode (v1)"}
-              </label>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#3730a3" }}>
+              AI advisor
             </div>
             <div style={{ fontSize: 12, color: "#475569" }}>
-              {snapshotMeta
-                ? `Live snapshot: ${snapshotMeta.productsTracked} products tracked, ${snapshotMeta.productsWithSales} with sales velocity.`
-                : "Ask anything about your inventory, sales trends, or product decisions."}
+              Ask anything — machines, sales, inventory, pricing, leads, predictions — or for general advice.
             </div>
           </div>
         </div>
@@ -268,7 +220,7 @@ export default function AssistantPage() {
           }}>
             {messages.length > 0 && (
               <button
-                onClick={() => { setMessages([]); setError(null); }}
+                onClick={clear}
                 title="Clear chat"
                 style={{
                   padding: 10, background: "transparent", border: "none", cursor: "pointer", color: "#64748b",

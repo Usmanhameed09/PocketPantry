@@ -4,39 +4,24 @@
  * Floating AI chat widget — bottom-right of every authenticated page.
  *
  * Quick-access shortcut so the operator can ask "how much did today sell?"
- * without navigating away from whatever page they're on. Calls the same
- * /api/inventory/assistant endpoint as the full /inventory/assistant page,
- * so the system prompt + snapshot data are identical.
+ * without navigating away from whatever page they're on. Uses the SAME
+ * useAssistantChat hook as the full /inventory/assistant page, so both
+ * surfaces hit one unified assistant with identical behavior.
  *
- * Conversation state lives in this component (not the global app). Closing
- * the panel preserves messages until the page is reloaded.
+ * Conversation state persists in sessionStorage (via the hook) so closing
+ * the panel preserves messages until the tab is closed.
  */
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { MessageCircle, Send, X, Bot, Loader2, Maximize2, Trash2 } from "lucide-react";
-
-type ChatMessage = { role: "user" | "assistant"; content: string; ts: string };
+import { useAssistantChat } from "@/hooks/useAssistantChat";
 
 export default function AIChatWidget() {
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { messages, sending: busy, error, send: sendMessage, clear: clearChat } = useAssistantChat({ persistKey: "aiChatWidget" });
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Restore prior chat from sessionStorage so toggling the panel doesn't
-  // lose context.
-  useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem("aiChatWidget");
-      if (raw) setMessages(JSON.parse(raw));
-    } catch { /* sessionStorage unavailable */ }
-  }, []);
-  useEffect(() => {
-    try { sessionStorage.setItem("aiChatWidget", JSON.stringify(messages)); } catch {}
-  }, [messages]);
 
   // Auto-scroll to the newest message when one arrives or panel opens.
   useEffect(() => {
@@ -47,43 +32,11 @@ export default function AIChatWidget() {
     });
   }, [messages, open, busy]);
 
-  async function send() {
+  function send() {
     const q = input.trim();
     if (!q || busy) return;
-    setError(null);
-    const userMsg: ChatMessage = { role: "user", content: q, ts: new Date().toISOString() };
-    const next = [...messages, userMsg];
-    setMessages(next);
     setInput("");
-    setBusy(true);
-    try {
-      // Use the v2 agent (tool-calling) instead of the v1 snapshot endpoint.
-      // v1 stuffs a ~17k-token snapshot into every message, so a couple of
-      // questions blow OpenAI's 30k tokens/min limit and the widget errored
-      // out ("no access"). v2 calls small focused tools on demand — far fewer
-      // tokens, no rate-limit — and has full access to leads, predictions,
-      // inventory, machines, and pricing. Same { success, reply } response.
-      const res = await fetch("/api/inventory/assistant-v2", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: next.map((m) => ({ role: m.role, content: m.content })),
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Assistant failed");
-      const reply: ChatMessage = { role: "assistant", content: data.reply, ts: new Date().toISOString() };
-      setMessages((prev) => [...prev, reply]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Network error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function clearChat() {
-    setMessages([]);
-    try { sessionStorage.removeItem("aiChatWidget"); } catch {}
+    void sendMessage(q);
   }
 
   return (

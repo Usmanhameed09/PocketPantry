@@ -801,7 +801,23 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
     .or(`name.ilike.%${query}%,sku.ilike.%${query}%,vendor.ilike.%${query}%`)
     .limit(100);
 
-  const rows = candidates || [];
+  let rows = candidates || [];
+  // Typo / abbreviation fallback: if the substring search found nothing, fuzzy-
+  // match against the REAL (recently-sold) catalog so "ceke", "mtndew", etc.
+  // still resolve.
+  if (rows.length === 0) {
+    const since = dateNDaysAgoInOperatorTz(60);
+    const { data: soldRows } = await supabase
+      .from("daily_sales").select("product_id").gte("sale_date", since).range(0, 9999);
+    const soldIds = [...new Set((soldRows || []).map((r) => r.product_id as string))];
+    if (soldIds.length) {
+      const { data: real } = await supabase
+        .from("products")
+        .select("id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, barcode, status")
+        .in("id", soldIds);
+      rows = (real || []).filter((p) => nameMatchScore(query, p.name as string) > 0);
+    }
+  }
   if (rows.length === 0) return { matches: [], count: 0 };
 
   // Active filter — see /api/inventory/products for the definition.

@@ -162,6 +162,10 @@ returns NOTHING. If the tool returns an "alsoMatched" list and the choice
 could change the answer, still give the best-guess answer FIRST, then add a
 one-line "(if you meant <other>, say so)".
 
+A bare name (RACO, NEC, 84L, Baker Nissan, Morada…) is usually a MACHINE —
+"how is RACO doing?" → get_machine_details("RACO"). If a name isn't found
+as a lead or product, TRY get_machine_details before giving up.
+
 ═══════════════════════════════════════════════════════════════════
 ANSWER STYLE
 ═══════════════════════════════════════════════════════════════════

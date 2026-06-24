@@ -815,7 +815,7 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
         .from("products")
         .select("id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, barcode, status")
         .in("id", soldIds);
-      rows = (real || []).filter((p) => nameMatchScore(query, p.name as string) > 0);
+      rows = (real || []).filter((p) => nameMatchScore(query, p.name as string) >= 60);
     }
   }
   if (rows.length === 0) return { matches: [], count: 0 };
@@ -894,7 +894,9 @@ async function getProductDetails(name: string): Promise<ToolResult> {
 
   // Typo / abbreviation fallback: match against the REAL catalog (products
   // sold in the last 60d) so "ceke", "84L"-style shorthand, etc. still resolve.
+  let usedFallback = false;
   if (!products || products.length === 0) {
+    usedFallback = true;
     const since = dateNDaysAgoInOperatorTz(60);
     const { data: soldRows } = await supabase
       .from("daily_sales").select("product_id").gte("sale_date", since).range(0, 9999);
@@ -910,8 +912,10 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   }
 
   // Fuzzy-rank and answer for the BEST match — never demand the exact name.
+  // In the fallback path (no substring hit) require a CONFIDENT score so a bad
+  // typo resolves to nothing ("did you mean…?") rather than a wrong product.
   const ranked = fuzzyRank(name, products, (p) => p.name as string);
-  if (ranked.length === 0) {
+  if (ranked.length === 0 || (usedFallback && ranked[0].score < 60)) {
     return { error: `No product matched "${name}"` };
   }
   const product = ranked[0].item;

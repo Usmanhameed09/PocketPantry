@@ -617,34 +617,79 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
 // Tool: get_machine_details
 // ─────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────
+// Fuzzy name resolution — the operator should NEVER have to type the exact
+// full name. "84L" resolves to "84 Lumber", "coke" picks the best Coke
+// product, and small typos still resolve. Used by machine + product lookups.
+// ─────────────────────────────────────────────────────────────────────
+function _norm(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+function _lev(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+/** Higher score = better match. 0 = no match at all. */
+function nameMatchScore(query: string, name: string): number {
+  const q = query.toLowerCase().trim();
+  const nl = name.toLowerCase();
+  if (!q || !nl) return 0;
+  if (nl === q) return 100;
+  if (nl.startsWith(q)) return 92;            // "coke" → "Coke 12 oz Cans"
+  if (nl.includes(q)) return 84;              // "coke" → "Diet Coke ..."
+  const qn = _norm(query), nn = _norm(name);
+  if (qn && nn.startsWith(qn)) return 78;     // "84L"/"84l" → "84 Lumber"/"84lumber"
+  if (qn && nn.includes(qn)) return 72;
+  // token-prefix overlap (e.g. "freshley donut" → "Freshleys Donut Crunch")
+  const words = nl.split(/[^a-z0-9]+/).filter(Boolean);
+  const qWords = q.split(/[^a-z0-9]+/).filter(Boolean);
+  let tok = 0;
+  for (const qw of qWords) for (const w of words) if (w.startsWith(qw) || qw.startsWith(w)) tok++;
+  if (tok > 0) return 40 + tok * 6;
+  // typo tolerance vs the whole name or any single word
+  const cand = [nn, ...words.map(_norm)];
+  const best = Math.min(...cand.map((c) => _lev(qn, c)));
+  if (best <= 1) return 36;
+  if (best <= 2 && qn.length >= 4) return 28;
+  if (best <= 3 && qn.length >= 6) return 18;
+  return 0;
+}
+function fuzzyRank<T>(query: string, items: T[], getName: (t: T) => string): Array<{ item: T; score: number }> {
+  return items
+    .map((item) => ({ item, score: nameMatchScore(query, getName(item)) }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score);
+}
+
 async function getMachineDetails(name: string): Promise<ToolResult> {
   if (!name) return { error: "name is required" };
   const companyId = await ensureDefaultCompany();
   const supabase = createServerClient();
 
-  const { data: machines } = await supabase
+  // Pull all machines (there are only a handful) and fuzzy-resolve — so "84L",
+  // "raco", a typo, etc. all land on the right machine without the operator
+  // typing the exact full name.
+  const { data: allMachines } = await supabase
     .from("machines")
     .select("id, name, status, last_sync_at, location_id")
-    .eq("company_id", companyId)
-    .ilike("name", `%${name}%`)
-    .limit(5);
+    .eq("company_id", companyId);
 
-  if (!machines || machines.length === 0) {
-    return { error: `No machine matched "${name}"` };
+  const ranked = fuzzyRank(name, allMachines || [], (m) => m.name as string);
+  if (ranked.length === 0) {
+    const names = (allMachines || []).map((m) => m.name).join(", ");
+    return { error: `No machine matched "${name}". Machines are: ${names}` };
   }
-
-  // If multiple matches, return summary list — let AI ask user to pick.
-  if (machines.length > 1) {
-    return {
-      multipleMatches: machines.map((m) => ({
-        name: m.name,
-        status: m.status,
-      })),
-      hint: "Multiple machines matched. Ask the operator to narrow down by full name.",
-    };
-  }
-
-  const machine = machines[0];
+  const machine = ranked[0].item;
   const machineId = machine.id as string;
 
   // 30-day sales for this machine
@@ -784,7 +829,11 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
     return price > 0;
   };
 
-  const active = rows.filter(isActive);
+  const active = rows
+    .filter(isActive)
+    // Most-relevant first so a vague query ("coke") surfaces the closest
+    // product at the top instead of an arbitrary catalog order.
+    .sort((a, b) => nameMatchScore(query, b.name as string) - nameMatchScore(query, a.name as string));
   const inactiveCount = rows.length - active.length;
 
   return {
@@ -817,25 +866,40 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   const companyId = await ensureDefaultCompany();
   const supabase = createServerClient();
 
-  const { data: products } = await supabase
+  const cols = "id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, status";
+  const firstWord = name.trim().split(/\s+/)[0];
+  // Substring pass on the query and its first word.
+  let { data: products } = await supabase
     .from("products")
-    .select("id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, status")
+    .select(cols)
     .eq("company_id", companyId)
-    .ilike("name", `%${name}%`)
-    .limit(5);
+    .or(`name.ilike.%${name}%,name.ilike.%${firstWord}%`)
+    .limit(40);
+
+  // Typo / abbreviation fallback: match against the REAL catalog (products
+  // sold in the last 60d) so "ceke", "84L"-style shorthand, etc. still resolve.
+  if (!products || products.length === 0) {
+    const since = dateNDaysAgoInOperatorTz(60);
+    const { data: soldRows } = await supabase
+      .from("daily_sales").select("product_id").gte("sale_date", since).range(0, 9999);
+    const ids = [...new Set((soldRows || []).map((r) => r.product_id as string))];
+    if (ids.length) {
+      const { data: real } = await supabase.from("products").select(cols).in("id", ids);
+      products = real;
+    }
+  }
 
   if (!products || products.length === 0) {
     return { error: `No product matched "${name}"` };
   }
 
-  if (products.length > 1) {
-    return {
-      multipleMatches: products.map((p) => ({ name: p.name, sku: p.sku, category: p.category })),
-      hint: "Multiple products matched. Ask operator to be more specific.",
-    };
+  // Fuzzy-rank and answer for the BEST match — never demand the exact name.
+  const ranked = fuzzyRank(name, products, (p) => p.name as string);
+  if (ranked.length === 0) {
+    return { error: `No product matched "${name}"` };
   }
-
-  const product = products[0];
+  const product = ranked[0].item;
+  const alsoMatched = ranked.slice(1, 4).filter((r) => r.score >= 72).map((r) => r.item.name as string);
   const pid = product.id as string;
 
   // 30-day sales + machine list
@@ -890,6 +954,10 @@ async function getProductDetails(name: string): Promise<ToolResult> {
     inMachines: Array.from(machineSet.values()).sort((a, b) => b.units - a.units).slice(0, 10),
     warehouseOnHand: (wh?.on_hand as number) || 0,
     seasonality,
+    // Other products that also matched the query, if any — the answer is for
+    // the best match above; mention these only if the operator might have
+    // meant a different one.
+    ...(alsoMatched.length ? { alsoMatched } : {}),
   };
 }
 

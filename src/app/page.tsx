@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   Loader2,
   Bot,
+  RefreshCw,
 } from "lucide-react";
 
 /* ────── Types ────── */
@@ -87,6 +88,8 @@ export default function Dashboard() {
   const [tiles, setTiles] = useState<TilesData | null>(null);
   const [sections, setSections] = useState<SectionsData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,6 +135,49 @@ export default function Dashboard() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  // Keep the numbers CURRENT. The sales data only updates when the Nayax+HAHA
+  // sync runs, and nothing schedules it — so the dashboard runs it itself when
+  // you open the page (throttled to once / 8 min), then re-pulls the tiles so
+  // "today" reflects the real running total instead of a stale, low number.
+  const reloadData = async () => {
+    const readJson = async (res: Response): Promise<Record<string, unknown> | null> => {
+      const t = await res.text();
+      const x = t.trimStart();
+      if (!x.startsWith("{") && !x.startsWith("[")) return null;
+      try { return JSON.parse(t); } catch { return null; }
+    };
+    try {
+      const r = await fetch("/api/dashboard/today/tiles?fresh=1", { cache: "no-store" });
+      const j = await readJson(r);
+      if (j && j.success === true) setTiles(j as unknown as TilesData);
+    } catch { /* ignore */ }
+    try {
+      const r = await fetch("/api/dashboard/today/sections?fresh=1", { cache: "no-store" });
+      const j = await readJson(r);
+      if (j && j.success === true) setSections(j as unknown as SectionsData);
+    } catch { /* ignore */ }
+  };
+
+  const triggerSync = async (force: boolean) => {
+    if (syncing) return;
+    try {
+      const last = Number(localStorage.getItem("dashLastSync") || "0");
+      if (!force && Date.now() - last < 8 * 60 * 1000) return; // throttle
+    } catch { /* localStorage unavailable */ }
+    setSyncing(true);
+    try {
+      await fetch("/api/inventory/sync", { method: "POST" });
+      try { localStorage.setItem("dashLastSync", String(Date.now())); } catch { /* ignore */ }
+      setSyncedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+      await reloadData();
+    } catch { /* sync best-effort */ } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Auto-sync once on open (throttled inside triggerSync).
+  useEffect(() => { void triggerSync(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   // Progressive render: never block the WHOLE page on data. Use empty
   // placeholder values until each fetch lands; the per-tile/per-section
@@ -188,6 +234,28 @@ export default function Dashboard() {
   return (
     <div style={{ minHeight: "100vh" }}>
       <Header title="Today" />
+
+      {/* ─── Freshness bar: shows when sales last refreshed + manual refresh ─── */}
+      <div style={{ padding: isMobile ? "12px 16px 0" : "20px 32px 0", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 }}>
+        <span style={{ fontSize: 12, color: "#64748b" }}>
+          {syncing ? "Updating sales from machines…" : syncedAt ? `Sales updated ${syncedAt}` : "Sales as of last sync"}
+        </span>
+        <button
+          onClick={() => void triggerSync(true)}
+          disabled={syncing}
+          title="Pull the latest Nayax + HAHA sales now"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "6px 12px", fontSize: 12, fontWeight: 600,
+            border: "1px solid #cbd5e1", borderRadius: 8,
+            background: syncing ? "#f1f5f9" : "#fff", color: syncing ? "#94a3b8" : "#0f172a",
+            cursor: syncing ? "not-allowed" : "pointer",
+          }}
+        >
+          <RefreshCw size={13} style={syncing ? { animation: "spin 1s linear infinite" } : undefined} />
+          {syncing ? "Refreshing" : "Refresh"}
+        </button>
+      </div>
 
       {/* ─── Quick Stats (real numbers) ─── */}
       <div style={{ padding: isMobile ? "16px 16px 0" : "24px 32px 0" }}>

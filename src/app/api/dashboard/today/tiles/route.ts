@@ -18,61 +18,6 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 const CACHE_KEY = "today:tiles";
-const SCRAPER_API_URL = process.env.SCRAPER_API_URL || "https://arbersaas.duckdns.org/api2";
-
-/**
- * Pull TODAY's sales LIVE from Nayax (via the scraper-api), bucketed to the
- * operator-tz date. The daily_sales table is only as fresh as the last sync
- * (which has no intraday cron), so without this the Today tile shows $0 / a
- * stale number while the Nayax dashboard shows the real running total — the
- * "live vs ours" gap operators reported.
- *
- * Sums the same daily_breakdown / daily_revenue fields the sync writes, so the
- * number is consistent with what daily_sales will eventually hold. Returns null
- * on any failure (scraper down, timeout) so we fall back to the synced number.
- */
-async function fetchLiveSales(
-  todayStr: string,
-  yesterdayStr: string,
-): Promise<{ today: { units: number; revenue: number; transactions: number }; yesterdayRevenue: number } | null> {
-  try {
-    const res = await fetch(`${SCRAPER_API_URL}/api/machines/inventory-status`, {
-      headers: { "x-api-key": process.env.SCRAPER_BACKEND_KEY || process.env.API_KEY || "" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const machines = (data.machines || []) as Array<{
-      products?: Array<{ daily_breakdown?: Record<string, number>; daily_revenue?: Record<string, number> }>;
-    }>;
-    let units = 0;
-    let revenue = 0;
-    let transactions = 0; // product-machine pairs that sold today (matches the synced row-count semantics)
-    let yesterdayRevenue = 0;
-    let foundAnyDate = false;
-    for (const m of machines) {
-      for (const p of m.products || []) {
-        const db = p.daily_breakdown || {};
-        const dr = p.daily_revenue || {};
-        if (Object.keys(db).length > 0) foundAnyDate = true;
-        const u = db[todayStr] || 0;
-        if (u > 0) {
-          units += u;
-          revenue += dr[todayStr] || 0;
-          transactions += 1;
-        }
-        yesterdayRevenue += dr[yesterdayStr] || 0;
-      }
-    }
-    // If the breakdown carried no dates at all, treat as no live data (don't
-    // overwrite a synced number with a bogus 0).
-    if (!foundAnyDate) return null;
-    return { today: { units, revenue, transactions }, yesterdayRevenue };
-  } catch {
-    return null;
-  }
-}
 
 export async function GET(req: Request) {
   try {
@@ -126,39 +71,28 @@ async function buildTiles(): Promise<Record<string, unknown>> {
     const machines = machinesRes.data || [];
     const warehouse = warehouseRes.data || [];
 
-    // Today's sales — start from the synced daily_sales snapshot, then try to
-    // override with a LIVE Nayax pull so the tile matches the Nayax dashboard.
-    let todayUnits = todayRows.reduce((s, r) => s + (r.units_sold as number), 0);
-    let todayRevenue = todayRows.reduce((s, r) => s + ((r.revenue as number) || 0), 0);
-    let todayTransactions = todayRows.length;
-    let liveDataAt: string | null = null;
-
-    // Yesterday from the synced snapshot is the fallback; the live pull (below)
-    // overrides it so the figure is real even when no sync cron has run.
-    let yesterdayRevenue = yesterdayRows.reduce((s, r) => s + ((r.revenue as number) || 0), 0);
-
-    const live = await fetchLiveSales(todayStr, yesterdayStr);
-    if (live) {
-      todayUnits = live.today.units;
-      todayRevenue = live.today.revenue;
-      todayTransactions = live.today.transactions;
-      // Only trust live yesterday if it actually carried data for that day;
-      // otherwise keep the synced figure.
-      if (live.yesterdayRevenue > 0) yesterdayRevenue = live.yesterdayRevenue;
-      liveDataAt = new Date().toISOString();
-    }
+    // Today's sales — read straight from the synced daily_sales (Nayax + HAHA).
+    // The dashboard auto-runs the sync when the operator opens it, so this stays
+    // current. (We removed the old "live Nayax pull" override: it timed out on
+    // every load AND didn't cover HAHA machines, so it just made the number
+    // flip-flop. One source of truth now: the synced daily_sales.)
+    const todayUnits = todayRows.reduce((s, r) => s + (r.units_sold as number), 0);
+    const todayRevenue = todayRows.reduce((s, r) => s + ((r.revenue as number) || 0), 0);
+    const todayTransactions = todayRows.length;
+    const liveDataAt: string | null = null;
+    const yesterdayRevenue = yesterdayRows.reduce((s, r) => s + ((r.revenue as number) || 0), 0);
 
     const wowPct = yesterdayRevenue > 0
       ? Math.round(((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100)
       : 0;
     const avgSale = todayTransactions > 0 ? todayRevenue / todayTransactions : 0;
     const lastSaleDate = (lastSaleRowRes.data?.sale_date as string | null) || null;
-    const todayHasData = liveDataAt !== null || lastSaleDate === todayStr;
+    const todayHasData = lastSaleDate === todayStr;
 
-    // When today has no live/synced data, show the most recent synced day's
+    // When today has no synced data yet, show the most recent synced day's
     // ACTUAL revenue (labeled "Last data <date>") instead of a misleading $0.
     let lastDayRevenue = todayRevenue;
-    if (!liveDataAt && lastSaleDate && lastSaleDate !== todayStr) {
+    if (lastSaleDate && lastSaleDate !== todayStr) {
       const { data: lastDayRows } = await supabase
         .from("daily_sales").select("revenue").eq("sale_date", lastSaleDate);
       lastDayRevenue = (lastDayRows || []).reduce((s, r) => s + ((r.revenue as number) || 0), 0);

@@ -34,7 +34,9 @@ const navItems = [
   // { name: "Pipeline", href: "/pipeline", icon: GitBranch },
   { name: "Email Pipeline", href: "/email-pipeline", icon: Mail },
   { name: "Lead Dashboard", href: "/pipeline/v2", icon: Target },
-  { name: "Advertising", href: "/advertising", icon: Megaphone },
+  // Advertising hidden per operator request — not catering this module.
+  // Restore the line below if/when advertising is offered.
+  // { name: "Advertising", href: "/advertising", icon: Megaphone },
   { name: "Reports", href: "/reports", icon: BarChart3 },
   { name: "Exception Queue", href: "/exceptions", icon: AlertOctagon },
   { name: "Help & SOPs", href: "/help", icon: BookOpen },

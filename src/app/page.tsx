@@ -33,6 +33,7 @@ type TilesData = {
 };
 type SectionsData = {
   refillStops: Array<{ machine: string; items: number; color: string }>;
+  refillTrackingActive?: boolean;
   restock: { cost: number; buyListItems: number };
   priceChanges: Array<{ product: string; suggestedPrice: number; cost: number }>;
   recentReply: { from: string; summary: string; intent: string; receivedAt: string } | null;
@@ -319,6 +320,8 @@ export default function Dashboard() {
                 <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
                   {sectionsLoading ? (
                     <span>loading…</span>
+                  ) : sections?.refillTrackingActive === false ? (
+                    <span>Refill tracking not set up</span>
                   ) : (
                     <>
                       <span style={{ fontWeight: 600, color: "#16a34a" }}>{refillStops.length}</span> machine{refillStops.length === 1 ? "" : "s"} need refill
@@ -335,6 +338,8 @@ export default function Dashboard() {
             <div style={cardBody}>
               {sectionsLoading ? (
                 <EmptyHint message="Loading refill stops…" />
+              ) : sections?.refillTrackingActive === false ? (
+                <EmptyHint message="Refill tracking isn't set up yet. Log a refill on the Refill page (enter how many of each product you load into a machine) and low-stock alerts will show here based on real remaining stock." />
               ) : refillStops.length === 0 ? (
                 <EmptyHint message="All machines stocked — no refills needed yet" />
               ) : (

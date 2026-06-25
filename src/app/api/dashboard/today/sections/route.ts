@@ -40,7 +40,7 @@ async function buildSections(): Promise<Record<string, unknown>> {
 
     const [machinesRes, machineInvRes, analyses, replyRes, catalog] = await Promise.all([
       supabase.from("machines").select("id, name").eq("company_id", companyId),
-      supabase.from("machine_inventory").select("machine_id, estimated_remaining, daily_sales_rate"),
+      supabase.from("machine_inventory").select("machine_id, estimated_remaining, daily_sales_rate, last_loaded_qty"),
       getSavedPricingAnalyses(),
       fetchRecentReplies(supabase),
       getPricingCatalog(),
@@ -50,6 +50,13 @@ async function buildSections(): Promise<Record<string, unknown>> {
     const machineInv = machineInvRes.data || [];
 
     // ─── Refill stops ───────────────────────────────────────────────
+    // "Low" only means something once a refill has been LOGGED — that's what
+    // sets last_loaded_qty and lets us estimate remaining stock. Without it,
+    // estimated_remaining is 0 for every product, which would wrongly flag the
+    // ENTIRE machine as low (the old "461 low items" garbage). So we only count
+    // a product as low when it has a real refill baseline, and we tell the UI
+    // whether refill tracking is set up at all.
+    const refillTrackingActive = machineInv.some((mi) => ((mi.last_loaded_qty as number) || 0) > 0);
     const machineLowest = new Map<string, { name: string; lowItems: number }>();
     for (const m of machines) {
       machineLowest.set(m.id as string, { name: m.name as string, lowItems: 0 });
@@ -57,6 +64,8 @@ async function buildSections(): Promise<Record<string, unknown>> {
     for (const mi of machineInv) {
       const e = machineLowest.get(mi.machine_id as string);
       if (!e) continue;
+      const loaded = (mi.last_loaded_qty as number) || 0;
+      if (loaded <= 0) continue; // no baseline → we genuinely can't know if it's low
       const rem = (mi.estimated_remaining as number) || 0;
       const rate = (mi.daily_sales_rate as number) || 0;
       if (rate > 0 && rem <= rate * 3) e.lowItems++;
@@ -136,6 +145,7 @@ async function buildSections(): Promise<Record<string, unknown>> {
       success: true,
       generatedAt: new Date().toISOString(),
       refillStops,
+      refillTrackingActive,
       restock: {
         cost: Math.round(restockCost * 100) / 100,
         buyListItems,

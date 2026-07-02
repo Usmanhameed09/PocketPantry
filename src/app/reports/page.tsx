@@ -43,7 +43,7 @@ const PIE_COLORS = ["#16a34a", "#059669", "#d97706", "#6366f1", "#dc2626"];
 
 export default function ReportsPage() {
   const [tab, setTab] = useState<ReportTab>("Overview");
-  const [preset, setPreset] = useState<"7d" | "30d" | "90d" | "month" | "custom">("30d");
+  const [preset, setPreset] = useState<"7d" | "30d" | "90d" | "thisMonth" | "month" | "custom">("30d");
   const [days, setDays] = useState(30);
   // Two copies: customFrom/customTo are what the operator is typing into
   // the date pickers. appliedFrom/appliedTo are what we actually fetch on
@@ -57,14 +57,20 @@ export default function ReportsPage() {
   const [backfilling, setBackfilling] = useState(false);
   const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
 
+  const fmtDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   // "Last month" = previous calendar month (e.g. on May 28 → April 1 to April 30)
   function lastMonthRange(): { from: string; to: string } {
     const today = new Date();
     const firstOfThis = new Date(today.getFullYear(), today.getMonth(), 1);
     const lastOfPrev = new Date(firstOfThis.getTime() - 86400000);
     const firstOfPrev = new Date(lastOfPrev.getFullYear(), lastOfPrev.getMonth(), 1);
-    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    return { from: fmt(firstOfPrev), to: fmt(lastOfPrev) };
+    return { from: fmtDate(firstOfPrev), to: fmtDate(lastOfPrev) };
+  }
+  // "This month" = 1st of the current month → today.
+  function thisMonthRange(): { from: string; to: string } {
+    const today = new Date();
+    const firstOfThis = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { from: fmtDate(firstOfThis), to: fmtDate(today) };
   }
   const [data, setData] = useState<ReportsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,7 +87,10 @@ export default function ReportsPage() {
       // Note: we read appliedFrom/appliedTo (set on Apply click), NOT
       // customFrom/customTo (typed-in values), so we don't refetch on
       // every date picker keystroke.
-      if (preset === "month") {
+      if (preset === "thisMonth") {
+        const { from, to } = thisMonthRange();
+        qs.set("from", from); qs.set("to", to);
+      } else if (preset === "month") {
         const { from, to } = lastMonthRange();
         qs.set("from", from); qs.set("to", to);
       } else if (preset === "custom" && appliedFrom && appliedTo) {
@@ -191,10 +200,11 @@ export default function ReportsPage() {
                 background: "#fff", border: "1px solid #d5d9e2", borderRadius: 8, cursor: "pointer", outline: "none",
               }}
             >
-              <option value="7d">Last 7 Days</option>
-              <option value="30d">Last 30 Days</option>
-              <option value="90d">Last 90 Days</option>
+              <option value="thisMonth">This Month</option>
               <option value="month">Last Month</option>
+              <option value="90d">Last 90 Days</option>
+              <option value="30d">Last 30 Days</option>
+              <option value="7d">Last 7 Days</option>
               <option value="custom">Custom range…</option>
             </select>
             {preset === "custom" && (

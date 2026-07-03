@@ -84,6 +84,14 @@ export default function ReportsPage() {
   const isTablet = useIsMobile(1024);
 
   const load = useCallback(async () => {
+    // When "Custom range" is selected but not yet applied, DON'T fetch — wait
+    // for the operator to pick both dates and click Apply. This prevents the
+    // page from reloading (and blanking) the moment Custom is chosen, and keeps
+    // the controls interactive. The previous data stays on screen meanwhile.
+    if (preset === "custom" && (!appliedFrom || !appliedTo)) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -116,18 +124,6 @@ export default function ReportsPage() {
   }, [preset, days, appliedFrom, appliedTo, machineIds]);
 
   useEffect(() => { load(); }, [load]);
-
-  // Auto-apply a custom range as soon as BOTH dates are chosen — a native
-  // <input type=date> only fires onChange when a full date is selected (not per
-  // keystroke), so this is safe and doesn't spam fetches. Previously the range
-  // did nothing until the operator also clicked "Apply", which read as "custom
-  // range gives no results". The Apply button stays as a manual re-run.
-  useEffect(() => {
-    if (preset === "custom" && customFrom && customTo) {
-      setAppliedFrom(customFrom);
-      setAppliedTo(customTo);
-    }
-  }, [preset, customFrom, customTo]);
 
   // Show the date controls + tab bar IMMEDIATELY. Don't block the page on
   // the report fetch. Each tab body shows a small loading hint until data
@@ -270,12 +266,16 @@ export default function ReportsPage() {
                 />
                 <button
                   type="button"
-                  disabled={!customFrom || !customTo || (customFrom === appliedFrom && customTo === appliedTo)}
+                  disabled={!customFrom || !customTo}
                   onClick={() => {
-                    // Only refetch when the operator explicitly applies — keystrokes
-                    // in the date pickers shouldn't trigger anything.
+                    // Explicit trigger — sets the applied range, which fires the
+                    // fetch. Always enabled once both dates are chosen so the
+                    // operator can re-run / correct a range at any time.
                     setAppliedFrom(customFrom);
                     setAppliedTo(customTo);
+                    // If the range is unchanged from last apply, appliedFrom/To
+                    // won't change and load() won't re-run — force it.
+                    if (customFrom === appliedFrom && customTo === appliedTo) void load();
                   }}
                   style={{
                     padding: "7px 14px", fontSize: 13, fontWeight: 600, color: "#fff",

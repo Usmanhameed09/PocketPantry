@@ -918,8 +918,36 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   if (ranked.length === 0 || (usedFallback && ranked[0].score < 60)) {
     return { error: `No product matched "${name}"` };
   }
-  const product = ranked[0].item;
-  const alsoMatched = ranked.slice(1, 4).filter((r) => r.score >= 72).map((r) => r.item.name as string);
+
+  // Among CLOSE name matches, prefer the one that ACTUALLY HAS SALES. The bulk
+  // UPC import left near-duplicate catalog rows — e.g. "Takis Snack Takis Pix
+  // Fuego" (0 sales) sitting next to "Takis Fuego Pix" (really selling). For an
+  // ambiguous query ("Takis Pix") the name score ties, so pick the record the
+  // sales are recorded under, not the empty duplicate.
+  let product = ranked[0].item;
+  const topScore = ranked[0].score;
+  const contenders = ranked.filter((r) => r.score >= topScore - 12).slice(0, 8);
+  if (contenders.length > 1) {
+    const since60 = dateNDaysAgoInOperatorTz(60);
+    const cids = contenders.map((c) => c.item.id as string);
+    const { data: cSales } = await supabase
+      .from("daily_sales").select("product_id, units_sold")
+      .in("product_id", cids).gte("sale_date", since60).range(0, 9999);
+    const unitsById = new Map<string, number>();
+    for (const r of cSales || []) {
+      const k = r.product_id as string;
+      unitsById.set(k, (unitsById.get(k) || 0) + ((r.units_sold as number) || 0));
+    }
+    const best = contenders
+      .map((c) => ({ item: c.item, units: unitsById.get(c.item.id as string) || 0 }))
+      .sort((a, b) => b.units - a.units)[0];
+    if (best && best.units > 0) product = best.item; // only override for a real seller
+  }
+
+  const alsoMatched = ranked
+    .filter((r) => r.item.id !== product.id && r.score >= 72)
+    .slice(0, 3)
+    .map((r) => r.item.name as string);
   const pid = product.id as string;
 
   // 30-day sales + machine list

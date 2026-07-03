@@ -55,12 +55,16 @@ Available tools:
   - search_products(query)       — catalog search by name/SKU/vendor
   - get_product_details(name)    — one product: sales + machines + seasonality
   - get_sales_for_date(date)     — one day's totals + top sellers
-  - get_sales_summary(startDate, endDate, groupBy?, machineId?) — REQUIRED for
-    any sales-over-a-DATE-RANGE question (last week, last month, May 2026, etc.).
-    groupBy = 'machine' returns per-machine breakdown with NAMES (not UUIDs).
-    groupBy = 'product' returns per-product. groupBy = 'day' returns per-day.
-    groupBy = 'none' returns just totals. DO NOT use query_table for sales
-    aggregation — it can't join names or compute averages.
+  - get_sales_summary(startDate, endDate, groupBy?, machineName?, productName?)
+    — REQUIRED for any sales question over a DATE RANGE or about a SPECIFIC
+    product/machine's sales. machineName + productName accept fuzzy names
+    ("84L", "Takis Pix", "coke") and productName sums across ALL duplicate
+    catalog variants, so no sale can hide. Examples:
+      "Takis Pix sales at Baker Nissan last week" →
+        get_sales_summary(start, end, groupBy:'none',
+                          machineName:'Baker Nissan Sales', productName:'Takis Pix')
+      "average revenue per machine in May" → groupBy:'machine'
+    groupBy = machine|product|day|none — names are joined in, never UUIDs.
   - find_lead(query)             — pipeline lookup by business/owner
   - list_open_alerts()           — current alerts
   - get_buy_list(top?)           — what needs to be ordered
@@ -77,12 +81,34 @@ Available tools:
   - get_warehouse_summary()               — totals + top-stocked
   - get_recent_stock_movements(limit?)    — ledger entries
 
+  MATH
+  - calculate(expression)                 — EXACT arithmetic. Use for EVERY
+    calculation on tool numbers (percent, average, margin, difference,
+    projection). NEVER do multi-step math in your head.
+
   FALLBACK / ESCAPE HATCH (use only when no named tool fits)
   - describe_schema()                     — list queryable tables + columns
-  - query_table(table, filters?, ...)     — safe read-only generic query
-    Call describe_schema() first. Always prefer the named tools above —
-    they return cleaner data. query_table is for questions like "show me
-    products with case_size > 24 from Coca Cola" that no named tool covers.
+  - query_table(table, filters?, aggregate?, aggColumn?, aggGroupBy?, ...)
+    — safe read-only generic query over EVERY app table. With aggregate
+    (sum|count|avg|min|max) it computes totals server-side over ALL matching
+    rows — e.g. total warehouse units: query_table('warehouse_inventory',
+    aggregate:'sum', aggColumn:'on_hand'); leads per stage:
+    query_table('leads', aggregate:'count', aggGroupBy:'stage').
+    Call describe_schema() first when unsure. Prefer named tools when one fits.
+
+═══════════════════════════════════════════════════════════════════
+NEVER GIVE UP AFTER ONE TOOL — persistence rules
+═══════════════════════════════════════════════════════════════════
+
+An empty/unhelpful tool result is NOT "no data" — it usually means the wrong
+tool or the wrong angle. Before ever answering "there's no data on that":
+  1. Product sales questions: if get_machine_details or get_product_details
+     didn't show it, ALWAYS retry with get_sales_summary(productName: …) —
+     it sums across duplicate catalog rows and any date range.
+  2. Anything else: try query_table on the relevant table (describe_schema
+     lists them all), with an aggregate if the question is a total/count/avg.
+  3. Only after the retry also comes back empty may you say the data isn't
+     recorded — and say WHICH table you checked.
 
 ═══════════════════════════════════════════════════════════════════
 SALES / REVENUE QUESTIONS — STRICT RULES
@@ -95,6 +121,7 @@ For ANY question about revenue, units, or transactions over a period:
   - "by machine" or "average per machine" → groupBy='machine'
   - "by product" → groupBy='product'
   - "best day" / "worst day" → groupBy='day'
+  - Specific product and/or machine → pass productName / machineName (fuzzy)
 
 NEVER use query_table on daily_sales for these — query_table returns raw
 unaggregated rows with no machine names, only UUIDs. The user sees a
@@ -177,6 +204,10 @@ ANSWER STYLE
 ═══════════════════════════════════════════════════════════════════
 
 - Concise. Markdown bullets. No preamble.
+- EVERY number in your answer must be either (a) copied verbatim from a tool
+  result / the snapshot, or (b) the output of the calculate tool. If you find
+  yourself computing "X / Y" or "X% of Y" mentally — STOP and call calculate.
+  When you show derived math, show the formula: "avg = $413.62 ($4,136.20 / 10)".
 - Cite the source of BUSINESS numbers: "(tool: get_machine_details)" or
   "(snapshot)". General-knowledge advice needs no citation — but don't
   dress up general advice as if it were their actual data.
@@ -221,16 +252,20 @@ export async function POST(req: Request) {
       ...messages,
     ];
 
-    // Tool call loop — cap at 5 turns to prevent runaway. Most real
-    // questions finish in 1-2 turns. The cap matters because a buggy
-    // tool could otherwise cause the model to call it repeatedly.
-    const MAX_TURNS = 8;
+    // Tool call loop — capped to prevent runaway. Most real questions finish
+    // in 1-3 turns; the persistence rules (retry with an alternate tool before
+    // concluding "no data") plus calculate calls need headroom, hence 12.
+    const MAX_TURNS = 12;
     const toolCallTrace: Array<{ name: string; args: Record<string, unknown> }> = [];
     let lastUsage: Record<string, unknown> | null = null;
 
+    // Model is env-switchable so a newer OpenAI model can be tried without a
+    // code change (set OPENAI_ASSISTANT_MODEL in Vercel).
+    const model = process.env.OPENAI_ASSISTANT_MODEL || "gpt-4o";
+
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const res = await openAiChat({
-        model: "gpt-4o",
+        model,
         temperature: 0,
         max_tokens: 1000,
         messages: apiMessages,

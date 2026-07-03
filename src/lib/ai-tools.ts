@@ -141,6 +141,19 @@ export const TOOL_DEFINITIONS = [
             type: "string",
             description: "Optional: scope to one machine (UUID). Omit for fleet-wide.",
           },
+          machineName: {
+            type: "string",
+            description:
+              "Optional: scope to one machine by (fuzzy) NAME — '84L', 'Baker Nissan Sales', 'raco'. " +
+              "Prefer this over machineId when the operator gives a name.",
+          },
+          productName: {
+            type: "string",
+            description:
+              "Optional: scope to one product by (fuzzy) NAME — 'Takis Pix', 'coke'. Sales are summed " +
+              "ACROSS all catalog variants matching the name, so duplicate catalog rows can't hide sales. " +
+              "USE THIS for any 'sales of <product>' question (optionally combined with machineName).",
+          },
           limit: {
             type: "integer",
             description: "Max breakdown rows (sorted by revenue DESC). Default 20.",
@@ -447,8 +460,12 @@ export const TOOL_DEFINITIONS = [
         "Generic safe read-only query against an allowlisted table. Use this " +
         "as a FALLBACK when none of the named tools above fit the question. " +
         "Filters use PostgREST operators: eq, neq, gt, gte, lt, lte, ilike. " +
-        "ALWAYS prefer the named tools when one fits — they return cleaner " +
-        "data. Call describe_schema first if you're not sure what's available.",
+        "Supports AGGREGATION: pass aggregate (sum|count|avg|min|max) + aggColumn " +
+        "(and optional aggGroupBy) to compute totals/averages server-side over ALL " +
+        "matching rows (up to 10k) — e.g. total warehouse units, count of leads per " +
+        "stage, avg unit_cost per vendor. IDs in aggGroupBy results are resolved to " +
+        "names automatically. ALWAYS prefer the named tools when one fits. " +
+        "Call describe_schema first if you're not sure what's available.",
       parameters: {
         type: "object",
         properties: {
@@ -486,8 +503,42 @@ export const TOOL_DEFINITIONS = [
             description: "Max rows. Capped at 50.",
             default: 25,
           },
+          aggregate: {
+            type: "string",
+            enum: ["sum", "count", "avg", "min", "max"],
+            description:
+              "Compute an aggregate over ALL matching rows instead of returning rows. " +
+              "count needs no aggColumn; the others do.",
+          },
+          aggColumn: {
+            type: "string",
+            description: "Numeric column to aggregate (required for sum/avg/min/max).",
+          },
+          aggGroupBy: {
+            type: "string",
+            description:
+              "Optional column to group the aggregate by (e.g. 'stage', 'vendor', 'machine_id'). " +
+              "*_id columns are resolved to names in the result.",
+          },
         },
         required: ["table"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "calculate",
+      description:
+        "Evaluate an arithmetic expression EXACTLY (e.g. '4136.20 / 10 * 22', '(184.5 + 36.2) * 0.83'). " +
+        "ALWAYS use this for any math on tool-returned numbers — percentages, averages, margins, " +
+        "projections — instead of computing in your head. Supports + - * / % and parentheses.",
+      parameters: {
+        type: "object",
+        properties: {
+          expression: { type: "string", description: "The arithmetic expression to evaluate." },
+        },
+        required: ["expression"],
       },
     },
   },
@@ -517,6 +568,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           endDate: String(args.endDate || ""),
           groupBy: ((args.groupBy as string) || "none") as "machine" | "product" | "day" | "none",
           machineId: args.machineId ? String(args.machineId) : undefined,
+          machineName: args.machineName ? String(args.machineName) : undefined,
+          productName: args.productName ? String(args.productName) : undefined,
           limit: Number(args.limit) || 20,
         });
       case "find_lead":
@@ -604,7 +657,12 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           orderBy: args.orderBy ? String(args.orderBy) : undefined,
           orderDesc: Boolean(args.orderDesc),
           limit: Number(args.limit) || 25,
+          aggregate: args.aggregate ? String(args.aggregate) as "sum" | "count" | "avg" | "min" | "max" : undefined,
+          aggColumn: args.aggColumn ? String(args.aggColumn) : undefined,
+          aggGroupBy: args.aggGroupBy ? String(args.aggGroupBy) : undefined,
         });
+      case "calculate":
+        return calculateExpression(String(args.expression || ""));
       default:
         return { error: `Unknown tool: ${name}` };
     }
@@ -1106,6 +1164,8 @@ async function getSalesSummary(args: {
   endDate: string;
   groupBy: "machine" | "product" | "day" | "none";
   machineId?: string;
+  machineName?: string;
+  productName?: string;
   limit: number;
 }): Promise<ToolResult> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(args.startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(args.endDate)) {
@@ -1115,6 +1175,50 @@ async function getSalesSummary(args: {
     return { error: "startDate must be <= endDate" };
   }
   const supabase = createServerClient();
+
+  // Fuzzy machine-name filter — "84L", "baker nissan sales", "raco" all work.
+  let machineId = args.machineId;
+  let resolvedMachine: string | undefined;
+  if (!machineId && args.machineName) {
+    const { data: allMachines } = await supabase.from("machines").select("id, name");
+    const ranked = fuzzyRank(args.machineName, allMachines || [], (m) => m.name as string);
+    if (ranked.length === 0) {
+      const names = (allMachines || []).map((m) => m.name).join(", ");
+      return { error: `No machine matched "${args.machineName}". Machines are: ${names}` };
+    }
+    machineId = ranked[0].item.id as string;
+    resolvedMachine = ranked[0].item.name as string;
+  }
+
+  // Fuzzy product-name filter. CRITICAL: sums across ALL catalog variants that
+  // match the name (the bulk import left duplicate rows — e.g. two "Takis Pix"
+  // records — and sales may sit on any of them). No duplicate can hide sales.
+  let productIds: string[] | undefined;
+  let resolvedProducts: string[] | undefined;
+  if (args.productName) {
+    const tokens = args.productName.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+    const probe = tokens.sort((a, b) => b.length - a.length)[0] || args.productName;
+    const { data: cands } = await supabase
+      .from("products").select("id, name").ilike("name", `%${probe}%`).limit(300);
+    let matched = (cands || []).filter((p) => nameMatchScore(args.productName!, p.name as string) >= 40);
+    if (matched.length === 0) {
+      // Typo fallback — fuzzy over recently-sold products.
+      const since = dateNDaysAgoInOperatorTz(90);
+      const { data: soldRows } = await supabase
+        .from("daily_sales").select("product_id").gte("sale_date", since).range(0, 9999);
+      const soldIds = [...new Set((soldRows || []).map((r) => r.product_id as string))];
+      if (soldIds.length) {
+        const { data: real } = await supabase.from("products").select("id, name").in("id", soldIds);
+        matched = (real || []).filter((p) => nameMatchScore(args.productName!, p.name as string) >= 60);
+      }
+    }
+    if (matched.length === 0) {
+      return { error: `No product matched "${args.productName}".` };
+    }
+    productIds = matched.slice(0, 50).map((p) => p.id as string);
+    resolvedProducts = matched.slice(0, 50).map((p) => p.name as string);
+  }
+
   // Paginate through daily_sales — Supabase caps at 1000 rows per page.
   // For a busy month with many machines/products this can run into 5-10k rows.
   type SalesRow = { sale_date: string; machine_id: string; product_id: string; units_sold: number; revenue: number };
@@ -1127,7 +1231,8 @@ async function getSalesSummary(args: {
       .gte("sale_date", args.startDate)
       .lte("sale_date", args.endDate)
       .range(from, from + PAGE - 1);
-    if (args.machineId) q = q.eq("machine_id", args.machineId);
+    if (machineId) q = q.eq("machine_id", machineId);
+    if (productIds) q = q.in("product_id", productIds);
     const { data } = await q;
     if (!data || data.length === 0) break;
     rows.push(...(data as SalesRow[]));
@@ -1142,6 +1247,8 @@ async function getSalesSummary(args: {
       groupBy: args.groupBy,
       breakdown: [],
       message: "No sales recorded in that date range.",
+      ...(resolvedMachine ? { machine: resolvedMachine } : {}),
+      ...(resolvedProducts ? { matchedProducts: resolvedProducts } : {}),
     };
   }
 
@@ -1163,7 +1270,11 @@ async function getSalesSummary(args: {
   };
 
   if (args.groupBy === "none") {
-    return { startDate: args.startDate, endDate: args.endDate, totals, groupBy: "none", breakdown: [] };
+    return {
+      startDate: args.startDate, endDate: args.endDate, totals, groupBy: "none", breakdown: [],
+      ...(resolvedMachine ? { machine: resolvedMachine } : {}),
+      ...(resolvedProducts ? { matchedProducts: resolvedProducts } : {}),
+    };
   }
 
   // Build the grouped view
@@ -1225,6 +1336,8 @@ async function getSalesSummary(args: {
     breakdown,
     breakdownCount: buckets.size,
     breakdownTruncated: buckets.size > cap ? buckets.size - cap : 0,
+    ...(resolvedMachine ? { machine: resolvedMachine } : {}),
+    ...(resolvedProducts ? { matchedProducts: resolvedProducts } : {}),
   };
 }
 
@@ -1864,6 +1977,30 @@ const QUERYABLE_SCHEMA: Record<string, { columns: string[]; defaultOrderBy?: str
 
 const ALLOWED_OPS = new Set(["eq", "neq", "gt", "gte", "lt", "lte", "ilike"]);
 
+/**
+ * Exact arithmetic for the model. LLMs make mental-math mistakes (the main
+ * source of "wrong number" answers on percentages/averages), so every
+ * calculation goes through this instead. Strictly sanitized: digits,
+ * + - * / % ( ) . and whitespace only — nothing else can execute.
+ */
+function calculateExpression(expression: string): ToolResult {
+  const expr = expression.replace(/,/g, "").trim();
+  if (!expr) return { error: "expression is required" };
+  if (expr.length > 200) return { error: "expression too long" };
+  if (!/^[\d+\-*/%().\s]+$/.test(expr)) {
+    return { error: "Only numbers and + - * / % ( ) are allowed." };
+  }
+  try {
+    const value = new Function(`"use strict"; return (${expr});`)() as number;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return { error: "Expression did not evaluate to a finite number (division by zero?)" };
+    }
+    return { expression: expr, value, rounded2: Math.round(value * 100) / 100 };
+  } catch {
+    return { error: "Invalid arithmetic expression." };
+  }
+}
+
 function describeSchema(): ToolResult {
   return {
     tables: Object.entries(QUERYABLE_SCHEMA).map(([name, meta]) => ({
@@ -1886,6 +2023,9 @@ async function queryTable(args: {
   orderBy?: string;
   orderDesc?: boolean;
   limit: number;
+  aggregate?: "sum" | "count" | "avg" | "min" | "max";
+  aggColumn?: string;
+  aggGroupBy?: string;
 }): Promise<ToolResult> {
   const schema = QUERYABLE_SCHEMA[args.table];
   if (!schema) {
@@ -1894,6 +2034,89 @@ async function queryTable(args: {
     };
   }
 
+  const supabase = createServerClient();
+
+  // Shared filter validation (both paths).
+  for (const f of args.filters || []) {
+    if (!ALLOWED_OPS.has(f.op)) {
+      return { error: `Op "${f.op}" is not allowed. Use one of: ${[...ALLOWED_OPS].join(", ")}` };
+    }
+    if (!schema.columns.includes(f.column)) {
+      return { error: `Column "${f.column}" not allowed on ${args.table}.` };
+    }
+  }
+
+  // ── AGGREGATION PATH — compute sum/count/avg/min/max over ALL matching
+  // rows (paginated to 10k) so the model never estimates a total itself. ──
+  if (args.aggregate) {
+    const func = args.aggregate;
+    if (func !== "count" && (!args.aggColumn || !schema.columns.includes(args.aggColumn))) {
+      return { error: `aggregate "${func}" needs a valid aggColumn. Allowed: ${schema.columns.join(", ")}` };
+    }
+    if (args.aggGroupBy && !schema.columns.includes(args.aggGroupBy)) {
+      return { error: `aggGroupBy "${args.aggGroupBy}" not allowed on ${args.table}.` };
+    }
+    const selectCols = [args.aggColumn, args.aggGroupBy].filter(Boolean).join(", ") || schema.columns[0];
+    type Row = Record<string, unknown>;
+    const all: Row[] = [];
+    const PAGE = 1000;
+    for (let from = 0; from < 10000; from += PAGE) {
+      let qa = supabase.from(args.table).select(selectCols).range(from, from + PAGE - 1);
+      for (const f of args.filters || []) {
+        type QA = typeof qa & Record<string, (col: string, val: unknown) => typeof qa>;
+        qa = (qa as QA)[f.op](f.column, f.value as never);
+      }
+      const { data, error } = await qa;
+      if (error) return { error: error.message };
+      if (!data || data.length === 0) break;
+      all.push(...(data as unknown as Row[]));
+      if (data.length < PAGE) break;
+    }
+
+    const num = (r: Row) => Number(r[args.aggColumn as string]) || 0;
+    const compute = (rows: Row[]): number => {
+      if (func === "count") return rows.length;
+      if (rows.length === 0) return 0;
+      if (func === "sum") return Math.round(rows.reduce((s, r) => s + num(r), 0) * 100) / 100;
+      if (func === "avg") return Math.round((rows.reduce((s, r) => s + num(r), 0) / rows.length) * 100) / 100;
+      if (func === "min") return Math.min(...rows.map(num));
+      return Math.max(...rows.map(num));
+    };
+
+    if (!args.aggGroupBy) {
+      return { table: args.table, aggregate: func, column: args.aggColumn || null, value: compute(all), rowsScanned: all.length };
+    }
+
+    const groups = new Map<string, Row[]>();
+    for (const r of all) {
+      const k = String(r[args.aggGroupBy] ?? "(null)");
+      const arr = groups.get(k) || [];
+      arr.push(r);
+      groups.set(k, arr);
+    }
+    // Resolve *_id group keys to human names.
+    const nameMap = new Map<string, string>();
+    const keys = Array.from(groups.keys());
+    const lookup: Record<string, { table: string; nameCol: string }> = {
+      machine_id: { table: "machines", nameCol: "name" },
+      product_id: { table: "products", nameCol: "name" },
+      lead_id: { table: "leads", nameCol: "business" },
+    };
+    const lk = lookup[args.aggGroupBy];
+    if (lk && keys.length > 0 && keys.length <= 500) {
+      const { data } = await supabase.from(lk.table).select(`id, ${lk.nameCol}`).in("id", keys.filter((k) => k !== "(null)"));
+      for (const row of (data || []) as unknown as Array<Record<string, unknown>>) {
+        nameMap.set(String(row.id), String(row[lk.nameCol] || row.id));
+      }
+    }
+    const breakdown = keys
+      .map((k) => ({ key: k, name: nameMap.get(k) || k, value: compute(groups.get(k)!), rowCount: groups.get(k)!.length }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, Math.min(Math.max(args.limit, 1), 100));
+    return { table: args.table, aggregate: func, column: args.aggColumn || null, groupBy: args.aggGroupBy, breakdown, rowsScanned: all.length };
+  }
+
+  // ── ROW-FETCH PATH (original behavior) ──
   // Column whitelist enforcement. If the AI requests columns, every one
   // must be in the schema. If it doesn't, use all of them. We never SELECT *
   // because some columns (e.g. raw_payload on outreach_log) can be huge.
@@ -1907,7 +2130,6 @@ async function queryTable(args: {
     cols = requested.join(", ");
   }
 
-  const supabase = createServerClient();
   let q = supabase.from(args.table).select(cols);
 
   // Filter validation — only allowlisted ops, only allowlisted columns.

@@ -919,14 +919,24 @@ async function getProductDetails(name: string): Promise<ToolResult> {
     return { error: `No product matched "${name}"` };
   }
 
-  // Among CLOSE name matches, prefer the one that ACTUALLY HAS SALES. The bulk
-  // UPC import left near-duplicate catalog rows — e.g. "Takis Snack Takis Pix
-  // Fuego" (0 sales) sitting next to "Takis Fuego Pix" (really selling). For an
-  // ambiguous query ("Takis Pix") the name score ties, so pick the record the
-  // sales are recorded under, not the empty duplicate.
+  // Among matches that share ALL the query's key words, prefer the one that
+  // ACTUALLY HAS SALES. The bulk UPC import left near-duplicate catalog rows —
+  // e.g. "Takis Snack Takis Pix Fuego" (0 sales, but literally contains "Takis
+  // Pix") next to "Takis Fuego Pix" (words reordered, but really selling). Word
+  // order shouldn't decide it — sales should. So gather every candidate whose
+  // name contains all query tokens and pick the real seller.
   let product = ranked[0].item;
   const topScore = ranked[0].score;
-  const contenders = ranked.filter((r) => r.score >= topScore - 12).slice(0, 8);
+  const qTokens = name.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+  const containsAllTokens = (nm: string) => {
+    const low = nm.toLowerCase();
+    return qTokens.length > 0 && qTokens.every((t) => low.includes(t));
+  };
+  let contenders = ranked.filter((r) => containsAllTokens(r.item.name as string)).slice(0, 12);
+  if (contenders.length <= 1) {
+    // No shared-token cluster — fall back to a close-score window.
+    contenders = ranked.filter((r) => r.score >= topScore - 12).slice(0, 8);
+  }
   if (contenders.length > 1) {
     const since60 = dateNDaysAgoInOperatorTz(60);
     const cids = contenders.map((c) => c.item.id as string);

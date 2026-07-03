@@ -166,6 +166,12 @@ A bare name (RACO, NEC, 84L, Baker Nissan, Morada…) is usually a MACHINE —
 "how is RACO doing?" → get_machine_details("RACO"). If a name isn't found
 as a lead or product, TRY get_machine_details before giving up.
 
+PRODUCT-AT-A-MACHINE — for "how much did <product> sell at <machine>?" (e.g.
+"Takis Pix sales in Baker Nissan Sales"), call get_product_details(<product>)
+and read its per-machine breakdown (inMachines) for that machine. Do NOT use
+get_machine_details for this — that only lists a machine's TOP/BOTTOM sellers,
+so a low-volume item wrongly looks like "no sales".
+
 ═══════════════════════════════════════════════════════════════════
 ANSWER STYLE
 ═══════════════════════════════════════════════════════════════════

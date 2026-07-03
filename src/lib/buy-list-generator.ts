@@ -353,6 +353,27 @@ export async function transitionPO(
   const { error } = await supabase.from("purchase_orders").update(update).eq("id", poId);
   if (error) throw new Error(`transitionPO: ${error.message}`);
 
+  // Per operator request: APPROVING a PO auto-replenishes the warehouse — it
+  // receives every line's outstanding quantity (ordered − already received)
+  // straight into warehouse stock, so the operator doesn't have to run a
+  // separate Receive step. The Receive screen stays editable afterward to
+  // correct short/over deliveries. Only fires on the first move to Approved.
+  if (newStatus === "Approved" && oldPo?.status !== "Approved") {
+    const { data: lines } = await supabase
+      .from("po_lines")
+      .select("id, qty_ordered, qty_received")
+      .eq("po_id", poId);
+    const receipts = (lines || [])
+      .map((l) => ({
+        lineId: l.id as string,
+        qtyReceivedDelta: ((l.qty_ordered as number) || 0) - ((l.qty_received as number) || 0),
+      }))
+      .filter((r) => r.qtyReceivedDelta > 0);
+    if (receipts.length > 0) {
+      await receivePOLines(poId, receipts, actor);
+    }
+  }
+
   // Audit the status transition so the owner can answer "who approved
   // PO 6b9a72cc, and when?".
   const { recordAuditEvent } = await import("@/lib/audit-log");

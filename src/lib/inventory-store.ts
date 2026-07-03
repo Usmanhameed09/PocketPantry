@@ -203,6 +203,7 @@ export interface InventoryProduct {
   name: string;
   sku: string;
   category: string;
+  cost: number;         // unit cost ($) — for warehouse value
   onHand: number;       // warehouse qty
   inMachines: number;   // sum of estimated_remaining across machines
   dailySales: number;   // avg daily sales rate
@@ -227,7 +228,7 @@ export async function getInventoryOverview(): Promise<InventoryProduct[]> {
   // Fetch products
   const { data: products, error: pErr } = await supabase
     .from("products")
-    .select("id, name, sku, category, lead_time_days")
+    .select("id, name, sku, category, lead_time_days, unit_cost")
     .eq("company_id", companyId)
     .order("name");
 
@@ -314,6 +315,7 @@ export async function getInventoryOverview(): Promise<InventoryProduct[]> {
       name: p.name,
       sku: p.sku,
       category: p.category,
+      cost: (p as { unit_cost?: number }).unit_cost || 0,
       onHand,
       inMachines,
       dailySales: Math.round(dailySales * 100) / 100,

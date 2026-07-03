@@ -6,7 +6,7 @@ import InventoryTabs from "../InventoryTabs";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import {
   Loader2, ScanLine, Camera, CameraOff, Plus, CheckCircle2, AlertCircle,
-  Save, X, Package, History, Flashlight, FlashlightOff,
+  Save, X, Package, History, Flashlight, FlashlightOff, Search,
 } from "lucide-react";
 import {
   PAGE_BG, CARD, Modal, Field, Select, BtnPrimary, BtnSecondary, Badge, pageContainer,
@@ -42,6 +42,12 @@ export default function ScanPage() {
     unitCost: "", caseSize: "", defaultVendPrice: "",
   });
   const [registering, setRegistering] = useState(false);
+  // "Link this UPC to an existing product" picker inside the register modal —
+  // lets the operator attach a scanned barcode to a product already in the
+  // catalog (so future scans recognize it) instead of creating a duplicate.
+  const [linkList, setLinkList] = useState<Array<{ id: string; name: string; sku: string; case_size?: number }>>([]);
+  const [linkQuery, setLinkQuery] = useState("");
+  const [showLinkPicker, setShowLinkPicker] = useState(false);
 
   // Existing product → confirm-add modal
   const [confirmProduct, setConfirmProduct] = useState<Product | null>(null);
@@ -391,6 +397,47 @@ export default function ScanPage() {
   }
 
   const [registerError, setRegisterError] = useState<string | null>(null);
+
+  // Lazy-load the full catalog the first time the operator opens the link
+  // picker, so they can search and attach the UPC to any existing product.
+  async function ensureLinkList() {
+    if (linkList.length > 0) return;
+    try {
+      const res = await fetch("/api/inventory/products?includeAll=1", { cache: "no-store" });
+      const data = await res.json();
+      if (data.success) setLinkList(data.data || []);
+    } catch { /* ignore — picker just stays empty */ }
+  }
+
+  // Attach the scanned barcode to an existing product, then add 1 case.
+  async function linkToExisting(p: { id: string; name: string; sku: string; case_size?: number }) {
+    if (!registerFor) return;
+    setRegistering(true);
+    setRegisterError(null);
+    try {
+      const attachRes = await fetch("/api/inventory/barcode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ barcode: registerFor, productId: p.id }),
+      });
+      const attachData = await attachRes.json();
+      if (!attachData.success) {
+        setRegisterError(attachData.error || "Failed to link barcode");
+        return;
+      }
+      const product: Product = {
+        id: p.id, name: p.name, sku: p.sku, category: "Snacks", vendor: null,
+        unit_cost: 0, default_vend_price: null, case_size: p.case_size || 1,
+        barcode: registerFor, status: "Active",
+      };
+      setRegisterFor(null);
+      setShowLinkPicker(false);
+      setLinkQuery("");
+      await addStockForProduct(product, product.case_size);
+    } finally {
+      setRegistering(false);
+    }
+  }
 
   async function registerNewProduct() {
     setRegisterError(null);
@@ -853,9 +900,80 @@ export default function ScanPage() {
           ) : (
             <p style={{ fontSize: 13, color: "#64748b", marginTop: 0 }}>
               Barcode <code style={{ background: "#f1f5f9", padding: "2px 8px", borderRadius: 4 }}>{registerFor}</code> isn't in your catalog or the UPC database.
-              Fill in the details — future scans will be instant.
+              Register it as a new product below — OR link it to a product you already have.
             </p>
           )}
+
+          {/* Link-to-existing picker: attach this UPC to a product already in
+              the catalog so future scans recognize it (no duplicate created). */}
+          <div style={{ marginBottom: 14 }}>
+            {!showLinkPicker ? (
+              <button
+                onClick={() => { setShowLinkPicker(true); void ensureLinkList(); }}
+                style={{
+                  fontSize: 13, fontWeight: 600, color: "#2563eb", background: "#eff6ff",
+                  border: "1px solid #bfdbfe", borderRadius: 8, padding: "8px 14px", cursor: "pointer",
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                }}
+              >
+                <Search size={14} /> Link this UPC to an existing product
+              </button>
+            ) : (
+              <div style={{ border: "1px solid #bfdbfe", borderRadius: 10, padding: 12, background: "#f8fafc" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#1e3a8a" }}>Attach UPC to an existing product</span>
+                  <button onClick={() => { setShowLinkPicker(false); setLinkQuery(""); }}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "#64748b", fontSize: 12 }}>
+                    Cancel
+                  </button>
+                </div>
+                <input
+                  autoFocus
+                  placeholder={linkList.length ? "Search your products by name or SKU…" : "Loading catalog…"}
+                  value={linkQuery}
+                  onChange={(e) => setLinkQuery(e.target.value)}
+                  style={{
+                    width: "100%", padding: "8px 12px", fontSize: 13, borderRadius: 8,
+                    border: "1px solid #cbd5e1", outline: "none", marginBottom: 8, boxSizing: "border-box",
+                  }}
+                />
+                {linkQuery.trim().length >= 2 && (
+                  <div style={{ maxHeight: 200, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+                    {linkList
+                      .filter((p) => {
+                        const q = linkQuery.toLowerCase();
+                        return p.name.toLowerCase().includes(q) || (p.sku || "").toLowerCase().includes(q);
+                      })
+                      .slice(0, 25)
+                      .map((p) => (
+                        <button
+                          key={p.id}
+                          disabled={registering}
+                          onClick={() => linkToExisting(p)}
+                          style={{
+                            textAlign: "left", padding: "8px 10px", borderRadius: 6, cursor: "pointer",
+                            border: "1px solid #e2e8f0", background: "#fff", fontSize: 13,
+                          }}
+                        >
+                          <div style={{ fontWeight: 600, color: "#0f172a" }}>{p.name}</div>
+                          <div style={{ fontSize: 11, color: "#94a3b8" }}>{p.sku}</div>
+                        </button>
+                      ))}
+                    {linkList.filter((p) => {
+                      const q = linkQuery.toLowerCase();
+                      return p.name.toLowerCase().includes(q) || (p.sku || "").toLowerCase().includes(q);
+                    }).length === 0 && (
+                      <div style={{ fontSize: 12, color: "#94a3b8", padding: "6px 2px" }}>No products match.</div>
+                    )}
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6 }}>
+                  Picking a product attaches this barcode to it and adds 1 case to the warehouse.
+                </div>
+              </div>
+            )}
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
             <div style={{ gridColumn: isMobile ? "1" : "1 / -1" }}>
               <Field label="Product name" type="text" value={draft.name}

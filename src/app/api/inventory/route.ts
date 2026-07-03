@@ -87,6 +87,7 @@ async function buildOverview(includeEmpty: boolean, page = 1, pageSize = 50): Pr
     name: p.name,
     sku: p.sku,
     category: p.category,
+    cost: p.cost,
     onHand: p.onHand,
     inMachines: p.inMachines,
     dailySales: p.dailySales,

@@ -41,6 +41,7 @@ interface Product {
   name: string;
   sku: string;
   category: string;
+  cost: number;
   onHand: number;
   inMachines: number;
   dailySales: number;
@@ -435,12 +436,12 @@ export default function InventoryPage() {
             <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
               <div style={{
                 background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
-                boxShadow: "0 2px 6px rgba(0,0,0,0.06)", overflow: "hidden", minWidth: 700,
+                boxShadow: "0 2px 6px rgba(0,0,0,0.06)", overflow: "hidden", minWidth: 880,
               }}>
                 {/* Table Header */}
                 <div style={{
                   display: "grid",
-                  gridTemplateColumns: "2fr 90px 100px 100px 110px 100px 120px",
+                  gridTemplateColumns: "2fr 80px 90px 90px 90px 80px 80px 90px 110px",
                   padding: "14px 22px",
                   borderBottom: "1px solid #e5e7eb",
                   background: "#f1f5f9",
@@ -451,6 +452,8 @@ export default function InventoryPage() {
                   <TH>Daily Sales</TH>
                   <TH>Days Left</TH>
                   <TH>Lead Time</TH>
+                  <TH>Unit Cost</TH>
+                  <TH>Value</TH>
                   <TH>Restock</TH>
                 </div>
 
@@ -463,7 +466,7 @@ export default function InventoryPage() {
                       key={p.id}
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "2fr 90px 100px 100px 110px 100px 120px",
+                        gridTemplateColumns: "2fr 80px 90px 90px 90px 80px 80px 90px 110px",
                         padding: "14px 22px",
                         borderBottom: "1px solid #f1f5f9",
                         alignItems: "center",
@@ -521,6 +524,20 @@ export default function InventoryPage() {
                       <div>
                         <span style={{ fontSize: 13, color: "#64748b" }}>
                           {p.leadTimeDays === 1 ? "1 day" : `${p.leadTimeDays} days`}
+                        </span>
+                      </div>
+
+                      {/* Unit Cost */}
+                      <div>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: p.cost > 0 ? "#374151" : "#cbd5e1" }}>
+                          {p.cost > 0 ? `$${p.cost.toFixed(2)}` : "—"}
+                        </span>
+                      </div>
+
+                      {/* Warehouse Value (on-hand × unit cost) */}
+                      <div>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+                          {p.cost > 0 ? `$${(p.onHand * p.cost).toFixed(2)}` : "—"}
                         </span>
                       </div>
 

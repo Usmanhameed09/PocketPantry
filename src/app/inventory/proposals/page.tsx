@@ -82,6 +82,44 @@ export default function ProposalsPage() {
     await load();
   }
 
+  // ── Bulk actions ────────────────────────────────────────────────────
+  // Arthur asked to reject/remove items in bulk instead of one at a time.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const proposedIds = proposals.filter((p) => p.status === "Proposed").map((p) => p.id);
+  const allProposedSelected = proposedIds.length > 0 && proposedIds.every((id) => selected.has(id));
+
+  function toggleOne(id: string, on: boolean) {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+  function toggleAllProposed(on: boolean) {
+    setSelected(on ? new Set(proposedIds) : new Set());
+  }
+  async function bulkDecide(decision: "Approved" | "Rejected") {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    if (decision === "Rejected" && !confirm(`Reject ${ids.length} proposal${ids.length === 1 ? "" : "s"}?`)) return;
+    setBulkBusy(true);
+    try {
+      // Sequential to stay well within serverless limits; the list is small.
+      for (const id of ids) {
+        await fetch("/api/inventory/proposals", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, decision }),
+        });
+      }
+      setSelected(new Set());
+      await load();
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   const statusColor: Record<Proposal["status"], "blue" | "green" | "gray"> = {
     Proposed: "blue", Approved: "green", Rejected: "gray",
   };
@@ -148,9 +186,38 @@ export default function ProposalsPage() {
           </div>
         ) : (
           <div style={{ display: "grid", gap: 14 }}>
+            {/* Bulk action bar — select multiple proposals and reject/approve
+                them at once instead of clicking each one (Arthur's ask). */}
+            {proposedIds.length > 0 && (
+              <div style={{
+                ...CARD, padding: "10px 16px", display: "flex", alignItems: "center",
+                gap: 12, flexWrap: "wrap",
+              }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, color: "#475569", cursor: "pointer" }}>
+                  <input type="checkbox" checked={allProposedSelected} onChange={(e) => toggleAllProposed(e.target.checked)} />
+                  Select all ({proposedIds.length})
+                </label>
+                <span style={{ fontSize: 13, color: "#64748b" }}>{selected.size} selected</span>
+                <div style={{ flex: 1 }} />
+                <BtnSecondary onClick={() => bulkDecide("Rejected")} disabled={selected.size === 0 || bulkBusy}>
+                  <X size={16} /> Reject selected
+                </BtnSecondary>
+                <BtnPrimary onClick={() => bulkDecide("Approved")} disabled={selected.size === 0 || bulkBusy}>
+                  <Check size={16} /> Approve selected
+                </BtnPrimary>
+              </div>
+            )}
             {proposals.map((p) => (
               <div key={p.id} style={{ ...CARD, padding: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                  {p.status === "Proposed" && (
+                    <input
+                      type="checkbox"
+                      checked={selected.has(p.id)}
+                      onChange={(e) => toggleOne(p.id, e.target.checked)}
+                      style={{ marginTop: 4, flexShrink: 0 }}
+                    />
+                  )}
                   <div style={{ flex: 1, minWidth: 240 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
                       <h3 style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", margin: 0 }}>{p.candidateName}</h3>

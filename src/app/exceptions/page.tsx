@@ -133,8 +133,11 @@ export default function ExceptionsPage() {
       <Header title="Exception Queue" />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <p style={{ fontSize: 13, color: "#64748b", margin: 0 }}>
-          One inbox for data-quality issues across the app. Fix each one and it clears from the list.
+        <p style={{ fontSize: 13, color: "#64748b", margin: 0, maxWidth: 720 }}>
+          One inbox for data-quality issues across the app (missing costs, unmapped SKUs, price gaps,
+          etc.). Fix each one and it clears from the list. It is <strong>not</strong> the same as the
+          Cost Fixer — Cost Fixer (now in Pricing) only proposes corrected unit <em>costs</em>; this
+          queue flags <em>all</em> kinds of data problems and links you to where to fix them.
         </p>
         <button
           onClick={() => void load()}

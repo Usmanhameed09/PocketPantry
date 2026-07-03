@@ -99,6 +99,9 @@ export default function MachinesPage() {
   const [ordersSource, setOrdersSource] = useState<"live" | "stored" | null>(null);
   const [ordersWarning, setOrdersWarning] = useState<string | null>(null);
   const [ordersSyncedAt, setOrdersSyncedAt] = useState<string | null>(null);
+  // Period the modal's revenue figure covers. Arthur's complaint: the number
+  // had no time-period label so he couldn't tell if it was a month or all-time.
+  const [modalPeriod, setModalPeriod] = useState<"all" | "thisMonth" | "30d" | "7d">("all");
 
   // Low-stock machine IDs from inventory data
   const [lowStockMachineIds, setLowStockMachineIds] = useState<Set<string>>(new Set());
@@ -290,8 +293,33 @@ export default function MachinesPage() {
     : null;
   const ordersPg = usePagination(machineOrders, 25);
   const paidMachineOrders = machineOrders.filter((order) => (order.status || "").toLowerCase() === "paid");
-  const modalRevenue = paidMachineOrders.reduce((sum, order) => sum + Number(order.amount || 0), 0);
-  const modalItemsSold = machineOrders.reduce((sum, order) => sum + Number(order.totalItems || 0), 0);
+  // Period cutoff for the modal revenue figure (client-side, from loaded orders'
+  // pay timestamps) so the number carries an honest, selectable time window.
+  const modalPeriodStart = (() => {
+    const now = new Date();
+    if (modalPeriod === "thisMonth") return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    if (modalPeriod === "30d") return now.getTime() - 30 * 86400000;
+    if (modalPeriod === "7d") return now.getTime() - 7 * 86400000;
+    return 0; // "all" = every loaded order
+  })();
+  const modalPeriodLabel =
+    modalPeriod === "thisMonth" ? "this month" :
+    modalPeriod === "30d" ? "last 30 days" :
+    modalPeriod === "7d" ? "last 7 days" :
+    "all loaded orders";
+  const paidInPeriod = paidMachineOrders.filter((order) => {
+    if (modalPeriod === "all") return true;
+    const t = order.payTime ? new Date(order.payTime).getTime() : NaN;
+    return Number.isFinite(t) && t >= modalPeriodStart;
+  });
+  const modalRevenue = paidInPeriod.reduce((sum, order) => sum + Number(order.amount || 0), 0);
+  const modalItemsSold = machineOrders
+    .filter((order) => {
+      if (modalPeriod === "all") return true;
+      const t = order.payTime ? new Date(order.payTime).getTime() : NaN;
+      return Number.isFinite(t) && t >= modalPeriodStart;
+    })
+    .reduce((sum, order) => sum + Number(order.totalItems || 0), 0);
   const latestPaidAt = paidMachineOrders
     .map((order) => order.payTime)
     .filter((value): value is string => Boolean(value))
@@ -630,13 +658,15 @@ export default function MachinesPage() {
                       </div>
                     </div>
 
-                    {/* Revenue */}
-                    <div>
+                    {/* Revenue — totalRevenue is Nayax's rolling recent-sales
+                        window, not true lifetime; label it so it isn't read as
+                        all-time. Open the machine for a period-scoped figure. */}
+                    <div title="Sum of the machine's recent sales window (not lifetime). Open the machine to pick a period.">
                       <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
                         ${m.totalRevenue.toFixed(2)}
                       </div>
                       <div style={{ fontSize: 11, color: "#94a3b8" }}>
-                        ${m.weeklyRevenue.toFixed(2)}/wk
+                        recent • ${m.weeklyRevenue.toFixed(2)}/wk
                       </div>
                     </div>
 
@@ -807,6 +837,31 @@ export default function MachinesPage() {
                 </div>
               ) : (
                 <div style={{ display: "grid", gap: 16 }}>
+                  {/* Period selector — makes the revenue figure carry an explicit,
+                      selectable time window instead of an ambiguous total. */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>Period:</span>
+                    {([
+                      ["all", "All loaded"],
+                      ["thisMonth", "This month"],
+                      ["30d", "Last 30 days"],
+                      ["7d", "Last 7 days"],
+                    ] as const).map(([key, label]) => (
+                      <button
+                        key={key}
+                        onClick={() => setModalPeriod(key)}
+                        style={{
+                          fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: 20,
+                          cursor: "pointer", transition: "all 0.15s",
+                          border: modalPeriod === key ? "1px solid #16a34a" : "1px solid #e2e8f0",
+                          background: modalPeriod === key ? "#16a34a" : "#fff",
+                          color: modalPeriod === key ? "#fff" : "#64748b",
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                   <div style={{
                     display: "grid",
                     gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, minmax(0, 1fr))",
@@ -816,19 +871,19 @@ export default function MachinesPage() {
                       label="Orders Loaded"
                       value={String(machineOrders.length)}
                       tone="blue"
-                      detail={`${paidMachineOrders.length} paid orders`}
+                      detail={`${paidInPeriod.length} paid • ${modalPeriodLabel}`}
                     />
                     <ModalStatCard
                       label="Paid Revenue"
                       value={`$${modalRevenue.toFixed(2)}`}
                       tone="green"
-                      detail="From paid machine sales"
+                      detail={`Paid sales • ${modalPeriodLabel}`}
                     />
                     <ModalStatCard
                       label="Items Sold"
                       value={String(modalItemsSold)}
                       tone="amber"
-                      detail="Units across loaded orders"
+                      detail={`Units • ${modalPeriodLabel}`}
                     />
                     <ModalStatCard
                       label="Latest Paid"

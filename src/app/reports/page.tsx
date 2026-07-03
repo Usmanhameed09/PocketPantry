@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import {
   DollarSign, TrendingUp, CreditCard, Percent, Download, Calendar,
-  Loader2,
+  Loader2, ChevronDown, Printer,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -20,6 +20,7 @@ type ReportsData = {
     totalRevenue: number; totalCost: number; netProfit: number;
     processingFees: number; avgMargin: number;
     totalUnits: number; totalTransactions: number; cardRevenue: number;
+    cashRevenue?: number;
   };
   revenueByDay: Array<{ date: string; revenue: number; units: number }>;
   topSkus: Array<{ product: string; units: number; revenue: number; cost: number; margin: number }>;
@@ -29,6 +30,7 @@ type ReportsData = {
     revenue: number; cost: number; profit: number; margin: number;
     avgSale: number; topProduct: string;
   }>;
+  allMachines?: Array<{ machineId: string; machine: string }>;
   paymentSplit: Array<{ name: string; value: number; amount: number; sales: number }> | null;
   inventoryTurns: number | null;
   inventoryNote: string | null;
@@ -53,7 +55,10 @@ export default function ReportsPage() {
   const [customTo, setCustomTo] = useState<string>("");
   const [appliedFrom, setAppliedFrom] = useState<string>("");
   const [appliedTo, setAppliedTo] = useState<string>("");
-  const [machineId, setMachineId] = useState<string>("");
+  // Multi-select: empty = all machines; otherwise a consolidated report across
+  // the chosen machines (e.g. all machines at one location).
+  const [machineIds, setMachineIds] = useState<string[]>([]);
+  const [machineMenuOpen, setMachineMenuOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
 
@@ -98,7 +103,7 @@ export default function ReportsPage() {
       } else {
         qs.set("days", String(days));
       }
-      if (machineId) qs.set("machineId", machineId);
+      if (machineIds.length) qs.set("machineId", machineIds.join(","));
       const res = await fetch(`/api/reports?${qs}`, { cache: "no-store" });
       const json = await res.json();
       if (!json.success) throw new Error(json.error || "Failed to load reports");
@@ -108,7 +113,7 @@ export default function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [preset, days, appliedFrom, appliedTo, machineId]);
+  }, [preset, days, appliedFrom, appliedTo, machineIds]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -141,6 +146,16 @@ export default function ReportsPage() {
   const topSkus = data?.topSkus ?? [];
   const revenueByMachine = data?.revenueByMachine ?? [];
   const machineReport = data?.machineReport ?? [];
+  // Full roster for the selector — falls back to machineReport before the first
+  // load returns allMachines, so the control is never empty.
+  const machineOptions = (data?.allMachines && data.allMachines.length > 0)
+    ? data.allMachines
+    : machineReport.map((m) => ({ machineId: m.machineId, machine: m.machine }));
+  const machineSelLabel = machineIds.length === 0
+    ? "All Machines"
+    : machineIds.length === 1
+      ? (machineOptions.find((m) => m.machineId === machineIds[0])?.machine || "1 machine")
+      : `${machineIds.length} machines`;
   const paymentSplit = data?.paymentSplit ?? null;
   const inventoryTurns = data?.inventoryTurns ?? null;
   const inventoryNote = data?.inventoryNote ?? null;
@@ -175,12 +190,25 @@ export default function ReportsPage() {
   }
 
   return (
-    <div style={{ minHeight: "100vh" }}>
+    <div className="reports-root" style={{ minHeight: "100vh" }}>
+      {/* Printer-friendly: hide app chrome + controls, expand content, and
+          avoid breaking cards/tables across pages. Arthur prints these reports
+          to pay location commissions. */}
+      <style>{`
+        @media print {
+          aside, .reports-controls { display: none !important; }
+          .reports-root { min-height: 0 !important; }
+          .reports-root [class*="page-padding"], .reports-root > div { padding: 0 !important; }
+          body { background: #fff !important; }
+          .report-print-block { break-inside: avoid; page-break-inside: avoid; }
+          @page { margin: 12mm; }
+        }
+      `}</style>
       <Header title="Reports" />
 
       <div style={{ padding: isMobile ? 16 : "24px 32px" }}>
         {/* Top controls */}
-        <div style={{
+        <div className="reports-controls" style={{
           display: "flex", alignItems: isMobile ? "stretch" : "center",
           justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap",
           gap: isMobile ? 10 : 12, flexDirection: isMobile ? "column" : "row",
@@ -246,25 +274,87 @@ export default function ReportsPage() {
                 >Apply</button>
               </>
             )}
-            <select
-              value={machineId}
-              onChange={(e) => setMachineId(e.target.value)}
-              style={{
-                padding: "8px 14px", fontSize: 13, fontWeight: 500, color: "#374151",
-                background: "#fff", border: "1px solid #d5d9e2", borderRadius: 8, cursor: "pointer", outline: "none",
-              }}>
-              <option value="">All Machines</option>
-              {machineReport.map((m) => (
-                <option key={m.machineId} value={m.machineId}>{m.machine}</option>
-              ))}
-            </select>
+            {/* Multi-select machine picker. The list is ALWAYS the full roster
+                (never collapses to the selection), and multiple machines can be
+                checked to get one consolidated report (e.g. a whole location). */}
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={() => setMachineMenuOpen((o) => !o)}
+                style={{
+                  padding: "8px 14px", fontSize: 13, fontWeight: 500, color: "#374151",
+                  background: "#fff", border: "1px solid #d5d9e2", borderRadius: 8, cursor: "pointer",
+                  outline: "none", display: "inline-flex", alignItems: "center", gap: 8, minWidth: 150,
+                  justifyContent: "space-between",
+                }}
+              >
+                <span>{machineSelLabel}</span>
+                <ChevronDown size={14} />
+              </button>
+              {machineMenuOpen && (
+                <>
+                  <div
+                    onClick={() => setMachineMenuOpen(false)}
+                    style={{ position: "fixed", inset: 0, zIndex: 40 }}
+                  />
+                  <div style={{
+                    position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 41,
+                    background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: 8, minWidth: 240,
+                    maxHeight: 320, overflowY: "auto",
+                  }}>
+                    <button
+                      onClick={() => { setMachineIds([]); }}
+                      style={{
+                        width: "100%", textAlign: "left", padding: "8px 10px", borderRadius: 6,
+                        border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
+                        background: machineIds.length === 0 ? "#f0fdf4" : "transparent",
+                        color: machineIds.length === 0 ? "#16a34a" : "#374151",
+                      }}
+                    >
+                      All Machines
+                    </button>
+                    <div style={{ height: 1, background: "#f1f5f9", margin: "6px 0" }} />
+                    {machineOptions.map((m) => {
+                      const checked = machineIds.includes(m.machineId);
+                      return (
+                        <label
+                          key={m.machineId}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 8, padding: "7px 10px",
+                            borderRadius: 6, cursor: "pointer", fontSize: 13, color: "#374151",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              setMachineIds((cur) =>
+                                e.target.checked
+                                  ? [...cur, m.machineId]
+                                  : cur.filter((id) => id !== m.machineId)
+                              );
+                            }}
+                          />
+                          {m.machine}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 10 }}>
+          <div className="reports-actions" style={{ display: "flex", gap: 10 }}>
             <button onClick={exportCsv} style={{
               display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
               background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
               fontSize: 13, fontWeight: 500, cursor: "pointer",
             }}><Download size={14} /> Export CSV</button>
+            <button onClick={() => window.print()} style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
+              background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
+              fontSize: 13, fontWeight: 500, cursor: "pointer",
+            }}><Printer size={14} /> Print</button>
             <button
               onClick={async () => {
                 if (!confirm("Backfill all Nayax sales from the last 365 days into daily_sales? This runs in 4 chunks of 90 days, takes ~2-5 minutes total. Safe to re-run.")) return;
@@ -410,12 +500,15 @@ export default function ReportsPage() {
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Revenue Trend</div>
                   <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2, marginBottom: 16 }}>
                     Daily revenue from Nayax · {data?.range?.fromDate ?? "…"} to {data?.range?.toDate ?? "…"}
-                    {isMobile && revenueByDay.length > 10 && <span style={{ marginLeft: 6, color: "#0d9488" }}>· swipe ←→</span>}
+                    {isTablet && revenueByDay.length > 8 && <span style={{ marginLeft: 6, color: "#0d9488" }}>· swipe ←→</span>}
                   </div>
-                  <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                  <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", touchAction: "pan-x" }}>
                     <div style={{
-                      minWidth: isMobile
-                        ? `${Math.max(360, revenueByDay.length * 36)}px`
+                      // On phones/tablets give each day ~48px so the chart is
+                      // always wider than the viewport and can be scrolled to see
+                      // the whole trend (Arthur couldn't scroll it on mobile).
+                      minWidth: isTablet
+                        ? `${Math.max(640, revenueByDay.length * 48)}px`
                         : "100%",
                       height: 260,
                     }}>
@@ -730,26 +823,26 @@ export default function ReportsPage() {
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Processing Fees</div>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 20 }}>Nayax card processing</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <FeeRow label="Total Revenue" amount={`$${stats.totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} bold />
                   <FeeRow label="Card Transactions" amount={`$${stats.cardRevenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                  <FeeRow label="Processing Rate" amount="5.95%" />
+                  <FeeRow label="Cash Transactions" amount={`$${(stats.cashRevenue ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
+                  <FeeRow label="Processing Rate (card only)" amount="5.95%" />
                   <FeeRow label="Total Fees" amount={`$${stats.processingFees.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} bold />
                   <div style={{ height: 1, background: "#d5d9e2" }} />
                   <FeeRow label="Revenue After Fees" amount={`$${(stats.totalRevenue - stats.processingFees).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} bold color="#059669" />
                   <FeeRow label="Revenue After Fees & Costs" amount={`$${stats.netProfit.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} bold color="#059669" />
                 </div>
-                {(() => {
-                  const cashEntry = paymentSplit.find((p) => p.name.toLowerCase() === "cash");
-                  if (!cashEntry) return null;
-                  const cashFeesSaved = cashEntry.amount * 0.0595;
-                  return (
-                    <div style={{
-                      marginTop: 16, padding: "10px 14px", background: "#fef3c7",
-                      border: "1px solid #fde68a", borderRadius: 8, fontSize: 12, color: "#92400e",
-                    }}>
-                      Cash payments ({cashEntry.value}%) avoid processing fees — ${cashFeesSaved.toFixed(2)} saved this period
-                    </div>
-                  );
-                })()}
+                <div style={{
+                  marginTop: 16, padding: "10px 14px", background: "#f0fdf4",
+                  border: "1px solid #bbf7d0", borderRadius: 8, fontSize: 12, color: "#166534", lineHeight: 1.6,
+                }}>
+                  Card + Cash always add up to Total Revenue. Fees are charged on the card
+                  portion only (5.95%). Card-only machines (e.g. AHA / Chinese) take no cash,
+                  so their card total equals full revenue.
+                  {(stats.cashRevenue ?? 0) > 0 && (
+                    <> Cash avoids processing fees — <strong>${((stats.cashRevenue ?? 0) * 0.0595).toFixed(2)}</strong> saved this period.</>
+                  )}
+                </div>
               </div>
             </div>
           )

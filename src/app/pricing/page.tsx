@@ -24,14 +24,16 @@ import {
   Zap,
   Store,
   RotateCcw,
+  Wand2,
 } from "lucide-react";
+import CostFixerPanel from "./CostFixerPanel";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
 type PriceStatus = "Cost Margin" | "Pending Approval" | "Seasonal Price" | "Approved";
-type Tab = "Price Adjustments" | "Rules" | "Alerts";
+type Tab = "Price Adjustments" | "Rules" | "Alerts" | "Cost Fixer";
 type FilterType = "All" | "Pending Approval" | "Seasonal" | "Cost Change";
 
 interface PricingItem {
@@ -94,6 +96,7 @@ const tabConfig: Record<Tab, { label: string; icon: typeof DollarSign }> = {
   "Price Adjustments": { label: "Price Review", icon: DollarSign },
   Rules: { label: "Profit Targets", icon: Settings },
   Alerts: { label: "Updates", icon: Zap },
+  "Cost Fixer": { label: "Cost Fixer", icon: Wand2 },
 };
 
 const filterLabels: Record<FilterType, string> = {
@@ -111,6 +114,11 @@ export default function PricingPage() {
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(1024);
   const [activeTab, setActiveTab] = useState<Tab>("Price Adjustments");
+  // Honor ?tab=cost-fixer (used by the redirect from the old inventory route).
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t === "cost-fixer") setActiveTab("Cost Fixer");
+  }, []);
   const [filterType, setFilterType] = useState<FilterType>("All");
   const [search, setSearch] = useState("");
   const [items, setItems] = useState<PricingItem[]>([]);
@@ -938,8 +946,9 @@ export default function PricingPage() {
                 iconColor="#d97706" iconBg="#fffbeb"
                 label="Needs Review"
                 value={String(pendingCount)}
-                sub={pendingCount > 0 ? "Price changes waiting" : "All clear"}
+                sub={pendingCount > 0 ? "Click to see items waiting" : "All clear"}
                 subColor={pendingCount > 0 ? "#d97706" : "#059669"}
+                onClick={pendingCount > 0 ? () => { setActiveTab("Price Adjustments"); setFilterType("Pending Approval"); } : undefined}
               />
               <StatCard
                 icon={<DollarSign size={18} />}
@@ -1550,6 +1559,9 @@ export default function PricingPage() {
             </div>
           </div>
         )}
+
+        {/* ============ TAB: Cost Fixer (relocated from Inventory) ============ */}
+        {activeTab === "Cost Fixer" && <CostFixerPanel />}
       </div>
 
       <style>{`
@@ -1566,15 +1578,23 @@ export default function PricingPage() {
 /*  Small Components                                                   */
 /* ------------------------------------------------------------------ */
 
-function StatCard({ icon, iconColor, iconBg, label, value, sub, subColor }: {
+function StatCard({ icon, iconColor, iconBg, label, value, sub, subColor, onClick }: {
   icon: React.ReactNode; iconColor: string; iconBg: string;
   label: string; value: string; sub: string; subColor?: string;
+  onClick?: () => void;
 }) {
   return (
-    <div style={{
-      background: "#fff", borderRadius: 16, border: "1px solid #e2e8f0",
-      padding: "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
-    }}>
+    <div
+      onClick={onClick}
+      style={{
+        background: "#fff", borderRadius: 16, border: "1px solid #e2e8f0",
+        padding: "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
+        cursor: onClick ? "pointer" : "default",
+        transition: "border-color 0.15s, box-shadow 0.15s",
+      }}
+      onMouseEnter={onClick ? (e) => { e.currentTarget.style.borderColor = "#d97706"; e.currentTarget.style.boxShadow = "0 2px 10px rgba(217,119,6,0.15)"; } : undefined}
+      onMouseLeave={onClick ? (e) => { e.currentTarget.style.borderColor = "#e2e8f0"; e.currentTarget.style.boxShadow = "0 1px 4px rgba(0,0,0,0.04)"; } : undefined}
+    >
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
         <div style={{
           width: 36, height: 36, borderRadius: 10, background: iconBg,

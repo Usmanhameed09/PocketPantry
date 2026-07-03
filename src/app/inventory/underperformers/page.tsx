@@ -29,7 +29,9 @@ export default function UnderperformersPage() {
     setLoading(true);
     const [u, p] = await Promise.all([
       fetch("/api/inventory/underperformers", { cache: "no-store" }).then((r) => r.json()),
-      fetch("/api/inventory/products", { cache: "no-store" }).then((r) => r.json()),
+      // Full catalog (incl. inactive + Excel-imported) so the Replace picker
+      // offers every product, not just the ~30 active ones. (Arthur's ask.)
+      fetch("/api/inventory/products?includeAll=1", { cache: "no-store" }).then((r) => r.json()),
     ]);
     if (u.success) setRows(u.data || []);
     if (p.success) setProducts(p.data || []);

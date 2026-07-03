@@ -1,14 +1,42 @@
 import { NextResponse } from "next/server";
 import { withCache, CACHE_KEYS, TTL } from "@/lib/cache";
 
+export const maxDuration = 30;
+
 const PREDICTION_API = process.env.PREDICTION_API_URL || "http://localhost:5000";
 
 async function fetchPredictions() {
-  const res = await fetch(`${PREDICTION_API}/api/predictions`, { cache: "no-store" });
-  if (!res.ok) {
-    return { success: false, error: "Prediction API unavailable", status: res.status };
+  // Bounded so a slow/hung VPS can't run us into Vercel's function timeout
+  // (which returns non-JSON HTML). 20s is comfortably above the ~2-5s norm.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  let res: Response;
+  try {
+    res = await fetch(`${PREDICTION_API}/api/predictions`, { cache: "no-store", signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
   }
-  return await res.json();
+  // CRITICAL: THROW on a bad upstream response so the caller's catch returns a
+  // real HTTP error status. Previously this returned a { success:false } object
+  // with HTTP 200 — the page's `res.ok` guard let it through, then destructured
+  // undefined fields and crashed on `.reduce` (the "application error" Arthur hit).
+  if (!res.ok) {
+    throw new Error(`Prediction API returned ${res.status}`);
+  }
+  const json = await res.json();
+  // Also reject a well-formed 200 that lacks the fields the page renders, so we
+  // never hand the page a payload it will crash on. The page reads
+  // machineForecast (array), summary (object) and dataRange (object) at the top
+  // level before any optional chaining, so all three must be present.
+  if (
+    !json ||
+    !Array.isArray(json.machineForecast) ||
+    typeof json.summary !== "object" || json.summary === null ||
+    typeof json.dataRange !== "object" || json.dataRange === null
+  ) {
+    throw new Error("Prediction API returned an unexpected payload");
+  }
+  return json;
 }
 
 export async function GET(req: Request) {
@@ -23,7 +51,7 @@ export async function GET(req: Request) {
     return NextResponse.json(data);
   } catch {
     return NextResponse.json(
-      { error: "Cannot connect to prediction API. Make sure the Python server is running on port 5000." },
+      { error: "Cannot reach the prediction service. It may be restarting — try again in a moment." },
       { status: 503 }
     );
   }

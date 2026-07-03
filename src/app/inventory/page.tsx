@@ -5,6 +5,8 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import Header from "@/components/Header";
 import RefillModal from "./RefillModal";
 import InventoryTabs from "./InventoryTabs";
+import Pagination from "@/components/Pagination";
+import { usePagination } from "@/hooks/usePagination";
 import {
   Search,
   Plus,
@@ -120,7 +122,11 @@ export default function InventoryPage() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const PAGE_SIZE = 50;
+  // Load the whole (filtered) set in one shot, then paginate on the client with
+  // a numbered pager — same UX as the Warehouse/Products tabs. Arthur couldn't
+  // tell the old "Load more" was pagination (and it vanished when few products
+  // existed), so we standardize on the numbered Pagination control.
+  const PAGE_SIZE = 2000;
 
   const fetchInventory = useCallback(async (pageNum = 1, append = false) => {
     try {
@@ -205,6 +211,7 @@ export default function InventoryPage() {
   });
 
   const totalInMachines = products.reduce((s, p) => s + p.inMachines, 0);
+  const pg = usePagination(filtered, 25);
 
   if (loading) {
     return (
@@ -448,7 +455,7 @@ export default function InventoryPage() {
                 </div>
 
                 {/* Rows */}
-                {filtered.map((p) => {
+                {pg.pageItems.map((p) => {
                   const rc = restockConfig[p.restockStatus];
                   const machineCount = p.machineCount ?? p.machines?.length ?? 0;
                   return (
@@ -541,25 +548,16 @@ export default function InventoryPage() {
               </div>
             </div>
 
-            {/* Load more — server pagination. First page = 50 rows. Click
-                to append the next 50. Hidden once all rows are loaded. */}
-            {hasMore && (
-              <div style={{ display: "flex", justifyContent: "center", marginTop: 14 }}>
-                <button
-                  onClick={() => fetchInventory(page + 1, true)}
-                  disabled={loadingMore}
-                  style={{
-                    padding: "10px 24px", borderRadius: 10,
-                    background: loadingMore ? "#e2e8f0" : "#fff",
-                    border: "1px solid #d5d9e2",
-                    fontSize: 13, fontWeight: 600, color: "#475569",
-                    cursor: loadingMore ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {loadingMore ? "Loading…" : `Load more (${products.length} of ${stats.shownProducts ?? "?"} shown)`}
-                </button>
-              </div>
-            )}
+            {/* Numbered pager — matches the Warehouse/Products tabs. */}
+            <Pagination
+              page={pg.page}
+              totalPages={pg.totalPages}
+              onPageChange={pg.setPage}
+              from={pg.from}
+              to={pg.to}
+              total={filtered.length}
+              label="products"
+            />
 
             {/* Explanation note */}
             <div style={{

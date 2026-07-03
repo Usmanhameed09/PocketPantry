@@ -121,6 +121,19 @@ export default function ProposalsPage() {
           )}
         </div>
 
+        {/* What "Proposed Product" means + what Approve does (Arthur asked). */}
+        <div style={{
+          ...CARD, padding: "12px 16px", marginBottom: 16, background: "#f0f9ff",
+          border: "1px solid #bae6fd", fontSize: 12.5, color: "#0369a1", lineHeight: 1.6,
+        }}>
+          <strong>What is a proposed product?</strong> A candidate you (or the AI) suggest adding to your
+          catalog — with a starting quantity, target machines, and price range. It stays as a
+          &ldquo;Proposed&rdquo; idea until you decide. <strong>Approving</strong> adds it to your
+          product catalog (the Products list) as an active product so you can then stock it in the
+          warehouse and assign it to machines. <strong>Rejecting</strong> discards the idea. Nothing is
+          purchased or charged — Approve only creates the product record.
+        </div>
+
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
           <BtnPrimary onClick={() => setShowForm(true)}>
             <Plus size={16} /> Propose product

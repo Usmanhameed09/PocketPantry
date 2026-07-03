@@ -283,8 +283,9 @@ export default function PredictionsPage() {
     );
   }
 
-  /* Error */
-  if (error || !data) {
+  /* Error — also treat a malformed payload (missing forecast array) as an
+     error state instead of destructuring it and crashing on .reduce below. */
+  if (error || !data || !Array.isArray(data.machineForecast)) {
     return (
       <div style={{ minHeight: "100vh" }}>
         <Header title="Predictions" />
@@ -308,15 +309,28 @@ export default function PredictionsPage() {
     );
   }
 
-  const { machineForecast, productPerformance, seasonalTrends, productMixRecs, summary } = data;
+  // Defensive defaults — the API now guarantees machineForecast is an array,
+  // but the other collections may still be missing on a partial payload.
+  const { machineForecast, summary } = data;
+  const productPerformance = data.productPerformance || [];
+  const seasonalTrends = data.seasonalTrends || [];
+  const productMixRecs = data.productMixRecs || [];
   const machineTemplates = data.machineTemplates || [];
 
   const totalPredictedWeekly = machineForecast.reduce((s, m) => s + m.predictedWeekly, 0);
   const totalCurrentWeekly = machineForecast.reduce((s, m) => s + m.currentWeekly, 0);
-  const overallChangePct = ((totalPredictedWeekly - totalCurrentWeekly) / totalCurrentWeekly * 100);
+  // Guard the divisor so an all-zero baseline yields 0%, not NaN/Infinity.
+  const overallChangePct = totalCurrentWeekly > 0
+    ? ((totalPredictedWeekly - totalCurrentWeekly) / totalCurrentWeekly * 100)
+    : 0;
   const deadProducts = productPerformance.filter(p => p.recommendation === "Remove").length;
-  const generatedDate = new Date(data.generatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  const maxWeekly = Math.max(...machineForecast.map(m => Math.max(m.currentWeekly, m.predictedWeekly)));
+  const generatedDate = data.generatedAt
+    ? new Date(data.generatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : "—";
+  // Guard the empty-array spread (Math.max() of nothing is -Infinity).
+  const maxWeekly = machineForecast.length > 0
+    ? Math.max(...machineForecast.map(m => Math.max(m.currentWeekly, m.predictedWeekly)))
+    : 0;
 
   const tabItems: { key: typeof tab; label: string; icon: typeof BarChart3; count?: number }[] = [
     { key: "overview",  label: "Machine Forecast",  icon: BarChart3 },

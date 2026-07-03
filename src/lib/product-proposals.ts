@@ -281,28 +281,62 @@ export async function findUnderperformers(): Promise<Underperformer[]> {
   // and gives a fake "1/day forever" reading for one-time sales. With this
   // change underperformer counts match Reports for the same 30d window.
   const since = dateNDaysAgoInOperatorTz(30);
-  const dailyRows: Array<{ product_id: string; units_sold: number }> = [];
+  // Pull a WIDE window (1 year) so we can measure each product's sales tenure
+  // (first sale) and recency (last sale), not just the trailing 30 days. This
+  // is what lets us honour Arthur's rules: a product needs ≥1 month of history
+  // before it can be judged, and a product that's been out of every machine for
+  // over a month is "removed", not "underperforming".
+  const wideSince = dateNDaysAgoInOperatorTz(365);
+  const dailyRows: Array<{ product_id: string; units_sold: number; sale_date: string }> = [];
   const PAGE = 1000;
-  for (let from = 0; from < 100000; from += PAGE) {
+  for (let from = 0; from < 500000; from += PAGE) {
     const { data, error } = await supabase
       .from("daily_sales")
-      .select("product_id, units_sold")
-      .gte("sale_date", since)
+      .select("product_id, units_sold, sale_date")
+      .gte("sale_date", wideSince)
       .range(from, from + PAGE - 1);
     if (error) break;
     if (!data || data.length === 0) break;
-    dailyRows.push(...(data as Array<{ product_id: string; units_sold: number }>));
+    dailyRows.push(...(data as Array<{ product_id: string; units_sold: number; sale_date: string }>));
     if (data.length < PAGE) break;
   }
 
-  const unitsByProduct = new Map<string, number>();
+  // Per-product: 30-day units, first sale date, last sale date.
+  const units30dByProduct = new Map<string, number>();
+  const firstSaleByProduct = new Map<string, string>();
+  const lastSaleByProduct = new Map<string, string>();
   for (const r of dailyRows) {
-    unitsByProduct.set(r.product_id, (unitsByProduct.get(r.product_id) || 0) + (r.units_sold || 0));
+    const pid = r.product_id;
+    if (r.sale_date >= since) {
+      units30dByProduct.set(pid, (units30dByProduct.get(pid) || 0) + (r.units_sold || 0));
+    }
+    const f = firstSaleByProduct.get(pid);
+    if (!f || r.sale_date < f) firstSaleByProduct.set(pid, r.sale_date);
+    const l = lastSaleByProduct.get(pid);
+    if (!l || r.sale_date > l) lastSaleByProduct.set(pid, r.sale_date);
   }
+
+  // Which products are CURRENTLY loaded in at least one machine.
+  const productsInAMachine = new Set<string>();
+  for (let from = 0; from < 500000; from += PAGE) {
+    const { data, error } = await supabase
+      .from("machine_inventory")
+      .select("product_id")
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    if (!data || data.length === 0) break;
+    for (const r of data as Array<{ product_id: string }>) {
+      if (r.product_id) productsInAMachine.add(r.product_id);
+    }
+    if (data.length < PAGE) break;
+  }
+
+  const thirtyDaysAgo = since; // ISO date string, operator tz
 
   const out: Underperformer[] = [];
   for (const p of products) {
-    const units30d = unitsByProduct.get(p.id as string) || 0;
+    const pid = p.id as string;
+    const units30d = units30dByProduct.get(pid) || 0;
     const daily = units30d / 30;
     const weekly = daily * 7;
     const cost = (p.unit_cost as number) || 0;
@@ -311,6 +345,17 @@ export async function findUnderperformers(): Promise<Underperformer[]> {
 
     // Skip products with no sales in the window (no data ≠ underperforming)
     if (units30d === 0) continue;
+
+    // ── Arthur's context rules ──────────────────────────────────────
+    // (1) Require ≥1 month of sales history. A product first sold within the
+    //     last 30 days is still being trialled — don't call it a failure yet.
+    const firstSale = firstSaleByProduct.get(pid);
+    if (!firstSale || firstSale > thirtyDaysAgo) continue;
+    // (2) Exclude products that are effectively REMOVED: not currently in any
+    //     machine AND no sale in the last 30 days. (Still-selling items stay.)
+    const lastSale = lastSaleByProduct.get(pid) || "";
+    if (!productsInAMachine.has(pid) && lastSale < thirtyDaysAgo) continue;
+
     // Skip high-volume movers entirely — see HIGH_VOLUME_EXEMPTION comment.
     if (weekly >= HIGH_VOLUME_EXEMPTION) continue;
 

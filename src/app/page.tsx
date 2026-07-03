@@ -263,6 +263,7 @@ export default function Dashboard() {
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: isMobile ? 10 : 16 }}>
           <StatCard
             icon={<TrendingUp size={20} color="#16a34a" />} iconBg="#dcfce7"
+            onClick={() => router.push("/reports")}
             label={
               sales.liveDataAt
                 ? "Today's Revenue · LIVE"
@@ -276,6 +277,7 @@ export default function Dashboard() {
           />
           <StatCard
             icon={<CheckCircle2 size={20} color="#059669" />} iconBg="#dcfce7"
+            onClick={() => router.push("/machines")}
             label="Machines Active"
             value={numOrSkel(`${machines.active} / ${machines.total}`)}
             tag={tilesLoading
@@ -287,6 +289,7 @@ export default function Dashboard() {
           />
           <StatCard
             icon={<AlertTriangle size={20} color="#d97706" />} iconBg="#fef3c7"
+            onClick={() => router.push("/inventory/alerts")}
             label="Open Alerts"
             value={numOrSkel(String(alerts.total))}
             tag={tilesLoading
@@ -298,6 +301,7 @@ export default function Dashboard() {
           />
           <StatCard
             icon={<DollarSign size={20} color="#6366f1" />} iconBg="#ede9fe"
+            onClick={() => router.push("/inventory/warehouse")}
             label="Warehouse Value"
             value={numOrSkel(`$${warehouse.value.toFixed(2)}`)}
             tag={<span style={{ color: "#64748b", fontSize: 12 }}>
@@ -540,15 +544,23 @@ export default function Dashboard() {
 
 /* ────── Small components ────── */
 
-function StatCard({ icon, iconBg, label, value, tag }: {
+function StatCard({ icon, iconBg, label, value, tag, onClick }: {
   icon: React.ReactNode; iconBg: string; label: string; value: string; tag: React.ReactNode;
+  onClick?: () => void;
 }) {
   return (
-    <div style={{
-      background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
-      padding: "18px 20px", display: "flex", alignItems: "center", gap: 14,
-      boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
-    }}>
+    <div
+      onClick={onClick}
+      style={{
+        background: "#fff", borderRadius: 14, border: "1px solid #d5d9e2",
+        padding: "18px 20px", display: "flex", alignItems: "center", gap: 14,
+        boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
+        cursor: onClick ? "pointer" : "default",
+        transition: "border-color 0.15s, box-shadow 0.15s, transform 0.1s",
+      }}
+      onMouseEnter={onClick ? (e) => { e.currentTarget.style.borderColor = "#16a34a"; e.currentTarget.style.boxShadow = "0 4px 12px rgba(22,163,74,0.15)"; } : undefined}
+      onMouseLeave={onClick ? (e) => { e.currentTarget.style.borderColor = "#d5d9e2"; e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.06)"; } : undefined}
+    >
       <div style={{
         width: 44, height: 44, borderRadius: 12, background: iconBg,
         display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,

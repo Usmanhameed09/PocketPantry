@@ -129,6 +129,20 @@ export default function WastePage() {
           </BtnSecondary>
         </div>
 
+        {/* How waste is determined (Arthur asked "how does it know a product is
+            wasted?"). It is NOT auto-detected from the machine — it comes from
+            what you log. */}
+        <div style={{
+          ...CARD, padding: "12px 16px", marginBottom: 16, background: "#fffbeb",
+          border: "1px solid #fde68a", fontSize: 12.5, color: "#92400e", lineHeight: 1.6,
+        }}>
+          <strong>How is waste determined?</strong> Waste is <strong>not</strong> auto-detected by the
+          machines. It reflects spoilage/damage you (or a VA) record — e.g. an expired or damaged item
+          removed during a refill, logged via the audit/adjust actions. If nothing is logged, this list
+          stays empty. &ldquo;Inventory Turns&rdquo; is a separate calculation: cost of goods sold over
+          the period ÷ current warehouse value.
+        </div>
+
         {loading ? (
           <div style={CARD}><LoadingBox /></div>
         ) : tab === "waste" ? (

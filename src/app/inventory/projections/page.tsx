@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import InventoryTabs from "../InventoryTabs";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { Loader2, Save, Settings, TrendingUp, DollarSign, Package } from "lucide-react";
+import { Settings, TrendingUp, DollarSign, Package } from "lucide-react";
 import {
   PAGE_BG, CARD, StatCard, Th, Td, EmptyState, LoadingBox,
   Modal, Field, BtnPrimary, BtnSecondary, Badge, pageContainer,
@@ -18,14 +18,22 @@ type Projection = {
 };
 type Settings = { windowWeeks: number; safetyStockDays: number; horizonDays: number };
 
+// Color bands for the 30-day projected units (individual items, not cases):
+//   < 10  → red    (barely selling — think twice before buying)
+//   10–40 → amber  (moderate mover)
+//   > 40  → green  (strong seller)
+function projColor(units: number): string {
+  if (units < 10) return "#dc2626";
+  if (units <= 40) return "#d97706";
+  return "#16a34a";
+}
+
 export default function ProjectionsPage() {
   const isMobile = useIsMobile();
   const [data, setData] = useState<Projection[]>([]);
   const [settings, setSettings] = useState<Settings>({ windowWeeks: 6, safetyStockDays: 5, horizonDays: 7 });
   const [editSettings, setEditSettings] = useState<Settings>({ windowWeeks: 6, safetyStockDays: 5, horizonDays: 7 });
   const [loading, setLoading] = useState(true);
-  const [overrides, setOverrides] = useState<Record<string, string>>({});
-  const [savingId, setSavingId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
   const load = useCallback(async () => {
@@ -41,20 +49,6 @@ export default function ProjectionsPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-
-  async function saveOverride(productId: string) {
-    const raw = overrides[productId];
-    if (!raw) return;
-    setSavingId(productId);
-    await fetch("/api/inventory/projections", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "override", productId, unitsOverride: Number(raw) }),
-    });
-    setSavingId(null);
-    setOverrides((p) => ({ ...p, [productId]: "" }));
-    await load();
-  }
 
   async function saveSettings() {
     await fetch("/api/inventory/projections", {
@@ -98,15 +92,30 @@ export default function ProjectionsPage() {
               message="Trigger a Nayax sync to populate sales velocity." />
           ) : (
             <div style={{ overflowX: "auto" }}>
+              {/* Legend — clarifies the unit (items) and the color bands. */}
+              <div style={{
+                display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14,
+                padding: "10px 14px", marginBottom: 4, fontSize: 12, color: "#64748b",
+              }}>
+                <span style={{ fontWeight: 600 }}>Projected 30d = individual items (not cases)</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: "#dc2626" }} /> &lt;10 slow
+                </span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: "#d97706" }} /> 10–40 moderate
+                </span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: "#16a34a" }} /> &gt;40 strong
+                </span>
+              </div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr>
                   <Th>Product</Th>
                   <Th align="right">Velocity / day</Th>
                   <Th align="right">Seasonal</Th>
-                  <Th align="right">Projected 30d</Th>
+                  <Th align="right">Projected 30d (items)</Th>
                   <Th align="right">COGS</Th>
                   <Th>Why</Th>
-                  <Th>Manual override</Th>
                 </tr></thead>
                 <tbody>
                   {data.map((p, idx) => (
@@ -121,38 +130,16 @@ export default function ProjectionsPage() {
                           ×{p.seasonalMultiplier.toFixed(2)}
                         </Badge>
                       </Td>
-                      <Td align="right" mono bold>{p.projectedUnits30d}</Td>
+                      <Td align="right" mono bold>
+                        {/* Color-code the 30-day projection so slow movers stand
+                            out at a glance: <10 red (barely selling — maybe skip),
+                            10–40 amber (moderate), >40 green (strong seller). */}
+                        <span style={{ color: projColor(p.projectedUnits30d) }}>
+                          {p.projectedUnits30d}
+                        </span>
+                      </Td>
                       <Td align="right" mono>${p.projectedCogs30d.toFixed(2)}</Td>
                       <Td><span style={{ fontSize: 12, color: "#64748b" }}>{p.explanation}</span></Td>
-                      <Td>
-                        <div style={{ display: "flex", gap: 4 }}>
-                          <input
-                            type="number"
-                            placeholder={p.override !== null ? String(p.override) : "—"}
-                            value={overrides[p.productId] ?? ""}
-                            onChange={(e) => setOverrides((prev) => ({ ...prev, [p.productId]: e.target.value }))}
-                            style={{
-                              width: 72, padding: "6px 8px", border: "1px solid #d5d9e2",
-                              borderRadius: 6, fontSize: 13, outline: "none",
-                            }}
-                          />
-                          <button
-                            disabled={!overrides[p.productId] || savingId === p.productId}
-                            onClick={() => saveOverride(p.productId)}
-                            style={{
-                              padding: "6px 10px", border: "none", borderRadius: 6,
-                              background: overrides[p.productId] ? "#16a34a" : "#e2e8f0",
-                              color: overrides[p.productId] ? "#fff" : "#94a3b8",
-                              cursor: overrides[p.productId] ? "pointer" : "not-allowed",
-                              fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center",
-                            }}
-                          >
-                            {savingId === p.productId
-                              ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} />
-                              : <Save size={12} />}
-                          </button>
-                        </div>
-                      </Td>
                     </tr>
                   ))}
                 </tbody>

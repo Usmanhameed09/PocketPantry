@@ -69,10 +69,27 @@ async function buildReports(searchParams: URLSearchParams): Promise<Record<strin
     const isoTo = toParam && dateRegex.test(toParam) ? toParam : null;
 
     const days = Math.max(1, Math.min(366, Number(searchParams.get("days")) || 30));
-    const machineFilter = searchParams.get("machineId") || null;
+    // machineId may be a single id OR a comma-separated list (consolidated
+    // report across several machines — e.g. all machines at one location).
+    const machineIdsParam = (searchParams.get("machineId") || "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
+    const machineFilterList = machineIdsParam.length > 0 ? machineIdsParam : null;
+    // Back-compat single-id used where only one is meaningful (payment scoping).
+    const machineFilter = machineFilterList && machineFilterList.length === 1
+      ? machineFilterList[0] : null;
 
     const companyId = await ensureDefaultCompany();
     const supabase = createServerClient();
+
+    // Full machine roster (id + name), ALWAYS unfiltered — this feeds the
+    // report's machine selector so the list never collapses to just the
+    // currently-selected machine (Arthur's "I have to reset to All to see the
+    // others" bug). Independent of the report's machineId filter.
+    const { data: allMachinesData } = await supabase
+      .from("machines").select("id, name").eq("company_id", companyId).order("name");
+    const allMachines = (allMachinesData || []).map((m) => ({
+      machineId: m.id as string, machine: m.name as string,
+    }));
 
     // Date range in the operator's timezone (Eastern by default) so the
     // Reports page numbers line up with Nayax's live dashboard.
@@ -94,7 +111,11 @@ async function buildReports(searchParams: URLSearchParams): Promise<Record<strin
         .gte("sale_date", fromStr)
         .lte("sale_date", toStr)
         .range(from, from + PAGE - 1);
-      if (machineFilter) q = q.eq("machine_id", machineFilter);
+      if (machineFilterList) {
+        q = machineFilterList.length === 1
+          ? q.eq("machine_id", machineFilterList[0])
+          : q.in("machine_id", machineFilterList);
+      }
       const { data, error } = await q;
       if (error) throw error;
       if (!data || data.length === 0) break;
@@ -265,7 +286,25 @@ async function buildReports(searchParams: URLSearchParams): Promise<Record<strin
       : null;
 
     // ─── 7. Financial summary ─────────────────────────────────────────
-    const cardRevenue = paymentSplit?.byMethod?.["Credit Card"]?.revenue || 0;
+    // The AUTHORITATIVE revenue is totalRevenue (summed from daily_sales). The
+    // scraper payment breakdown covers a slightly different window and a
+    // different dataset, so using its ABSOLUTE card dollars made the numbers
+    // never reconcile (Arthur: "revenue after fees is more than the card total",
+    // "$184 + $36 ≠ $300"). Instead we take only the card/cash SHARE from the
+    // breakdown and apply it to totalRevenue — so card + cash always == total.
+    const cardShare: number | null = (() => {
+      const byMethod = paymentSplit?.byMethod;
+      if (!byMethod) return null;
+      const splitTotal = Object.values(byMethod).reduce((s, m) => s + (m?.revenue || 0), 0);
+      if (splitTotal <= 0) return null;
+      const card = byMethod["Credit Card"]?.revenue || 0;
+      return card / splitTotal;
+    })();
+    // No usable split → treat as card-only. Nayax is card-first and the AHA /
+    // Chinese machines take NO cash at all, so card = full revenue for them.
+    const effectiveCardShare = cardShare == null ? 1 : cardShare;
+    const cardRevenue = Math.round(totalRevenue * effectiveCardShare * 100) / 100;
+    const cashRevenue = Math.round((totalRevenue - cardRevenue) * 100) / 100;
     const processingFees = Math.round(cardRevenue * NAYAX_PROCESSING_FEE_RATE * 100) / 100;
     const netProfit = Math.round((totalRevenue - totalCost - processingFees) * 100) / 100;
     const avgMargin = totalRevenue > 0
@@ -315,11 +354,13 @@ async function buildReports(searchParams: URLSearchParams): Promise<Record<strin
         totalUnits,
         totalTransactions: rows.length, // one row per (product, machine, day)
         cardRevenue,
+        cashRevenue,
       },
       revenueByDay,
       topSkus,
       revenueByMachine,
       machineReport,
+      allMachines,
       paymentSplit: paymentSplit
         ? buildPaymentSplit(paymentSplit)
         : null,

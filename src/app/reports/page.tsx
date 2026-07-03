@@ -117,6 +117,18 @@ export default function ReportsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Auto-apply a custom range as soon as BOTH dates are chosen — a native
+  // <input type=date> only fires onChange when a full date is selected (not per
+  // keystroke), so this is safe and doesn't spam fetches. Previously the range
+  // did nothing until the operator also clicked "Apply", which read as "custom
+  // range gives no results". The Apply button stays as a manual re-run.
+  useEffect(() => {
+    if (preset === "custom" && customFrom && customTo) {
+      setAppliedFrom(customFrom);
+      setAppliedTo(customTo);
+    }
+  }, [preset, customFrom, customTo]);
+
   // Show the date controls + tab bar IMMEDIATELY. Don't block the page on
   // the report fetch. Each tab body shows a small loading hint until data
   // arrives. Error state still gets a full-page banner since without
@@ -781,12 +793,7 @@ export default function ReportsPage() {
               <div style={{ ...cardStyle, padding: 24 }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Payment Method Split</div>
                 <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 20 }}>
-                  From Nayax payment data
-                  {dataQuality.paymentSplitWindowNote && (
-                    <span style={{ display: "block", marginTop: 4, fontSize: 11, color: "#d97706" }}>
-                      ⓘ {dataQuality.paymentSplitWindowNote}
-                    </span>
-                  )}
+                  Card/cash mix from Nayax, applied to this period&apos;s revenue
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 30, flexWrap: "wrap" }}>
                   <ResponsiveContainer width={180} height={180}>
@@ -809,7 +816,7 @@ export default function ReportsPage() {
                         <div style={{ paddingLeft: 20 }}>
                           <span style={{ fontSize: 20, fontWeight: 800, color: "#0f172a" }}>{p.value}%</span>
                           <div style={{ fontSize: 12, color: "#94a3b8" }}>
-                            ${p.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} · {p.sales} sales
+                            ${p.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                           </div>
                         </div>
                       </div>
@@ -825,7 +832,7 @@ export default function ReportsPage() {
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <FeeRow label="Total Revenue" amount={`$${stats.totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} bold />
                   <FeeRow label="Card Transactions" amount={`$${stats.cardRevenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-                  <FeeRow label="Cash Transactions" amount={`$${(stats.cashRevenue ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
+                  <FeeRow label="Cash & other (no card fee)" amount={`$${(stats.cashRevenue ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
                   <FeeRow label="Processing Rate (card only)" amount="5.95%" />
                   <FeeRow label="Total Fees" amount={`$${stats.processingFees.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} bold />
                   <div style={{ height: 1, background: "#d5d9e2" }} />

@@ -362,7 +362,7 @@ async function buildReports(searchParams: URLSearchParams): Promise<Record<strin
       machineReport,
       allMachines,
       paymentSplit: paymentSplit
-        ? buildPaymentSplit(paymentSplit)
+        ? buildPaymentSplit(paymentSplit, totalRevenue)
         : null,
       paymentBreakdown: paymentSplit,
       inventoryTurns,
@@ -439,15 +439,25 @@ function filterPaymentToMachine(
   };
 }
 
-function buildPaymentSplit(p: PaymentBreakdownResponse) {
-  // Convert byMethod into the [{ name, value, amount }] shape the chart expects.
-  const total = p.totalRevenue || 0;
+function buildPaymentSplit(p: PaymentBreakdownResponse, scaleToRevenue: number) {
+  // The payment breakdown comes from Nayax's rolling last-sales window, so its
+  // ABSOLUTE dollars cover a different period than the report and were showing
+  // e.g. $6,893 card when the report period's total was $1,345 — confusing and
+  // inconsistent with the Processing Fees panel. Fix: keep only the method
+  // PROPORTIONS from the window and rescale the dollars to the report's actual
+  // total revenue, so every method amount sums to the report total.
+  const windowTotal = Object.values(p.byMethod).reduce((s, v) => s + (v?.revenue || 0), 0)
+    || p.totalRevenue || 0;
   return Object.entries(p.byMethod)
-    .map(([name, v]) => ({
-      name,
-      value: total > 0 ? Math.round((v.revenue / total) * 100) : 0,
-      amount: v.revenue,
-      sales: v.sales,
-    }))
+    .map(([name, v]) => {
+      const share = windowTotal > 0 ? v.revenue / windowTotal : 0;
+      return {
+        name,
+        value: Math.round(share * 100),
+        // Rescaled to the report period so the numbers reconcile everywhere.
+        amount: Math.round(share * scaleToRevenue * 100) / 100,
+        sales: v.sales, // raw window transaction count (informational)
+      };
+    })
     .sort((a, b) => b.amount - a.amount);
 }

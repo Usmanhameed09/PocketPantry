@@ -29,8 +29,9 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const daysParam = searchParams.get("days");
     const bypass = searchParams.get("fresh") === "1";
-    // Build a key per ?days=N so different windows don't share a cache slot.
-    const cacheKey = `${CACHE_KEYS.machinesTotals}:${daysParam || "30"}`;
+    // Build a key per window so different windows don't share a cache slot.
+    const rangeKey = `${searchParams.get("from") || ""}_${searchParams.get("to") || ""}`;
+    const cacheKey = `${CACHE_KEYS.machinesTotals}:${daysParam || "30"}:${rangeKey}`;
     if (bypass) return NextResponse.json(await buildTotals(searchParams));
     const payload = await withCache(cacheKey, TTL.machinesTotals, () => buildTotals(searchParams));
     return NextResponse.json(payload);
@@ -45,13 +46,20 @@ export async function GET(req: Request) {
 async function buildTotals(searchParams: URLSearchParams): Promise<Record<string, unknown>> {
   try {
     const daysParam = searchParams.get("days");
+    // Calendar range wins if valid (This Month / Last Month selectors send
+    // ?from=YYYY-MM-DD&to=YYYY-MM-DD). Otherwise fall back to ?days=N / "all".
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    const fromParam = searchParams.get("from");
+    const toParam = searchParams.get("to");
+    const isoFrom = fromParam && dateRegex.test(fromParam) ? fromParam : null;
+    const isoTo = toParam && dateRegex.test(toParam) ? toParam : null;
     // "all" means lifetime total — no lower bound on sale_date, just upper
     // bound at today (so future-dated rows don't sneak in). days=N applies
     // the rolling window from N days ago through today.
-    const isAllTime = daysParam === "all";
+    const isAllTime = !isoFrom && daysParam === "all";
     const days = isAllTime ? 0 : Math.max(1, Math.min(366, Number(daysParam) || 30));
-    const fromDate = isAllTime ? "1970-01-01" : dateNDaysAgoInOperatorTz(days);
-    const toDate = todayInOperatorTz();
+    const fromDate = isoFrom || (isAllTime ? "1970-01-01" : dateNDaysAgoInOperatorTz(days));
+    const toDate = isoTo || todayInOperatorTz();
 
     const supabase = createServerClient();
 

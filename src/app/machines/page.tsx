@@ -114,13 +114,33 @@ export default function MachinesPage() {
   const [cumulativeTotals, setCumulativeTotals] = useState<{
     revenue: number; orders: number; units: number;
     fromDate: string; toDate: string; generatedAt: string;
+    perMachine: Record<string, { revenue: number; orders: number; units: number }>;
   } | null>(null);
+  // Period the machine revenue figures cover — accurate, from daily_sales.
+  // Arthur wanted a real selector (This Month / Last Month / 30d / 7d / All)
+  // instead of the ambiguous rolling scraper total.
+  const [machinesPeriod, setMachinesPeriod] = useState<"thisMonth" | "month" | "30d" | "7d" | "all">("thisMonth");
   // Background "fresh data" indicator — true while we're forcing a sync
   const [syncing, setSyncing] = useState(false);
 
   const fetchTotals = useCallback(async () => {
     try {
-      const r = await fetch("/api/machines/totals?days=all").then((x) => x.json());
+      // Translate the period into the totals-API query.
+      const now = new Date();
+      const iso = (d: Date) => d.toISOString().slice(0, 10);
+      let qs = "days=all";
+      if (machinesPeriod === "thisMonth") {
+        qs = `from=${iso(new Date(now.getFullYear(), now.getMonth(), 1))}&to=${iso(now)}`;
+      } else if (machinesPeriod === "month") {
+        const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const last = new Date(now.getFullYear(), now.getMonth(), 0);
+        qs = `from=${iso(first)}&to=${iso(last)}`;
+      } else if (machinesPeriod === "30d") {
+        qs = "days=30";
+      } else if (machinesPeriod === "7d") {
+        qs = "days=7";
+      }
+      const r = await fetch(`/api/machines/totals?${qs}`).then((x) => x.json());
       if (r.ok) {
         setCumulativeTotals({
           revenue: r.total.revenue,
@@ -129,10 +149,14 @@ export default function MachinesPage() {
           fromDate: r.fromDate,
           toDate: r.toDate,
           generatedAt: r.generatedAt,
+          perMachine: r.perMachine || {},
         });
       }
     } catch {}
-  }, []);
+  }, [machinesPeriod]);
+
+  // Refetch totals whenever the period changes.
+  useEffect(() => { void fetchTotals(); }, [fetchTotals]);
 
   // Trigger a Nayax-to-daily_sales sync, then refresh totals. Fire-and-
   // forget for the sync request itself (it takes 20-60s) but update the
@@ -262,6 +286,13 @@ export default function MachinesPage() {
     offline: machines.filter((m) => m.status === "Offline").length,
   };
 
+  const periodLabel =
+    machinesPeriod === "thisMonth" ? "This month" :
+    machinesPeriod === "month" ? "Last month" :
+    machinesPeriod === "30d" ? "Last 30 days" :
+    machinesPeriod === "7d" ? "Last 7 days" :
+    "All time";
+
   // Aggregate stats: prefer cumulative totals from daily_sales so the tile
   // GROWS monotonically with every new sale. Falls back to the scraper sum
   // while cumulativeTotals is still loading on first render.
@@ -351,6 +382,33 @@ export default function MachinesPage() {
 
         {/* Stat Cards — always rendered. Show "—" while data is loading
             so the page layout doesn't shift when the fetch resolves. */}
+        {/* Period selector — scopes the revenue figures (tile + per-machine
+            rows) to a real, accurate window from synced sales data. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>Revenue period:</span>
+          {([
+            ["thisMonth", "This month"],
+            ["month", "Last month"],
+            ["30d", "Last 30 days"],
+            ["7d", "Last 7 days"],
+            ["all", "All time"],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setMachinesPeriod(key)}
+              style={{
+                fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: 20,
+                cursor: "pointer", transition: "all 0.15s",
+                border: machinesPeriod === key ? "1px solid #16a34a" : "1px solid #e2e8f0",
+                background: machinesPeriod === key ? "#16a34a" : "#fff",
+                color: machinesPeriod === key ? "#fff" : "#64748b",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div style={{
           display: "grid",
           gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
@@ -358,7 +416,7 @@ export default function MachinesPage() {
         }}>
           <StatCard
             icon={<DollarSign size={16} color="#059669" />}
-            label="Total Revenue"
+            label={`Revenue · ${periodLabel}`}
             value={loading ? "—" : `$${totalRevenue.toFixed(2)}`}
             sub={loading ? "loading…" : (syncedAgo ? `synced ${syncedAgo} · $${weeklyRevenue.toFixed(2)} this week` : `$${weeklyRevenue.toFixed(2)} this week`)}
           />
@@ -559,7 +617,7 @@ export default function MachinesPage() {
                     display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8,
                     background: "#f8fafc", borderRadius: 10, padding: "10px 12px",
                   }}>
-                    <MobileMiniStat label="Revenue" value={`$${m.totalRevenue.toFixed(0)}`} />
+                    <MobileMiniStat label="Revenue" value={`$${(cumulativeTotals?.perMachine?.[m.id]?.revenue ?? m.totalRevenue).toFixed(0)}`} />
                     <MobileMiniStat label="Orders" value={String(m.paidOrders)} />
                     <MobileMiniStat label="Items" value={String(m.totalItemsSold)} />
                   </div>
@@ -658,17 +716,23 @@ export default function MachinesPage() {
                       </div>
                     </div>
 
-                    {/* Revenue — totalRevenue is Nayax's rolling recent-sales
-                        window, not true lifetime; label it so it isn't read as
-                        all-time. Open the machine for a period-scoped figure. */}
-                    <div title="Sum of the machine's recent sales window (not lifetime). Open the machine to pick a period.">
-                      <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
-                        ${m.totalRevenue.toFixed(2)}
-                      </div>
-                      <div style={{ fontSize: 11, color: "#94a3b8" }}>
-                        recent • ${m.weeklyRevenue.toFixed(2)}/wk
-                      </div>
-                    </div>
+                    {/* Revenue — ACCURATE per-machine total from daily_sales for
+                        the selected period (falls back to the scraper figure only
+                        until totals load). */}
+                    {(() => {
+                      const periodRev = cumulativeTotals?.perMachine?.[m.id]?.revenue;
+                      const rev = periodRev != null ? periodRev : m.totalRevenue;
+                      return (
+                        <div title="Revenue for the selected period, from synced sales data.">
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
+                            ${rev.toFixed(2)}
+                          </div>
+                          <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                            {periodLabel} • ${m.weeklyRevenue.toFixed(2)}/wk
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Orders */}
                     <div>

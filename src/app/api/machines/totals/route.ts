@@ -19,7 +19,12 @@
 
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
-import { dateNDaysAgoInOperatorTz, todayInOperatorTz } from "@/lib/operator-timezone";
+import {
+  dateNDaysAgoInOperatorTz,
+  todayInOperatorTz,
+  thisMonthRangeInOperatorTz,
+  lastMonthRangeInOperatorTz,
+} from "@/lib/operator-timezone";
 import { withCache, CACHE_KEYS, TTL } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +35,7 @@ export async function GET(req: Request) {
     const daysParam = searchParams.get("days");
     const bypass = searchParams.get("fresh") === "1";
     // Build a key per window so different windows don't share a cache slot.
-    const rangeKey = `${searchParams.get("from") || ""}_${searchParams.get("to") || ""}`;
+    const rangeKey = `${searchParams.get("period") || ""}_${searchParams.get("from") || ""}_${searchParams.get("to") || ""}`;
     const cacheKey = `${CACHE_KEYS.machinesTotals}:${daysParam || "30"}:${rangeKey}`;
     if (bypass) return NextResponse.json(await buildTotals(searchParams));
     const payload = await withCache(cacheKey, TTL.machinesTotals, () => buildTotals(searchParams));
@@ -46,13 +51,21 @@ export async function GET(req: Request) {
 async function buildTotals(searchParams: URLSearchParams): Promise<Record<string, unknown>> {
   try {
     const daysParam = searchParams.get("days");
-    // Calendar range wins if valid (This Month / Last Month selectors send
-    // ?from=YYYY-MM-DD&to=YYYY-MM-DD). Otherwise fall back to ?days=N / "all".
+    // Named calendar periods computed SERVER-SIDE in the operator's timezone.
+    // The client must never compute month bounds itself — a UTC+x browser
+    // serializes "July 1 local" as "June 30" and pollutes the window.
+    const period = searchParams.get("period");
+    const namedRange =
+      period === "thisMonth" ? thisMonthRangeInOperatorTz() :
+      period === "lastMonth" ? lastMonthRangeInOperatorTz() :
+      null;
+    // Explicit calendar range also accepted (?from=YYYY-MM-DD&to=YYYY-MM-DD).
+    // Otherwise fall back to ?days=N / "all".
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     const fromParam = searchParams.get("from");
     const toParam = searchParams.get("to");
-    const isoFrom = fromParam && dateRegex.test(fromParam) ? fromParam : null;
-    const isoTo = toParam && dateRegex.test(toParam) ? toParam : null;
+    const isoFrom = namedRange?.from || (fromParam && dateRegex.test(fromParam) ? fromParam : null);
+    const isoTo = namedRange?.to || (toParam && dateRegex.test(toParam) ? toParam : null);
     // "all" means lifetime total — no lower bound on sale_date, just upper
     // bound at today (so future-dated rows don't sneak in). days=N applies
     // the rolling window from N days ago through today.

@@ -125,21 +125,16 @@ export default function MachinesPage() {
 
   const fetchTotals = useCallback(async () => {
     try {
-      // Translate the period into the totals-API query.
-      const now = new Date();
-      const iso = (d: Date) => d.toISOString().slice(0, 10);
-      let qs = "days=all";
-      if (machinesPeriod === "thisMonth") {
-        qs = `from=${iso(new Date(now.getFullYear(), now.getMonth(), 1))}&to=${iso(now)}`;
-      } else if (machinesPeriod === "month") {
-        const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const last = new Date(now.getFullYear(), now.getMonth(), 0);
-        qs = `from=${iso(first)}&to=${iso(last)}`;
-      } else if (machinesPeriod === "30d") {
-        qs = "days=30";
-      } else if (machinesPeriod === "7d") {
-        qs = "days=7";
-      }
+      // Named periods are resolved SERVER-SIDE in the operator's timezone.
+      // (Client-side month math via toISOString() shifted a day for non-UTC
+      // browsers and wrongly pulled June 30 into "This month" — tile showed
+      // $692 when July's true total was $500.)
+      const qs =
+        machinesPeriod === "thisMonth" ? "period=thisMonth" :
+        machinesPeriod === "month" ? "period=lastMonth" :
+        machinesPeriod === "30d" ? "days=30" :
+        machinesPeriod === "7d" ? "days=7" :
+        "days=all";
       const r = await fetch(`/api/machines/totals?${qs}`).then((x) => x.json());
       if (r.ok) {
         setCumulativeTotals({

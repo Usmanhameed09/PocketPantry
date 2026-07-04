@@ -53,3 +53,27 @@ export function dateNDaysAgoInOperatorTz(n: number): string {
   d.setUTCDate(d.getUTCDate() - n);
   return dateStringInOperatorTz(d);
 }
+
+/**
+ * Calendar-month bounds ("YYYY-MM-DD") in the OPERATOR's timezone.
+ *
+ * Why server-side: a browser computing `new Date(y, m, 1).toISOString()` shifts
+ * by the browser's UTC offset — from a UTC+5 browser "July 1 local" serializes
+ * as "June 30", which silently pulled June 30's sales into "This month" on the
+ * Machines page (tile said $692 while the true July total was $500).
+ */
+export function thisMonthRangeInOperatorTz(): { from: string; to: string } {
+  const today = todayInOperatorTz();           // "YYYY-MM-DD" in operator tz
+  return { from: `${today.slice(0, 7)}-01`, to: today };
+}
+
+export function lastMonthRangeInOperatorTz(): { from: string; to: string } {
+  const today = todayInOperatorTz();
+  const y = Number(today.slice(0, 4));
+  const m = Number(today.slice(5, 7));         // 1-12, current month
+  const prevY = m === 1 ? y - 1 : y;
+  const prevM = m === 1 ? 12 : m - 1;
+  const lastDay = new Date(Date.UTC(prevY, prevM, 0)).getUTCDate(); // day count of prev month
+  const mm = String(prevM).padStart(2, "0");
+  return { from: `${prevY}-${mm}-01`, to: `${prevY}-${mm}-${String(lastDay).padStart(2, "0")}` };
+}

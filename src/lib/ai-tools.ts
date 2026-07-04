@@ -327,14 +327,18 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: "get_predictions",
       description:
-        "30-day forward projections: top products by expected units OR by " +
-        "expected COGS spend. Includes seasonal multiplier and manual override " +
-        "flags. Use for 'what will I sell next month', 'expected restock cost'.",
+        "Forecasts. ALWAYS includes machineForecast: per-MACHINE predicted " +
+        "weekly revenue vs current (the Predictions page numbers) — use this " +
+        "for 'prediction/forecast of <machine>' questions and cite " +
+        "predictedWeekly/currentWeekly. Also returns 30-day product " +
+        "projections: top products by expected units OR COGS spend, with " +
+        "seasonal multipliers.",
       parameters: {
         type: "object",
         properties: {
-          by: { type: "string", enum: ["units", "cogs"], description: "Sort by 'units' (default) or 'cogs'.", default: "units" },
-          limit: { type: "integer", description: "Top N. Default 12.", default: 12 },
+          by: { type: "string", enum: ["units", "cogs"], description: "Product-projection sort: 'units' (default) or 'cogs'.", default: "units" },
+          limit: { type: "integer", description: "Top N products. Default 12.", default: 12 },
+          machineName: { type: "string", description: "Optional: fuzzy machine name ('84L', 'Baker Nissan'…) to scope the machine forecast to one machine." },
         },
       },
     },
@@ -604,7 +608,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       case "get_predictions":
         return await getPredictionsTool(
           (args.by === "cogs" ? "cogs" : "units") as "units" | "cogs",
-          Number(args.limit) || 12
+          Number(args.limit) || 12,
+          args.machineName ? String(args.machineName) : undefined
         );
       case "get_warehouse_summary":
         return await getWarehouseSummary();
@@ -680,6 +685,19 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
 // full name. "84L" resolves to "84 Lumber", "coke" picks the best Coke
 // product, and small typos still resolve. Used by machine + product lookups.
 // ─────────────────────────────────────────────────────────────────────
+
+// Packaging/brand filler ignored when deciding whether two catalog names are
+// the SAME physical product. Must stay in sync with the canonical-layer
+// backfill (scripts/backfill-product-groups.mjs) so code-side grouping and
+// DB-side product_groups agree.
+const VARIANT_NOISE = new Set([
+  "snack", "snacks", "beverage", "beverages", "drink", "drinks", "brand",
+  "pre", "priced", "price", "pack", "packs", "count", "ct", "oz", "ml", "fl",
+  "lb", "g", "gram", "grams", "case", "box", "bag", "bags", "bottle",
+  "bottles", "can", "cans", "cup", "cups", "single", "serve", "size",
+  "assorted", "variety", "original", "classic", "inc", "llc", "co",
+]);
+
 function _norm(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
@@ -977,53 +995,82 @@ async function getProductDetails(name: string): Promise<ToolResult> {
     return { error: `No product matched "${name}"` };
   }
 
-  // Among matches that share ALL the query's key words, prefer the one that
-  // ACTUALLY HAS SALES. The bulk UPC import left near-duplicate catalog rows —
-  // e.g. "Takis Snack Takis Pix Fuego" (0 sales, but literally contains "Takis
-  // Pix") next to "Takis Fuego Pix" (words reordered, but really selling). Word
-  // order shouldn't decide it — sales should. So gather every candidate whose
-  // name contains all query tokens and pick the real seller.
-  let product = ranked[0].item;
-  const topScore = ranked[0].score;
-  const qTokens = name.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
-  const containsAllTokens = (nm: string) => {
-    const low = nm.toLowerCase();
-    return qTokens.length > 0 && qTokens.every((t) => low.includes(t));
+  // ── Variant grouping (canonical-layer rule, same as the backfill script) ──
+  // Two names with the same NOISE-STRIPPED token set are the SAME physical
+  // product (word order / packaging filler differ — "Takis Snack Takis Pix
+  // Fuego" vs "Takis Fuego Pix", "AriZona Beverages AriZona Tea Sweet $.99"
+  // vs "Arizona Sweet Tea"). Different keys are DIFFERENT products ("Cheetos"
+  // vs "Cheetos Flamin Hot") and must never be conflated: the "Velocity of
+  // Cheetos" bug came from swapping an exact match for a better-selling
+  // different flavor.
+  const variantKey = (nm: string): string | null => {
+    const t = nm.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/)
+      .filter((w) => w && !VARIANT_NOISE.has(w) && !/^\d+$/.test(w) && w.length > 1);
+    return t.length >= 2 ? [...new Set(t)].sort().join("|") : null;
   };
-  let contenders = ranked.filter((r) => containsAllTokens(r.item.name as string)).slice(0, 12);
-  if (contenders.length <= 1) {
-    // No shared-token cluster — fall back to a close-score window.
-    contenders = ranked.filter((r) => r.score >= topScore - 12).slice(0, 8);
+  const normName = (nm: string) => nm.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+  let product = ranked[0].item;
+  type ProdRow = typeof product;
+
+  // Resolve the picked product's variant GROUP. Prefer the DB group (products.
+  // group_id, populated by the canonical-layer backfill); fall back to key
+  // matching over the candidate list until the migration has run.
+  let groupMembers: ProdRow[] = [product];
+  try {
+    const { data: g } = await supabase
+      .from("products").select("group_id").eq("id", product.id as string).maybeSingle();
+    if (g?.group_id) {
+      const { data: members } = await supabase
+        .from("products").select(cols).eq("group_id", g.group_id as string);
+      if (members && members.length > 0) groupMembers = members as ProdRow[];
+    }
+  } catch { /* pre-migration: column may not exist yet */ }
+  if (groupMembers.length === 1) {
+    const key = variantKey(product.name as string);
+    groupMembers = (products || []).filter((p) =>
+      p.id === product.id ||
+      (key !== null && variantKey(p.name as string) === key) ||
+      normName(p.name as string) === normName(product.name as string)
+    );
   }
-  if (contenders.length > 1) {
+  const groupIds = groupMembers.map((m) => m.id as string);
+
+  // Within the group, display the variant that actually SELLS (its name/price
+  // data is the live one). Never swaps to a different-keyed product.
+  if (groupMembers.length > 1) {
     const since60 = dateNDaysAgoInOperatorTz(60);
-    const cids = contenders.map((c) => c.item.id as string);
-    const { data: cSales } = await supabase
+    const { data: gSales } = await supabase
       .from("daily_sales").select("product_id, units_sold")
-      .in("product_id", cids).gte("sale_date", since60).range(0, 9999);
+      .in("product_id", groupIds).gte("sale_date", since60).range(0, 9999);
     const unitsById = new Map<string, number>();
-    for (const r of cSales || []) {
+    for (const r of gSales || []) {
       const k = r.product_id as string;
       unitsById.set(k, (unitsById.get(k) || 0) + ((r.units_sold as number) || 0));
     }
-    const best = contenders
-      .map((c) => ({ item: c.item, units: unitsById.get(c.item.id as string) || 0 }))
+    const best = groupMembers
+      .map((m) => ({ item: m, units: unitsById.get(m.id as string) || 0 }))
       .sort((a, b) => b.units - a.units)[0];
-    if (best && best.units > 0) product = best.item; // only override for a real seller
+    if (best && best.units > 0) product = best.item;
   }
 
+  // DISTINCT products that also matched (different variant key) — surfaced so
+  // the answer can disambiguate ("you also have Cheetos Flamin Hot…").
+  const pickedKey = variantKey(product.name as string);
   const alsoMatched = ranked
-    .filter((r) => r.item.id !== product.id && r.score >= 72)
+    .filter((r) => !groupIds.includes(r.item.id as string) && r.score >= 72)
+    .filter((r) => variantKey(r.item.name as string) !== pickedKey)
     .slice(0, 3)
     .map((r) => r.item.name as string);
   const pid = product.id as string;
 
-  // 30-day sales + machine list
+  // 30-day sales + machine list — summed across ALL variants in the group so
+  // stock/sales split over duplicate rows still adds up to the truth.
   const since = dateNDaysAgoInOperatorTz(30);
   const { data: salesRows } = await supabase
     .from("daily_sales")
     .select("units_sold, revenue, machine_id, machines(name)")
-    .eq("product_id", pid)
+    .in("product_id", groupIds)
     .gte("sale_date", since)
     .range(0, 9999);
 
@@ -1040,13 +1087,15 @@ async function getProductDetails(name: string): Promise<ToolResult> {
     machineSet.set(mid, e);
   }
 
-  // Warehouse on-hand
-  const { data: wh } = await supabase
+  // Warehouse on-hand — summed across the variant group. (The "0 units of
+  // Arizona Sweet Tea" bug: stock sat on the "$.99" duplicate while the
+  // lookup read only the picked variant's row.)
+  const { data: whRows } = await supabase
     .from("warehouse_inventory")
     .select("on_hand")
     .eq("company_id", companyId)
-    .eq("product_id", pid)
-    .maybeSingle();
+    .in("product_id", groupIds);
+  const warehouseOnHand = (whRows || []).reduce((s, w) => s + ((w.on_hand as number) || 0), 0);
 
   // Seasonality from prediction-api
   const seasonality = await fetchProductSeasonality(product.name as string);
@@ -1068,11 +1117,16 @@ async function getProductDetails(name: string): Promise<ToolResult> {
       dailyVelocity: Math.round((units30d / 30) * 100) / 100,
     },
     inMachines: Array.from(machineSet.values()).sort((a, b) => b.units - a.units).slice(0, 10),
-    warehouseOnHand: (wh?.on_hand as number) || 0,
+    warehouseOnHand,
     seasonality,
-    // Other products that also matched the query, if any — the answer is for
-    // the best match above; mention these only if the operator might have
-    // meant a different one.
+    // Duplicate catalog variants included in these numbers (stock + sales are
+    // summed across them — they're the same physical product).
+    ...(groupMembers.length > 1
+      ? { variantNames: groupMembers.map((m) => m.name as string) }
+      : {}),
+    // DIFFERENT products that also matched the query (e.g. other flavors).
+    // The answer above is for the closest name — mention these so the
+    // operator can redirect if they meant one of them.
     ...(alsoMatched.length ? { alsoMatched } : {}),
   };
 }
@@ -1773,7 +1827,7 @@ async function getWeeklyTrendsTool(): Promise<ToolResult> {
 // Tool: get_predictions — 30-day forward projections
 // ─────────────────────────────────────────────────────────────────────
 
-async function getPredictionsTool(by: "units" | "cogs", limit: number): Promise<ToolResult> {
+async function getPredictionsTool(by: "units" | "cogs", limit: number, machineName?: string): Promise<ToolResult> {
   const { getProjections } = await import("@/lib/projection-engine");
   const projections = await getProjections();
   const withDemand = projections.filter((p) => p.projectedUnits30d > 0);
@@ -1782,22 +1836,70 @@ async function getPredictionsTool(by: "units" | "cogs", limit: number): Promise<
   const sorted = [...withDemand].sort((a, b) =>
     by === "cogs" ? b.projectedCogs30d - a.projectedCogs30d : b.projectedUnits30d - a.projectedUnits30d
   );
+
+  // Per-MACHINE weekly revenue forecast from the prediction service — the
+  // same numbers the Predictions page cards show. Without this, "forecast for
+  // 84 Lumber" had no data source and the model improvised from product rows
+  // (the $18-vs-$244/wk bug).
+  let machineForecast: Array<Record<string, unknown>> | null = null;
+  let machineForecastNote: string | null = null;
+  const predBase = process.env.PREDICTION_API_URL || "";
+  if (predBase) {
+    try {
+      const res = await fetch(`${predBase}/api/predictions`, { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        let mf = (data?.machineForecast || []) as Array<{
+          machine?: string; location?: string; currentWeekly?: number;
+          predictedWeekly?: number; change?: number; confidence?: number;
+          topProduct?: string; weakProduct?: string; daysUntilRefill?: number;
+        }>;
+        if (machineName && mf.length > 0) {
+          const ranked = fuzzyRank(machineName, mf, (m) => m.machine || "");
+          if (ranked.length > 0) mf = [ranked[0].item];
+          else machineForecastNote = `No machine forecast matched "${machineName}" — full fleet returned.`;
+        }
+        machineForecast = mf.map((m) => ({
+          machine: m.machine,
+          location: m.location,
+          currentWeeklyRevenue: m.currentWeekly,
+          predictedWeeklyRevenue: m.predictedWeekly,
+          changePct: m.change,
+          confidencePct: m.confidence,
+          topProduct: m.topProduct,
+          weakProduct: m.weakProduct,
+          daysUntilRefill: m.daysUntilRefill,
+        }));
+      } else {
+        machineForecastNote = "Prediction service unreachable — machine forecast unavailable right now.";
+      }
+    } catch {
+      machineForecastNote = "Prediction service unreachable — machine forecast unavailable right now.";
+    }
+  } else {
+    machineForecastNote = "Prediction service not configured — machine forecast unavailable.";
+  }
+
   return {
-    horizonDays: 30,
-    totalProjectedUnits: Math.round(totalUnits),
-    totalProjectedCogs: Math.round(totalCogs * 100) / 100,
-    productCount: withDemand.length,
-    sortBy: by,
-    top: sorted.slice(0, Math.min(Math.max(limit, 1), 30)).map((p) => ({
-      product: p.productName,
-      category: p.category,
-      projectedUnits30d: p.projectedUnits30d,
-      projectedCogs30d: Math.round(p.projectedCogs30d * 100) / 100,
-      velocityPerDay: p.velocityPerDay,
-      seasonalMultiplier: p.seasonalMultiplier,
-      hasManualOverride: p.override !== null,
-      explanation: p.explanation,
-    })),
+    machineForecast,
+    ...(machineForecastNote ? { machineForecastNote } : {}),
+    productProjections: {
+      horizonDays: 30,
+      totalProjectedUnits: Math.round(totalUnits),
+      totalProjectedCogs: Math.round(totalCogs * 100) / 100,
+      productCount: withDemand.length,
+      sortBy: by,
+      top: sorted.slice(0, Math.min(Math.max(limit, 1), 30)).map((p) => ({
+        product: p.productName,
+        category: p.category,
+        projectedUnits30d: p.projectedUnits30d,
+        projectedCogs30d: Math.round(p.projectedCogs30d * 100) / 100,
+        velocityPerDay: p.velocityPerDay,
+        seasonalMultiplier: p.seasonalMultiplier,
+        hasManualOverride: p.override !== null,
+        explanation: p.explanation,
+      })),
+    },
   };
 }
 

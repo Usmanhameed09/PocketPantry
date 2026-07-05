@@ -1244,9 +1244,11 @@ async function getSalesSummary(args: {
     resolvedMachine = ranked[0].item.name as string;
   }
 
-  // Fuzzy product-name filter. CRITICAL: sums across ALL catalog variants that
-  // match the name (the bulk import left duplicate rows — e.g. two "Takis Pix"
-  // records — and sales may sit on any of them). No duplicate can hide sales.
+  // Fuzzy product-name filter. Sums across the best match's VARIANT GROUP —
+  // duplicate rows of the SAME product ("Takis Fuego Pix" / "Takis Snack Takis
+  // Pix Fuego") so no twin can hide sales. It must NOT widen to other flavors:
+  // the old >=40 threshold pulled "TAKIS Purple" into "Takis Pix" totals
+  // (8 units reported when the true answer was 4 — caught by the eval suite).
   let productIds: string[] | undefined;
   let resolvedProducts: string[] | undefined;
   if (args.productName) {
@@ -1269,8 +1271,28 @@ async function getSalesSummary(args: {
     if (matched.length === 0) {
       return { error: `No product matched "${args.productName}".` };
     }
-    productIds = matched.slice(0, 50).map((p) => p.id as string);
-    resolvedProducts = matched.slice(0, 50).map((p) => p.name as string);
+    // Narrow to the top match's variant group: same noise-stripped token key,
+    // same normalized name, or (strict) containing every query token.
+    const ranked = matched
+      .map((p) => ({ p, score: nameMatchScore(args.productName!, p.name as string) }))
+      .sort((a, b) => b.score - a.score);
+    const top = ranked[0].p;
+    const key = (nm: string): string | null => {
+      const t = nm.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/)
+        .filter((w) => w && !VARIANT_NOISE.has(w) && !/^\d+$/.test(w) && w.length > 1);
+      return t.length >= 2 ? [...new Set(t)].sort().join("|") : null;
+    };
+    const nn = (nm: string) => nm.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const qTokens = tokens.filter((t) => t.length >= 3);
+    const topKey = key(top.name as string);
+    const group = ranked.filter(({ p }) =>
+      p.id === top.id ||
+      (topKey !== null && key(p.name as string) === topKey) ||
+      nn(p.name as string) === nn(top.name as string) ||
+      (qTokens.length >= 2 && qTokens.every((t) => (p.name as string).toLowerCase().includes(t)))
+    ).map(({ p }) => p);
+    productIds = group.slice(0, 50).map((p) => p.id as string);
+    resolvedProducts = group.slice(0, 50).map((p) => p.name as string);
   }
 
   // Paginate through daily_sales — Supabase caps at 1000 rows per page.

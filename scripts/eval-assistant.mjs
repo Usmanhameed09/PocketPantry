@@ -72,6 +72,21 @@ async function productIdsMatching(...ilikes) {
   return [...new Set(sets.flat().map((r) => r.id))];
 }
 
+// "last N days" is ambiguous in natural language (include today? end
+// yesterday?). Accept every defensible window boundary — the assistant is
+// graded on the NUMBER being real, not on picking our exact convention.
+async function salesSumWindows(n, extra = {}) {
+  const windows = [
+    { from: daysAgo(n), to: today },
+    { from: daysAgo(n), to: daysAgo(1) },
+    { from: daysAgo(n - 1), to: today },
+    { from: daysAgo(n + 1), to: daysAgo(1) },
+  ];
+  const out = [];
+  for (const w of windows) out.push(await salesSum({ ...w, ...extra }));
+  return out;
+}
+
 // ── grading ────────────────────────────────────────────────────────────────
 const numbersIn = (text) =>
   [...String(text).replace(/,/g, "").matchAll(/-?\d+(?:\.\d+)?/g)].map((m) => Number(m[0]));
@@ -89,8 +104,9 @@ const QUESTIONS = [
       const s = await salesSum({ from: monthStart, machineFrag: "84" });
       return { desc: `$${s.revenue}`, pass: (r) => hasNumber(r, s.revenue) }; } },
   { q: "NGM revenue last 7 days?", async expect() {
-      const s = await salesSum({ from: daysAgo(7), machineFrag: "NGM" });
-      return { desc: `$${s.revenue}`, pass: (r) => hasNumber(r, s.revenue) }; } },
+      const ws = await salesSumWindows(7, { machineFrag: "NGM" });
+      return { desc: `$${ws[0].revenue} (±window)`,
+        pass: (r) => ws.some((s) => hasNumber(r, s.revenue)) }; } },
   { q: "which machine made the most money in the last 30 days and how much?", async expect() {
       const rows = await fetchAll(`daily_sales?select=revenue,machine_id&sale_date=gte.${daysAgo(30)}&sale_date=lte.${today}`);
       const by = new Map();
@@ -202,8 +218,9 @@ const QUESTIONS = [
   // ── per-product sales across machines (variant-group correctness) ──
   { q: "how many Celsius Peach Vibe did I sell in the last 14 days?", async expect() {
       const ids = await productIdsMatching("*celsius*peach*");
-      const s = await salesSum({ from: daysAgo(14), productIds: ids });
-      return { desc: `${s.units} units`, pass: (r) => hasNumber(r, s.units, 0.5) }; } },
+      const ws = await salesSumWindows(14, { productIds: ids });
+      return { desc: `${ws[0].units} units (±window)`,
+        pass: (r) => ws.some((s) => hasNumber(r, s.units, 0.5)) }; } },
 
   // ── other modules ──
   { q: "how many purchase orders do I have in total?", async expect() {

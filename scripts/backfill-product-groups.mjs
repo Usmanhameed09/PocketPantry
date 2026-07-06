@@ -63,11 +63,29 @@ const NOISE = new Set([
   "bottles", "can", "cans", "cup", "cups", "single", "serve", "size",
   "assorted", "variety", "original", "classic", "inc", "llc", "co",
 ]);
-const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+const norm = (s) => s.toLowerCase().replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();
 const tokens = (s) => norm(s).split(" ").filter(Boolean);
 const meaningfulKey = (s) => {
-  const t = tokens(s).filter((w) => !NOISE.has(w) && !/^\d+$/.test(w) && w.length > 1);
+  const t = tokens(s).filter((w) => !NOISE.has(w) && !/^[\d.]+$/.test(w) && w.length > 1);
   return t.length >= 2 ? [...new Set(t)].sort().join("|") : null;
+};
+
+// Size/packaging guards: "Diet Coke 12 oz Cans" and "Diet Coke 16.9 oz
+// Bottle" share a meaningful key but are DIFFERENT sellable SKUs. Two names
+// may only merge when their number signatures (12 vs 16.9) and packaging
+// words (can vs bottle vs bag vs box) don't contradict each other. An empty
+// signature is compatible with anything ("Diet coke 12 oz" + "... 12 oz Cans").
+const PACKAGING = new Set(["can", "cans", "bottle", "bottles", "bag", "bags", "box", "cup", "cups", "pouch"]);
+const numberSig = (s) =>
+  tokens(s).filter((w) => /^[\d.]+$/.test(w) && w !== ".").sort().join(",");
+const packSig = (s) =>
+  [...new Set(tokens(s).filter((w) => PACKAGING.has(w)).map((w) => w.replace(/s$/, "")))].sort().join(",");
+const sigsCompatible = (a, b) => {
+  const na = numberSig(a), nb = numberSig(b);
+  if (na && nb && na !== nb) return false;
+  const pa = packSig(a), pb = packSig(b);
+  if (pa && pb && pa !== pb) return false;
+  return true;
 };
 const barcodeKey = (b) => {
   if (!b) return null;
@@ -89,21 +107,32 @@ async function main() {
   const soldRows = await fetchAll("daily_sales", "product_id,units_sold");
   const sold = new Set(soldRows.filter((r) => (r.units_sold || 0) > 0).map((r) => r.product_id));
 
-  // Cluster by each key type
-  for (const keyFn of [
-    (p) => barcodeKey(p.barcode) && `bc:${p.company_id}:${barcodeKey(p.barcode)}`,
-    (p) => `nm:${p.company_id}:${norm(p.name)}`,
-    (p) => { const k = meaningfulKey(p.name); return k && `tk:${p.company_id}:${k}`; },
-  ]) {
+  // Cluster by each key type. The token-key pass additionally requires
+  // compatible size/packaging signatures pairwise (see sigsCompatible).
+  const passes = [
+    { keyFn: (p) => barcodeKey(p.barcode) && `bc:${p.company_id}:${barcodeKey(p.barcode)}`, guarded: false },
+    { keyFn: (p) => `nm:${p.company_id}:${norm(p.name)}`, guarded: false },
+    { keyFn: (p) => { const k = meaningfulKey(p.name); return k && `tk:${p.company_id}:${k}`; }, guarded: true },
+  ];
+  for (const { keyFn, guarded } of passes) {
     const buckets = new Map();
     for (const p of products) {
       const k = keyFn(p);
       if (!k) continue;
       if (!buckets.has(k)) buckets.set(k, []);
-      buckets.get(k).push(p.id);
+      buckets.get(k).push(p);
     }
-    for (const ids of buckets.values()) {
-      for (let i = 1; i < ids.length; i++) union(ids[0], ids[i]);
+    for (const members of buckets.values()) {
+      if (!guarded) {
+        for (let i = 1; i < members.length; i++) union(members[0].id, members[i].id);
+        continue;
+      }
+      // Guarded: union only sig-compatible pairs.
+      for (let i = 0; i < members.length; i++) {
+        for (let j = i + 1; j < members.length; j++) {
+          if (sigsCompatible(members[i].name, members[j].name)) union(members[i].id, members[j].id);
+        }
+      }
     }
   }
 

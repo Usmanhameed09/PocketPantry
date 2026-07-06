@@ -698,6 +698,54 @@ const VARIANT_NOISE = new Set([
   "assorted", "variety", "original", "classic", "inc", "llc", "co",
 ]);
 
+// ── Semantic (vector) fallback — Phase 1 of the RAG plan ──────────────
+// When exact/fuzzy name resolution fails, embed the query and search the
+// ai_entities pgvector index (machines, product groups, active products,
+// leads). Silently no-ops if the index isn't installed yet, so this is safe
+// to ship ahead of the migration.
+type SemanticHit = { entityType: string; refId: string; name: string; similarity: number };
+async function semanticResolve(query: string, types?: string[], count = 8): Promise<SemanticHit[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || !query) return [];
+  try {
+    const er = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "text-embedding-3-small", input: query }),
+    });
+    if (!er.ok) return [];
+    const emb = (await er.json())?.data?.[0]?.embedding;
+    if (!emb) return [];
+    const supabase = createServerClient();
+    const { data, error } = await supabase.rpc("match_ai_entities", {
+      query_embedding: emb, match_count: count, filter_type: null,
+    });
+    if (error || !data) return [];
+    return (data as Array<{ entity_type: string; ref_id: string; name: string; similarity: number }>)
+      .filter((d) => !types || types.includes(d.entity_type))
+      .map((d) => ({ entityType: d.entity_type, refId: d.ref_id, name: d.name, similarity: d.similarity }));
+  } catch {
+    return [];
+  }
+}
+
+// Expand semantic product/product_group hits into product rows (groups expand
+// to all their variants so downstream group-summing keeps working).
+async function semanticProductRows(query: string, cols: string): Promise<Array<Record<string, unknown>>> {
+  const hits = (await semanticResolve(query, ["product", "product_group"], 8))
+    .filter((h) => h.similarity >= 0.5);
+  if (hits.length === 0) return [];
+  const supabase = createServerClient();
+  const rows: Array<Record<string, unknown>> = [];
+  for (const h of hits.slice(0, 3)) {
+    const { data } = h.entityType === "product_group"
+      ? await supabase.from("products").select(cols).eq("group_id", h.refId)
+      : await supabase.from("products").select(cols).eq("id", h.refId);
+    rows.push(...((data || []) as unknown as Array<Record<string, unknown>>));
+  }
+  return rows;
+}
+
 function _norm(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
@@ -990,9 +1038,17 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   // Fuzzy-rank and answer for the BEST match — never demand the exact name.
   // In the fallback path (no substring hit) require a CONFIDENT score so a bad
   // typo resolves to nothing ("did you mean…?") rather than a wrong product.
-  const ranked = fuzzyRank(name, products, (p) => p.name as string);
+  let ranked = fuzzyRank(name, products, (p) => p.name as string);
   if (ranked.length === 0 || (usedFallback && ranked[0].score < 60)) {
-    return { error: `No product matched "${name}"` };
+    // Semantic (vector) fallback — catches paraphrases and heavy typos the
+    // string matcher can't ("sparkling peach celsius drink").
+    const semRows = await semanticProductRows(name, cols);
+    if (semRows.length > 0) {
+      products = semRows as typeof products;
+      ranked = semRows.map((p) => ({ item: p as NonNullable<typeof products>[number], score: 60 }));
+    } else {
+      return { error: `No product matched "${name}"` };
+    }
   }
 
   // ── Variant grouping (canonical-layer rule, same as the backfill script) ──
@@ -1236,12 +1292,21 @@ async function getSalesSummary(args: {
   if (!machineId && args.machineName) {
     const { data: allMachines } = await supabase.from("machines").select("id, name");
     const ranked = fuzzyRank(args.machineName, allMachines || [], (m) => m.name as string);
-    if (ranked.length === 0) {
-      const names = (allMachines || []).map((m) => m.name).join(", ");
-      return { error: `No machine matched "${args.machineName}". Machines are: ${names}` };
+    if (ranked.length > 0) {
+      machineId = ranked[0].item.id as string;
+      resolvedMachine = ranked[0].item.name as string;
+    } else {
+      // Semantic fallback for paraphrases ("the lumber yard machine").
+      const sem = (await semanticResolve(args.machineName, ["machine"], 3))
+        .filter((h) => h.similarity >= 0.5);
+      if (sem.length > 0) {
+        machineId = sem[0].refId;
+        resolvedMachine = sem[0].name;
+      } else {
+        const names = (allMachines || []).map((m) => m.name).join(", ");
+        return { error: `No machine matched "${args.machineName}". Machines are: ${names}` };
+      }
     }
-    machineId = ranked[0].item.id as string;
-    resolvedMachine = ranked[0].item.name as string;
   }
   // Every result self-describes its scope so a fleet-wide total can never be
   // mistaken for (or presented as) a single machine's number.
@@ -1276,7 +1341,13 @@ async function getSalesSummary(args: {
       }
     }
     if (matched.length === 0) {
-      return { error: `No product matched "${args.productName}".` };
+      // Semantic fallback before giving up.
+      const semRows = await semanticProductRows(args.productName, "id, name");
+      if (semRows.length > 0) {
+        matched = semRows as typeof matched;
+      } else {
+        return { error: `No product matched "${args.productName}".` };
+      }
     }
     // Narrow to the top match's variant group: same noise-stripped token key,
     // same normalized name, or (strict) containing every query token.

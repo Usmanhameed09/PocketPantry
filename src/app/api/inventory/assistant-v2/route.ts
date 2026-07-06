@@ -128,6 +128,13 @@ For ANY question about revenue, units, or transactions over a period:
   - "best day" / "worst day" → groupBy='day'
   - Specific product and/or machine → pass productName / machineName (fuzzy)
 
+SCOPE DISCIPLINE (hard rule): if the question names a machine or product, the
+tool call MUST include machineName/productName. Before answering, check the
+result's "scope" field: if it says "ALL MACHINES" but the question was about
+one machine, your number is fleet-wide and WRONG for that question — re-call
+with machineName instead of answering. Never attribute a fleet-wide total to
+a single machine or product.
+
 NEVER use query_table on daily_sales for these — query_table returns raw
 unaggregated rows with no machine names, only UUIDs. The user sees a
 useless dump like "Machine ID: 8d717229-…  Revenue: $1.50, $1.50, $3.50".

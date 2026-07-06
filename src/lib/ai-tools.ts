@@ -1243,6 +1243,13 @@ async function getSalesSummary(args: {
     machineId = ranked[0].item.id as string;
     resolvedMachine = ranked[0].item.name as string;
   }
+  // Every result self-describes its scope so a fleet-wide total can never be
+  // mistaken for (or presented as) a single machine's number.
+  const scope = resolvedMachine
+    ? `machine: ${resolvedMachine}`
+    : machineId
+      ? `machine id: ${machineId}`
+      : "ALL MACHINES (fleet-wide — NOT a single machine's number)";
 
   // Fuzzy product-name filter. Sums across the best match's VARIANT GROUP —
   // duplicate rows of the SAME product ("Takis Fuego Pix" / "Takis Snack Takis
@@ -1317,6 +1324,7 @@ async function getSalesSummary(args: {
 
   if (rows.length === 0) {
     return {
+      scope,
       startDate: args.startDate,
       endDate: args.endDate,
       totals: { revenue: 0, units: 0, transactions: 0, dayCount: 0 },
@@ -1347,6 +1355,7 @@ async function getSalesSummary(args: {
 
   if (args.groupBy === "none") {
     return {
+      scope,
       startDate: args.startDate, endDate: args.endDate, totals, groupBy: "none", breakdown: [],
       ...(resolvedMachine ? { machine: resolvedMachine } : {}),
       ...(resolvedProducts ? { matchedProducts: resolvedProducts } : {}),
@@ -1405,6 +1414,7 @@ async function getSalesSummary(args: {
     });
 
   return {
+    scope,
     startDate: args.startDate,
     endDate: args.endDate,
     totals,

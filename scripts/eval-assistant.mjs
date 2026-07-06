@@ -168,23 +168,86 @@ const QUESTIONS = [
   { q: "Velocity of Cheetos", async expect() {
       return { desc: "answers plain Cheetos or flags variants",
         pass: (r) => /cheetos/i.test(r) && (/also have|variant|meant/i.test(r) || !/flamin|limon|crunchy/i.test(r)) }; } },
+
+  // ── date handling ──
+  { q: "how much revenue did we make yesterday?", async expect() {
+      const s = await salesSum({ from: daysAgo(1), to: daysAgo(1) });
+      return { desc: `$${s.revenue}`, pass: (r) => hasNumber(r, s.revenue) }; } },
+  { q: "how much did we make on June 15 2026?", async expect() {
+      const s = await salesSum({ from: "2026-06-15", to: "2026-06-15" });
+      return { desc: `$${s.revenue}`, pass: (r) => hasNumber(r, s.revenue) }; } },
+
+  // ── rankings ──
+  { q: "what is my top selling product this month by units?", async expect() {
+      const rows = await fetchAll(`daily_sales?select=units_sold,product_id&sale_date=gte.${monthStart}&sale_date=lte.${today}`);
+      const by = new Map();
+      for (const r of rows) by.set(r.product_id, (by.get(r.product_id) || 0) + (r.units_sold || 0));
+      const [pid, units] = [...by.entries()].sort((a, b) => b[1] - a[1])[0];
+      const prod = (await fetchAll(`products?select=id,name&id=eq.${pid}`))[0];
+      const token = prod.name.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 3)[0];
+      return { desc: `${prod.name} (${units}u)`,
+        pass: (r) => r.toLowerCase().includes(token) && hasNumber(r, units, 0.5) }; } },
+  { q: "top product at NGM this month?", async expect() {
+      const mid = await machineIdByName("NGM");
+      const rows = (await fetchAll(`daily_sales?select=units_sold,product_id,machine_id&sale_date=gte.${monthStart}&sale_date=lte.${today}`))
+        .filter((r) => r.machine_id === mid);
+      if (rows.length === 0) return { desc: "no sales — any honest answer", pass: (r) => /no sales|no data|hasn't sold|0/i.test(r) };
+      const by = new Map();
+      for (const r of rows) by.set(r.product_id, (by.get(r.product_id) || 0) + (r.units_sold || 0));
+      const [pid] = [...by.entries()].sort((a, b) => b[1] - a[1])[0];
+      const prod = (await fetchAll(`products?select=id,name&id=eq.${pid}`))[0];
+      const token = prod.name.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 3)[0];
+      return { desc: prod.name, pass: (r) => r.toLowerCase().includes(token) }; } },
+
+  // ── per-product sales across machines (variant-group correctness) ──
+  { q: "how many Celsius Peach Vibe did I sell in the last 14 days?", async expect() {
+      const ids = await productIdsMatching("*celsius*peach*");
+      const s = await salesSum({ from: daysAgo(14), productIds: ids });
+      return { desc: `${s.units} units`, pass: (r) => hasNumber(r, s.units, 0.5) }; } },
+
+  // ── other modules ──
+  { q: "how many purchase orders do I have in total?", async expect() {
+      const rows = await fetchAll(`purchase_orders?select=id`);
+      return { desc: `${rows.length}`, pass: (r) => hasNumber(r, rows.length, 0.5) }; } },
+  { q: "how many products are marked Active in my catalog?", async expect() {
+      const rows = await fetchAll(`products?select=id&status=eq.Active`);
+      return { desc: `${rows.length}`, pass: (r) => hasNumber(r, rows.length, 0.5) }; } },
+
+  // ── multi-turn follow-up (conversation grounding) ──
+  { q: [
+      { role: "user", content: "how much did 84 Lumber make this month?" },
+      { role: "assistant", content: "Let me check that for you." },
+      { role: "user", content: "and last month?" },
+    ],
+    label: "FOLLOW-UP: 84 Lumber... 'and last month?'",
+    async expect() {
+      const t = today, y = Number(t.slice(0, 4)), m = Number(t.slice(5, 7));
+      const py = m === 1 ? y - 1 : y, pm = m === 1 ? 12 : m - 1;
+      const mm = String(pm).padStart(2, "0");
+      const lastDay = new Date(Date.UTC(py, pm, 0)).getUTCDate();
+      const s = await salesSum({ from: `${py}-${mm}-01`, to: `${py}-${mm}-${lastDay}`, machineFrag: "84" });
+      return { desc: `$${s.revenue} (last month)`, pass: (r) => hasNumber(r, s.revenue) }; } },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────
 async function askAssistant(q) {
+  // q is either a single user question (string) or a full messages array
+  // (multi-turn follow-up cases).
+  const messages = Array.isArray(q) ? q : [{ role: "user", content: q }];
   const res = await fetch(`${APP}/api/inventory/assistant-v2`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages: [{ role: "user", content: q }] }),
+    body: JSON.stringify({ messages }),
   });
   const d = await res.json().catch(() => ({}));
   if (!d.success) throw new Error(d.error || `HTTP ${res.status}`);
   return d.reply || "";
 }
+const qLabel = (item) => item.label || (Array.isArray(item.q) ? item.q.at(-1).content : item.q);
 
 async function main() {
   if (process.argv.includes("--list")) {
-    QUESTIONS.forEach((x, i) => console.log(`${i}. ${x.q}`));
+    QUESTIONS.forEach((x, i) => console.log(`${i}. ${qLabel(x)}`));
     return;
   }
   const onlyIdx = process.argv.indexOf("--only");
@@ -199,11 +262,11 @@ async function main() {
       reply = await askAssistant(item.q);
       ok = expected.pass(reply);
     } catch (e) { ok = false; err = String(e.message || e); }
-    if (ok) { pass++; console.log(`  PASS  [${i}] ${item.q}  (expected ${expected?.desc})`); }
+    if (ok) { pass++; console.log(`  PASS  [${i}] ${qLabel(item)}  (expected ${expected?.desc})`); }
     else {
       fail++;
-      failures.push({ i, q: item.q, expected: expected?.desc, reply: (reply || err || "").slice(0, 220) });
-      console.log(`X FAIL  [${i}] ${item.q}\n        expected: ${expected?.desc}\n        got: ${(reply || err || "").slice(0, 200).replace(/\n/g, " ")}`);
+      failures.push({ i, q: qLabel(item), expected: expected?.desc, reply: (reply || err || "").slice(0, 220) });
+      console.log(`X FAIL  [${i}] ${qLabel(item)}\n        expected: ${expected?.desc}\n        got: ${(reply || err || "").slice(0, 200).replace(/\n/g, " ")}`);
     }
     await new Promise((r) => setTimeout(r, 1500)); // pace — avoid 429 bursts
   }

@@ -236,6 +236,48 @@ ANSWER STYLE
 - For dates: today is in miniSnapshot.today. "Yesterday" = subtract 1.
   "Last Monday" = compute from today. If ambiguous, ask.`;
 
+// ── Verification gate (RAG Phase 3) ─────────────────────────────────────────
+// After the model produces a final answer, cross-check that every BUSINESS
+// number in it actually appears in a tool result or the snapshot. A number
+// that doesn't is almost always mental math (the top hallucination source) —
+// we bounce ONE corrective turn asking the model to recompute via calculate()
+// or fix it. Conservative on what must be grounded, to avoid nagging good
+// answers: only money amounts and sizeable quantities; years/dates/small ints
+// are exempt.
+function unverifiedNumbers(reply: string, groundedText: string): string[] {
+  const groundedNums = new Set(
+    [...groundedText.replace(/,/g, "").matchAll(/-?\d+(?:\.\d+)?/g)].map((m) => m[0]),
+  );
+  const near = (v: number) => {
+    // Accept the value in any reasonable rounded form the model might print.
+    const forms = [v, Math.round(v), Math.round(v * 10) / 10, Math.round(v * 100) / 100];
+    return forms.some((f) => {
+      if (groundedNums.has(String(f))) return true;
+      // tolerance scan for rounding drift (e.g. 142.6 vs 142.62)
+      for (const g of groundedNums) {
+        const gn = Number(g);
+        if (Number.isFinite(gn) && Math.abs(gn - v) <= Math.max(0.05, Math.abs(v) * 0.01)) return true;
+      }
+      return false;
+    });
+  };
+  const stripped = reply.replace(/\b(19|20)\d{2}\b/g, " ").replace(/\d{4}-\d{2}-\d{2}/g, " "); // drop years/ISO dates
+  const candidates = new Map<string, number>();
+  // $-amounts
+  for (const m of stripped.matchAll(/\$\s?(-?\d[\d,]*(?:\.\d+)?)/g)) {
+    const v = Number(m[1].replace(/,/g, ""));
+    if (Number.isFinite(v) && Math.abs(v) >= 1) candidates.set(m[1], v);
+  }
+  // quantities followed by a unit word
+  for (const m of stripped.matchAll(/(-?\d[\d,]*(?:\.\d+)?)\s*(?:units?|orders?|sold|leads?|items?|transactions?|machines?|cases?)\b/gi)) {
+    const v = Number(m[1].replace(/,/g, ""));
+    if (Number.isFinite(v) && Math.abs(v) >= 20) candidates.set(m[1], v);
+  }
+  const bad: string[] = [];
+  for (const [label, v] of candidates) if (!near(v)) bad.push(label);
+  return bad;
+}
+
 // Debug probe: GET returns which tools are registered. Lets us verify
 // that a deploy actually picked up the latest tool registry.
 export async function GET() {
@@ -277,7 +319,9 @@ export async function POST(req: Request) {
     // concluding "no data") plus calculate calls need headroom, hence 12.
     const MAX_TURNS = 12;
     const toolCallTrace: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const toolResultsText: string[] = []; // grounding corpus for the verification gate
     let lastUsage: Record<string, unknown> | null = null;
+    let verificationRetried = false;
 
     // Model is env-switchable so a newer OpenAI model can be tried without a
     // code change (set OPENAI_ASSISTANT_MODEL in Vercel).
@@ -322,13 +366,36 @@ export async function POST(req: Request) {
         function: { name: string; arguments: string };
       }>;
       if (toolCalls.length === 0) {
+        const reply = message.content || "(no response)";
+        // Verification gate — only when tools were actually used (pure
+        // general-knowledge answers have nothing to ground against) and only
+        // once, so a genuinely un-sourced number can't loop forever.
+        if (!verificationRetried && toolResultsText.length > 0) {
+          const grounded = toolResultsText.join(" ") + " " + JSON.stringify(snapshot);
+          const bad = unverifiedNumbers(reply, grounded);
+          if (bad.length > 0) {
+            verificationRetried = true;
+            apiMessages.push({ role: "assistant", content: reply });
+            apiMessages.push({
+              role: "system",
+              content:
+                `VERIFICATION: these number(s) in your answer do not appear in any tool ` +
+                `result or the snapshot: ${bad.join(", ")}. That means they were computed ` +
+                `in your head or invented. Recompute each one with the calculate tool over ` +
+                `the exact tool figures, or re-fetch the real value, then reply again. Do ` +
+                `NOT restate an unverified number.`,
+            });
+            continue; // one corrective turn
+          }
+        }
         return NextResponse.json({
           success: true,
-          reply: message.content || "(no response)",
+          reply,
           usage: lastUsage,
           toolCallTrace,
           turns: turn + 1,
           snapshot,
+          verified: toolResultsText.length > 0,
         });
       }
 
@@ -349,10 +416,12 @@ export async function POST(req: Request) {
         }
         toolCallTrace.push({ name: tc.function.name, args: parsedArgs });
         const result = await executeTool(tc.function.name, parsedArgs);
+        const resultJson = JSON.stringify(result);
+        toolResultsText.push(resultJson);
         apiMessages.push({
           role: "tool",
           tool_call_id: tc.id,
-          content: JSON.stringify(result),
+          content: resultJson,
         });
       }
     }

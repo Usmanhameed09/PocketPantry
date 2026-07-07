@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/alerts-scan",
       "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/cron/embed-entities",
+      "schedule": "0 9 * * *"
     }
   ]
 }

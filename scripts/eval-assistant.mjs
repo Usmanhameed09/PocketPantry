@@ -244,6 +244,23 @@ const QUESTIONS = [
       const lastDay = new Date(Date.UTC(py, pm, 0)).getUTCDate();
       const s = await salesSum({ from: `${py}-${mm}-01`, to: `${py}-${mm}-${lastDay}`, machineFrag: "84" });
       return { desc: `$${s.revenue} (last month)`, pass: (r) => hasNumber(r, s.revenue) }; } },
+
+  // ── semantic resolution (Phase 1 pgvector — paraphrases, not exact names) ──
+  { q: "how many sparkling peach celsius drinks did I sell in the last 30 days?", async expect() {
+      const ids = await productIdsMatching("*celsius*peach*");
+      const ws = await salesSumWindows(30, { productIds: ids });
+      return { desc: `${ws[0].units} units (±window)`,
+        pass: (r) => ws.some((s) => hasNumber(r, s.units, 0.5)) }; } },
+  { q: "revenue at the lumber yard machine this month?", async expect() {
+      const s = await salesSum({ from: monthStart, machineFrag: "84" });
+      return { desc: `$${s.revenue} (84 Lumber via paraphrase)`,
+        pass: (r) => /lumber/i.test(r) && hasNumber(r, s.revenue) }; } },
+  { q: "do i have any sweet tea in the warehouse?", async expect() {
+      const ids = await productIdsMatching("*sweet*tea*", "*tea*sweet*");
+      const wh = await fetchAll(`warehouse_inventory?select=product_id,on_hand`);
+      const units = wh.filter((w) => ids.includes(w.product_id)).reduce((s, w) => s + (w.on_hand || 0), 0);
+      return { desc: `${units} units (any sweet-tea product)`,
+        pass: (r) => units > 0 ? (hasNumber(r, units, 0.5) || /yes/i.test(r)) : /no|0/i.test(r) }; } },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────

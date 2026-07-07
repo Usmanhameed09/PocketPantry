@@ -1325,10 +1325,24 @@ async function getSalesSummary(args: {
   let resolvedProducts: string[] | undefined;
   if (args.productName) {
     const tokens = args.productName.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
-    const probe = tokens.sort((a, b) => b.length - a.length)[0] || args.productName;
+    // Fetch candidates matching ANY meaningful token, not just the longest one.
+    // "sparkling peach celsius" must still fetch "Celsius Peach Vibe" (which
+    // has no "sparkling"); a single-token probe missed it and let the wrong
+    // product ("Saratoga Sparkling") win. Caught by the eval suite.
+    const orFilter = tokens.length
+      ? tokens.map((t) => `name.ilike.%${t}%`).join(",")
+      : `name.ilike.%${args.productName}%`;
     const { data: cands } = await supabase
-      .from("products").select("id, name").ilike("name", `%${probe}%`).limit(300);
+      .from("products").select("id, name").or(orFilter).limit(500);
     let matched = (cands || []).filter((p) => nameMatchScore(args.productName!, p.name as string) >= 40);
+    const topFuzzyScore = matched.reduce((mx, p) => Math.max(mx, nameMatchScore(args.productName!, p.name as string)), 0);
+    // If the best string match is WEAK (< 70), the query is likely a paraphrase
+    // ("sparkling peach celsius drinks") — let the vector index decide and, if
+    // it's confident, prefer its result over the weak string match.
+    if (topFuzzyScore < 70) {
+      const semRows = await semanticProductRows(args.productName, "id, name");
+      if (semRows.length > 0) matched = semRows as typeof matched;
+    }
     if (matched.length === 0) {
       // Typo fallback — fuzzy over recently-sold products.
       const since = dateNDaysAgoInOperatorTz(90);

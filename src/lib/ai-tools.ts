@@ -1123,6 +1123,33 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   let product = ranked[0].item;
   type ProdRow = typeof product;
 
+  // Prefer a LIVE product for vague/category queries. "do I have any sweet
+  // tea?" fuzzy-matched several distinct products; the top one ("Gold Peak
+  // Sweet Tea") had 0 stock and the assistant wrongly answered "no" — while
+  // the operator DID have Arizona Sweet Tea (24). So among near-top matches
+  // (within 15 pts), if the #1 pick has no warehouse stock and no recent
+  // sales but a close alternative does, switch to the live one.
+  if (ranked.length > 1) {
+    const near = ranked.filter((r) => r.score >= ranked[0].score - 15).slice(0, 8);
+    if (near.length > 1) {
+      const ids = near.map((r) => r.item.id as string);
+      const since90 = dateNDaysAgoInOperatorTz(90);
+      const [{ data: whRows }, { data: soldRows }] = await Promise.all([
+        supabase.from("warehouse_inventory").select("product_id, on_hand").in("product_id", ids),
+        supabase.from("daily_sales").select("product_id, units_sold").in("product_id", ids).gte("sale_date", since90).range(0, 9999),
+      ]);
+      const stockBy = new Map<string, number>();
+      for (const w of whRows || []) stockBy.set(w.product_id as string, ((stockBy.get(w.product_id as string) || 0) + ((w.on_hand as number) || 0)));
+      const soldBy = new Map<string, number>();
+      for (const s of soldRows || []) soldBy.set(s.product_id as string, ((soldBy.get(s.product_id as string) || 0) + ((s.units_sold as number) || 0)));
+      const live = (id: string) => (stockBy.get(id) || 0) > 0 || (soldBy.get(id) || 0) > 0;
+      if (!live(product.id as string)) {
+        const alt = near.find((r) => live(r.item.id as string));
+        if (alt) product = alt.item;
+      }
+    }
+  }
+
   // Resolve the picked product's variant GROUP. Prefer the DB group (products.
   // group_id, populated by the canonical-layer backfill); fall back to key
   // matching over the candidate list until the migration has run.

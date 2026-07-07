@@ -268,15 +268,34 @@ async function askAssistant(q) {
   // q is either a single user question (string) or a full messages array
   // (multi-turn follow-up cases).
   const messages = Array.isArray(q) ? q : [{ role: "user", content: q }];
-  const res = await fetch(`${APP}/api/inventory/assistant-v2`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
-  });
-  const d = await res.json().catch(() => ({}));
-  if (!d.success) throw new Error(d.error || `HTTP ${res.status}`);
-  return d.reply || "";
+  // Retry transient infra blips (network fetch-failed, OpenAI 429 surfaced as
+  // the "handling a lot of requests" reply) so they don't masquerade as
+  // correctness failures during a fast eval burst.
+  const isTransient = (s) => /handling a lot of requests|fetch failed|429|rate limit|502|timeout|ETIMEDOUT|ECONNRESET/i.test(s);
+  let lastErr = "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const res = await fetch(`${APP}/api/inventory/assistant-v2`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (d.success) {
+        const reply = d.reply || "";
+        if (isTransient(reply)) { lastErr = reply; await sleep(5000 * (attempt + 1)); continue; }
+        return reply;
+      }
+      lastErr = d.error || `HTTP ${res.status}`;
+    } catch (e) {
+      lastErr = String(e.message || e);
+    }
+    if (!isTransient(lastErr)) break;
+    await sleep(5000 * (attempt + 1));
+  }
+  throw new Error(lastErr || "assistant call failed");
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const qLabel = (item) => item.label || (Array.isArray(item.q) ? item.q.at(-1).content : item.q);
 
 async function main() {
@@ -302,7 +321,7 @@ async function main() {
       failures.push({ i, q: qLabel(item), expected: expected?.desc, reply: (reply || err || "").slice(0, 220) });
       console.log(`X FAIL  [${i}] ${qLabel(item)}\n        expected: ${expected?.desc}\n        got: ${(reply || err || "").slice(0, 200).replace(/\n/g, " ")}`);
     }
-    await new Promise((r) => setTimeout(r, 1500)); // pace — avoid 429 bursts
+    await sleep(3500); // pace between questions — avoid 429 bursts
   }
   const score = Math.round((pass / (pass + fail)) * 100);
   console.log(`\n════ SCORE: ${pass}/${pass + fail} (${score}%) ════`);

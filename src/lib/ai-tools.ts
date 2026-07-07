@@ -974,7 +974,7 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
   // would return 6000+ candidates dominated by inactive bulk-imports.
   const { data: candidates } = await supabase
     .from("products")
-    .select("id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, barcode, status")
+    .select("id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, barcode, status, group_id")
     .eq("company_id", companyId)
     .or(`name.ilike.%${query}%,sku.ilike.%${query}%,vendor.ilike.%${query}%`)
     .limit(100);
@@ -991,7 +991,7 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
     if (soldIds.length) {
       const { data: real } = await supabase
         .from("products")
-        .select("id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, barcode, status")
+        .select("id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, barcode, status, group_id")
         .in("id", soldIds);
       rows = (real || []).filter((p) => nameMatchScore(query, p.name as string) >= 60);
     }
@@ -1023,11 +1023,29 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
     return price > 0;
   };
 
-  const active = rows
-    .filter(isActive)
-    // Most-relevant first so a vague query ("coke") surfaces the closest
-    // product at the top instead of an arbitrary catalog order.
-    .sort((a, b) => nameMatchScore(query, b.name as string) - nameMatchScore(query, a.name as string));
+  // Group-summed warehouse stock per candidate (via the canonical view), so a
+  // vague query like "sweet tea" surfaces the one the operator ACTUALLY has —
+  // and so the answer can be given straight from this list. Stock often sits
+  // on a sibling variant, hence group-level.
+  const groupKeyOf = (p: typeof rows[number]) => (p.group_id as string) || (p.id as string);
+  const activeUnfiltered = rows.filter(isActive);
+  const stockByKey = new Map<string, number>();
+  const keys = [...new Set(activeUnfiltered.map(groupKeyOf))];
+  if (keys.length > 0) {
+    const { data: stockRows } = await supabase
+      .from("v_product_stock").select("group_key, on_hand_units").in("group_key", keys);
+    for (const s of stockRows || []) stockByKey.set(s.group_key as string, (s.on_hand_units as number) || 0);
+  }
+  const onHandOf = (p: typeof rows[number]) => stockByKey.get(groupKeyOf(p)) || 0;
+
+  const active = activeUnfiltered
+    // Sort by relevance first, then break ties toward products the operator
+    // actually has in the warehouse (in-stock before 0-stock).
+    .sort((a, b) => {
+      const s = nameMatchScore(query, b.name as string) - nameMatchScore(query, a.name as string);
+      if (s !== 0) return s;
+      return onHandOf(b) - onHandOf(a);
+    });
   const inactiveCount = rows.length - active.length;
 
   return {
@@ -1042,6 +1060,7 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
       caseSize: p.case_size,
       barcode: p.barcode,
       status: p.status,
+      warehouseOnHand: onHandOf(p), // group-summed units in the warehouse
     })),
     count: Math.min(active.length, Math.min(Math.max(limit, 1), 25)),
     hiddenInactiveMatches: inactiveCount,

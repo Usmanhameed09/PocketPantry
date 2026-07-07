@@ -1061,14 +1061,21 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   const supabase = createServerClient();
 
   const cols = "id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, status";
+  // Candidate pass across ALL meaningful tokens (plus the full phrase). A
+  // single common word ("sweet") matches hundreds of rows, so a small
+  // unordered cap silently truncated the real answer ("Arizona Sweet Tea")
+  // out of the set. 500 with token-OR captures every plausible match; the
+  // fuzzy ranker + prefer-live step then choose among them.
+  const nameTokens = name.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+  const orClauses = [`name.ilike.%${name}%`, ...nameTokens.map((t) => `name.ilike.%${t}%`)];
   const firstWord = name.trim().split(/\s+/)[0];
-  // Substring pass on the query and its first word.
+  if (nameTokens.length === 0) orClauses.push(`name.ilike.%${firstWord}%`);
   let { data: products } = await supabase
     .from("products")
     .select(cols)
     .eq("company_id", companyId)
-    .or(`name.ilike.%${name}%,name.ilike.%${firstWord}%`)
-    .limit(40);
+    .or(orClauses.join(","))
+    .limit(500);
 
   // Typo / abbreviation fallback: match against the REAL catalog (products
   // sold in the last 60d) so "ceke", "84L"-style shorthand, etc. still resolve.

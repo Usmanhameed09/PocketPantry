@@ -1060,7 +1060,7 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   const companyId = await ensureDefaultCompany();
   const supabase = createServerClient();
 
-  const cols = "id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, status";
+  const cols = "id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, status, group_id";
   // Candidate pass across ALL meaningful tokens (plus the full phrase). A
   // single common word ("sweet") matches hundreds of rows, so a small
   // unordered cap silently truncated the real answer ("Arizona Sweet Tea")
@@ -1133,25 +1133,23 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   // Prefer a LIVE product for vague/category queries. "do I have any sweet
   // tea?" fuzzy-matched several distinct products; the top one ("Gold Peak
   // Sweet Tea") had 0 stock and the assistant wrongly answered "no" — while
-  // the operator DID have Arizona Sweet Tea (24). So among near-top matches
-  // (within 15 pts), if the #1 pick has no warehouse stock and no recent
-  // sales but a close alternative does, switch to the live one.
+  // the operator DID have Arizona Sweet Tea (24 across its variant group). So
+  // among near-top matches (within 15 pts), if the #1 pick's GROUP has no
+  // warehouse stock but a close alternative's group does, switch to it.
+  // Liveness is GROUP-summed (via v_product_stock) because the stock often
+  // sits on a sibling variant, not the matched row itself.
+  const groupKeyOf = (p: Record<string, unknown>) => (p.group_id as string) || (p.id as string);
   if (ranked.length > 1) {
     const near = ranked.filter((r) => r.score >= ranked[0].score - 15).slice(0, 8);
     if (near.length > 1) {
-      const ids = near.map((r) => r.item.id as string);
-      const since90 = dateNDaysAgoInOperatorTz(90);
-      const [{ data: whRows }, { data: soldRows }] = await Promise.all([
-        supabase.from("warehouse_inventory").select("product_id, on_hand").in("product_id", ids),
-        supabase.from("daily_sales").select("product_id, units_sold").in("product_id", ids).gte("sale_date", since90).range(0, 9999),
-      ]);
-      const stockBy = new Map<string, number>();
-      for (const w of whRows || []) stockBy.set(w.product_id as string, ((stockBy.get(w.product_id as string) || 0) + ((w.on_hand as number) || 0)));
-      const soldBy = new Map<string, number>();
-      for (const s of soldRows || []) soldBy.set(s.product_id as string, ((soldBy.get(s.product_id as string) || 0) + ((s.units_sold as number) || 0)));
-      const live = (id: string) => (stockBy.get(id) || 0) > 0 || (soldBy.get(id) || 0) > 0;
-      if (!live(product.id as string)) {
-        const alt = near.find((r) => live(r.item.id as string));
+      const keys = [...new Set(near.map((r) => groupKeyOf(r.item)))];
+      const { data: stockRows } = await supabase
+        .from("v_product_stock").select("group_key, on_hand_units").in("group_key", keys);
+      const stockByKey = new Map<string, number>();
+      for (const s of stockRows || []) stockByKey.set(s.group_key as string, (s.on_hand_units as number) || 0);
+      const live = (p: Record<string, unknown>) => (stockByKey.get(groupKeyOf(p)) || 0) > 0;
+      if (!live(product)) {
+        const alt = near.find((r) => live(r.item));
         if (alt) product = alt.item;
       }
     }

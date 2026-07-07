@@ -58,7 +58,9 @@ async function ensureSchema() {
   await exec(`CREATE OR REPLACE FUNCTION match_ai_entities(
       query_embedding vector(1536), match_count int DEFAULT 8, filter_type text DEFAULT NULL)
     RETURNS TABLE(entity_type text, ref_id text, name text, content text, similarity float)
-    LANGUAGE sql STABLE AS $$
+    LANGUAGE sql STABLE
+    SET search_path = public, extensions
+    AS $$
       SELECT e.entity_type, e.ref_id, e.name, e.content,
              1 - (e.embedding <=> query_embedding) AS similarity
       FROM ai_entities e
@@ -147,16 +149,16 @@ async function main() {
   await ensureSchema();
   const entities = await buildEntities();
   const vectors = await embed(entities.map((e) => e.content));
-  // Upsert in chunks of 200 (payloads with vectors are large).
-  for (let i = 0; i < entities.length; i += 200) {
-    const chunk = entities.slice(i, i + 200).map((e, j) => ({ ...e, embedding: vectors[i + j], updated_at: new Date().toISOString() }));
+  // Upsert in small chunks — vector payloads are ~12KB per row.
+  for (let i = 0; i < entities.length; i += 50) {
+    const chunk = entities.slice(i, i + 50).map((e, j) => ({ ...e, embedding: vectors[i + j], updated_at: new Date().toISOString() }));
     const r = await fetch(`${URL_}/rest/v1/ai_entities?on_conflict=entity_type,ref_id`, {
       method: "POST",
       headers: { ...H, Prefer: "resolution=merge-duplicates" },
       body: JSON.stringify(chunk),
     });
     if (!r.ok) throw new Error(`upsert ${r.status}: ${(await r.text()).slice(0, 200)}`);
-    console.log(`upserted ${Math.min(i + 200, entities.length)}/${entities.length}`);
+    console.log(`upserted ${Math.min(i + 50, entities.length)}/${entities.length}`);
   }
   console.log("DONE — ai_entities index built.");
 }

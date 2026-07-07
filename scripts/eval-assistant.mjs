@@ -261,6 +261,14 @@ const QUESTIONS = [
       const units = wh.filter((w) => ids.includes(w.product_id)).reduce((s, w) => s + (w.on_hand || 0), 0);
       return { desc: `${units} units (any sweet-tea product)`,
         pass: (r) => units > 0 ? (hasNumber(r, units, 0.5) || /yes/i.test(r)) : /no|0/i.test(r) }; } },
+
+  // ── docs RAG (Phase 4 — how-to / feature behavior from the SOPs) ──
+  { q: "how do I log a refill after visiting a machine?", async expect() {
+      return { desc: "cites Log Refill flow",
+        pass: (r) => /log refill/i.test(r) && /(machine|product|quantity|sidebar|inventory)/i.test(r) && r.length > 80 }; } },
+  { q: "what happens to warehouse stock when I approve a purchase order?", async expect() {
+      return { desc: "explains approve -> stock",
+        pass: (r) => /(warehouse|stock|on.?hand|replenish|receiv|added)/i.test(r) && r.length > 60 }; } },
 ];
 
 // ── runner ──────────────────────────────────────────────────────────────────

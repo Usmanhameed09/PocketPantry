@@ -86,6 +86,12 @@ Available tools:
   - get_warehouse_summary()               — totals + top-stocked
   - get_recent_stock_movements(limit?)    — ledger entries
 
+  HOW-TO / HOW A FEATURE WORKS
+  - search_docs(query)                    — searches the app's SOP/help docs.
+    Use for ANY "how do I…", "what does <button> do", "how does <module>
+    work", "what happens when I click X" question. Answer from the returned
+    passages and cite the SOP; do NOT invent how a feature behaves.
+
   MATH
   - calculate(expression)                 — EXACT arithmetic. Use for EVERY
     calculation on tool numbers (percent, average, margin, difference,

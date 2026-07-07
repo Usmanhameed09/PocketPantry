@@ -357,6 +357,26 @@ export const TOOL_DEFINITIONS = [
   {
     type: "function" as const,
     function: {
+      name: "search_docs",
+      description:
+        "Search the app's own SOP/help documentation. USE THIS for any HOW-TO " +
+        "or 'what does X do / how does Y work / what happens when I click Z' " +
+        "question about a feature, button, or workflow (e.g. 'what does Approve " +
+        "on a purchase order do?', 'how does the waste module know something is " +
+        "wasted?', 'how do I log a refill?'). Answer from the returned passages " +
+        "and cite the SOP — do NOT guess how a feature works.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The how-to / feature question, in the operator's own words." },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "get_recent_stock_movements",
       description:
         "Recent inventory ledger entries (purchases, refills, spoilage, count " +
@@ -613,6 +633,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         );
       case "get_warehouse_summary":
         return await getWarehouseSummary();
+      case "search_docs":
+        return await searchDocs(String(args.query || ""));
       case "get_recent_stock_movements":
         return await getRecentStockMovements(Number(args.limit) || 20);
       case "get_waste_report": {
@@ -744,6 +766,38 @@ async function semanticProductRows(query: string, cols: string): Promise<Array<R
     rows.push(...((data || []) as unknown as Array<Record<string, unknown>>));
   }
   return rows;
+}
+
+// Docs RAG (Phase 4) — semantic search over the SOP/help documentation
+// (ai_docs, built by scripts/embed-docs.mjs) so how-to / "what does X do"
+// answers come from the real docs, not guesses.
+async function searchDocs(query: string): Promise<ToolResult> {
+  if (!query) return { error: "query is required" };
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return { error: "docs search unavailable" };
+  try {
+    const er = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "text-embedding-3-small", input: query }),
+    });
+    if (!er.ok) return { error: "docs search unavailable" };
+    const emb = (await er.json())?.data?.[0]?.embedding;
+    if (!emb) return { error: "docs search unavailable" };
+    const supabase = createServerClient();
+    const { data, error } = await supabase.rpc("match_ai_docs", { query_embedding: emb, match_count: 5 });
+    if (error) return { error: "docs index not available" };
+    const hits = (data as Array<{ doc: string; section: string; content: string; similarity: number }> | null) || [];
+    const relevant = hits.filter((h) => h.similarity >= 0.3);
+    if (relevant.length === 0) {
+      return { passages: [], note: "No SOP passage matched — answer from general product knowledge and say it's not documented." };
+    }
+    return {
+      passages: relevant.map((h) => ({ doc: h.doc, section: h.section, text: h.content, relevance: Math.round(h.similarity * 100) / 100 })),
+    };
+  } catch {
+    return { error: "docs search failed" };
+  }
 }
 
 function _norm(s: string): string {

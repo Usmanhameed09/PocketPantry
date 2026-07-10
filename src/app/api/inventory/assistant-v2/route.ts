@@ -85,6 +85,11 @@ Available tools:
     productProjections = 30-day product units/COGS projections.
   - get_warehouse_summary()               — totals + top-stocked
   - get_recent_stock_movements(limit?)    — ledger entries
+  - get_financial_summary(startDate?, endDate?, machineName?) — the REPORTS
+    page financials: revenue, card vs cash, processing FEES (5.95% on card),
+    revenue-after-fees, NET PROFIT, avg margin. Use for any fee / net-profit /
+    "what did I actually keep" / margin / payment-split question so the answer
+    matches the Reports page. NEVER compute fees or margin yourself.
 
   HOW-TO / HOW A FEATURE WORKS
   - search_docs(query)                    — searches the app's SOP/help docs.

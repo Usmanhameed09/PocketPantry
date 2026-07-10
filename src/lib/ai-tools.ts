@@ -412,6 +412,27 @@ export const TOOL_DEFINITIONS = [
   {
     type: "function" as const,
     function: {
+      name: "get_financial_summary",
+      description:
+        "The Reports page's exact financials for a period: total revenue, card " +
+        "vs cash split, PROCESSING FEES (Nayax 5.95% on the card share), " +
+        "revenue-after-fees, net profit (after fees + product cost), and avg " +
+        "margin. USE THIS for any money-model question — fees, net profit, " +
+        "'how much did I actually keep', payment split, margin — so the answer " +
+        "matches the Reports page. Do NOT compute fees yourself.",
+      parameters: {
+        type: "object",
+        properties: {
+          startDate: { type: "string", description: "YYYY-MM-DD. Default: first of this month." },
+          endDate: { type: "string", description: "YYYY-MM-DD. Default: today." },
+          machineName: { type: "string", description: "Optional fuzzy machine name to scope to one machine." },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "get_inventory_turns",
       description:
         "Inventory turnover per product (units sold ÷ avg on hand) over a " +
@@ -646,6 +667,12 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         const r = await getWasteReport(start, end, lim);
         return r as unknown as ToolResult;
       }
+      case "get_financial_summary":
+        return await getFinancialSummary(
+          args.startDate ? String(args.startDate) : undefined,
+          args.endDate ? String(args.endDate) : undefined,
+          args.machineName ? String(args.machineName) : undefined,
+        );
       case "get_inventory_turns": {
         const { getInventoryTurns } = await import("@/lib/waste-report");
         const periodDays = Number(args.periodDays) || 30;
@@ -766,6 +793,51 @@ async function semanticProductRows(query: string, cols: string): Promise<Array<R
     rows.push(...((data || []) as unknown as Array<Record<string, unknown>>));
   }
   return rows;
+}
+
+// Reports financials — reads the SAME /api/reports computation the Reports
+// page renders, so fee / net-profit / payment-split answers can never diverge
+// from the page. Resolves a fuzzy machine name to its id first if given.
+async function getFinancialSummary(startDate?: string, endDate?: string, machineName?: string): Promise<ToolResult> {
+  const supabase = createServerClient();
+  const qs = new URLSearchParams();
+  if (startDate && endDate) { qs.set("from", startDate); qs.set("to", endDate); }
+  else {
+    // default: this month (operator tz)
+    const today = todayInOperatorTz();
+    qs.set("from", `${today.slice(0, 7)}-01`);
+    qs.set("to", today);
+  }
+  let resolvedMachine: string | undefined;
+  if (machineName) {
+    const { data: machines } = await supabase.from("machines").select("id, name");
+    const ranked = fuzzyRank(machineName, machines || [], (m) => m.name as string);
+    if (ranked.length > 0) { qs.set("machineId", ranked[0].item.id as string); resolvedMachine = ranked[0].item.name as string; }
+  }
+  const base = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL ? (process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL}`) : "";
+  if (!base) return { error: "reports endpoint URL not configured" };
+  try {
+    const res = await fetch(`${base}/api/reports?${qs.toString()}`, { cache: "no-store" });
+    if (!res.ok) return { error: `reports fetch ${res.status}` };
+    const data = await res.json();
+    if (!data.success) return { error: data.error || "reports failed" };
+    const s = data.stats || {};
+    return {
+      scope: resolvedMachine ? `machine: ${resolvedMachine}` : "ALL MACHINES (fleet-wide)",
+      period: { from: data.range?.fromDate, to: data.range?.toDate },
+      totalRevenue: s.totalRevenue,
+      cardRevenue: s.cardRevenue,
+      cashAndOtherRevenue: s.cashRevenue,
+      processingFeeRate: "5.95% (Nayax, on card share)",
+      processingFees: s.processingFees,
+      revenueAfterFees: Math.round(((s.totalRevenue || 0) - (s.processingFees || 0)) * 100) / 100,
+      productCost: s.totalCost,
+      netProfit: s.netProfit,
+      avgMarginPct: s.avgMargin,
+    };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "reports fetch failed" };
+  }
 }
 
 // Docs RAG (Phase 4) — semantic search over the SOP/help documentation

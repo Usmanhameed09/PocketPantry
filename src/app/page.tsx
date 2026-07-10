@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Header from "@/components/Header";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useRouter } from "next/navigation";
@@ -91,6 +91,10 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  // Flash the revenue when it changes after a sync, so the operator SEES it
+  // update live (128 → 168) instead of wondering if the number is stale.
+  const [revFlash, setRevFlash] = useState(false);
+  const prevRevRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -179,7 +183,9 @@ export default function Dashboard() {
 
     setSyncing(true);
     try {
-      await fetch("/api/inventory/sync?scope=today", { method: "POST" });
+      // keepalive lets the write finish even if the operator navigates/reloads
+      // mid-sync — no record is lost. (The upsert is idempotent regardless.)
+      await fetch("/api/inventory/sync?scope=today", { method: "POST", keepalive: true });
       try { localStorage.setItem("dashLastSync", String(Date.now())); } catch { /* ignore */ }
       setSyncedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
       await reloadData();
@@ -213,6 +219,21 @@ export default function Dashboard() {
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Flash the revenue tile whenever the number actually changes after a pull,
+  // so a live update (128 → 168) is visibly obvious, not silent.
+  useEffect(() => {
+    if (!tiles) return;
+    const s = tiles.sales;
+    const rev = (s.liveDataAt || s.todayHasData) ? s.todayRevenue : s.lastDayRevenue;
+    const prev = prevRevRef.current;
+    prevRevRef.current = rev;
+    if (prev !== null && prev !== rev) {
+      setRevFlash(true);
+      const t = setTimeout(() => setRevFlash(false), 1600);
+      return () => clearTimeout(t);
+    }
+  }, [tiles]);
 
   // Auto-sync once on open (throttled inside triggerSync).
   useEffect(() => { void triggerSync(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
@@ -317,20 +338,21 @@ export default function Dashboard() {
             onClick={() => router.push("/reports")}
             label={
               syncing
-                ? "Today's Revenue · updating"
+                ? "Today's Revenue · syncing"
                 : sales.liveDataAt
                   ? "Today's Revenue · LIVE"
                   : sales.todayHasData ? "Today's Revenue" : `Last data ${sales.lastSaleDate || "—"}`
             }
             // While a sync is in flight the shown figure is provisional — dim it
-            // so it doesn't read as the final number.
+            // so it doesn't read as the final number; flash green when it updates.
             valueMuted={syncing}
+            flash={revFlash}
             value={numOrSkel(`$${displayRevenue.toFixed(2)}`)}
             tag={tilesLoading
               ? <span style={{ color: "#94a3b8", fontSize: 12 }}>loading…</span>
               : syncing
-                ? <span style={{ color: "#b45309", fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 }}>
-                    <RefreshCw size={11} style={{ animation: "spin 1s linear infinite" }} /> updating…
+                ? <span style={{ color: "#b45309", fontSize: 12, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <RefreshCw size={11} style={{ animation: "spin 1s linear infinite" }} /> pulling latest sales…
                   </span>
                 : <span style={{ color: "#64748b", fontSize: 12 }}>Yesterday: ${sales.yesterdayRevenue.toFixed(2)}</span>
             }
@@ -597,16 +619,16 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } } @keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } } @keyframes spin { to { transform: rotate(360deg); } } @keyframes revflash { 0% { background: #bbf7d0; } 100% { background: transparent; } }`}</style>
     </div>
   );
 }
 
 /* ────── Small components ────── */
 
-function StatCard({ icon, iconBg, label, value, tag, onClick, valueMuted }: {
+function StatCard({ icon, iconBg, label, value, tag, onClick, valueMuted, flash }: {
   icon: React.ReactNode; iconBg: string; label: string; value: string; tag: React.ReactNode;
-  onClick?: () => void; valueMuted?: boolean;
+  onClick?: () => void; valueMuted?: boolean; flash?: boolean;
 }) {
   return (
     <div
@@ -629,9 +651,12 @@ function StatCard({ icon, iconBg, label, value, tag, onClick, valueMuted }: {
         <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 500, marginBottom: 2 }}>{label}</div>
         <div style={{
           fontSize: 22, fontWeight: 800, lineHeight: 1.1,
-          color: valueMuted ? "#94a3b8" : "#0f172a",
-          opacity: valueMuted ? 0.7 : 1,
-          transition: "color .2s, opacity .2s",
+          color: flash ? "#16a34a" : valueMuted ? "#94a3b8" : "#0f172a",
+          opacity: valueMuted && !flash ? 0.7 : 1,
+          transition: "color .25s ease",
+          borderRadius: 8,
+          animation: flash ? "revflash 1.4s ease-out" : undefined,
+          display: "inline-block", padding: flash ? "1px 6px" : undefined, margin: flash ? "-1px -6px" : undefined,
         }}>{value}</div>
         <div style={{ marginTop: 2 }}>{tag}</div>
       </div>

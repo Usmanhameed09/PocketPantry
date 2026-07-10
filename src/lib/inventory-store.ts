@@ -165,23 +165,24 @@ export async function ensureProductsBatch(names: string[]): Promise<Map<string, 
   const wanted = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
   const byLower = new Map<string, string>(); // lowercase name → id
 
-  // Bulk-read every existing product for the company (paginated). A constant
-  // handful of queries regardless of how many products the sync touches.
-  const PAGE = 1000;
-  for (let from = 0; from < 200000; from += PAGE) {
+  // Bulk-read ONLY the products whose names we're syncing (a few hundred),
+  // not the whole catalog. Exact-name match; any case-variant miss is caught
+  // by the ensureProduct fallback below (which does a case-insensitive lookup),
+  // so this stays correct — no duplicate is ever created.
+  for (let i = 0; i < wanted.length; i += 200) {
+    const batch = wanted.slice(i, i + 200);
     const { data, error } = await supabase
-      .from("products").select("id, name").eq("company_id", companyId).range(from, from + PAGE - 1);
+      .from("products").select("id, name").eq("company_id", companyId).in("name", batch);
     if (error) throw new Error(`ensureProductsBatch read: ${error.message}`);
-    if (!data || data.length === 0) break;
-    for (const p of data) {
+    for (const p of data || []) {
       const k = (p.name as string).toLowerCase();
       if (!byLower.has(k)) byLower.set(k, p.id as string);
     }
-    if (data.length < PAGE) break;
   }
 
-  // Create only the names we don't already have. Sequential, but on a steady
-  // sync this list is empty; only the first-ever sync creates in bulk.
+  // Resolve/create anything not matched exactly. ensureProduct does the
+  // case-insensitive lookup (so a case-variant reuses the existing row) and
+  // only inserts a genuinely-new product. Empty on a steady-state sync.
   for (const name of wanted) {
     if (byLower.has(name.toLowerCase())) continue;
     const id = await ensureProduct(name);

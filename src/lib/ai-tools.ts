@@ -1624,11 +1624,22 @@ async function getSalesSummary(args: {
 async function findLead(query: string, limit: number): Promise<ToolResult> {
   if (!query) return { error: "query is required" };
   const supabase = createServerClient();
-  const { data } = await supabase
+  const cols = "id, business, stage, tier, tier_score, owner, vertical, employee_count, next_action, next_action_at, last_touch_at, call_attempts, apollo_title";
+  let { data } = await supabase
     .from("leads")
-    .select("id, business, stage, tier, tier_score, owner, vertical, employee_count, next_action, next_action_at, last_touch_at, call_attempts, apollo_title")
+    .select(cols)
     .or(`business.ilike.%${query}%,owner.ilike.%${query}%`)
     .limit(Math.min(Math.max(limit, 1), 20));
+
+  // Semantic fallback — leads are in the vector index, so a paraphrased or
+  // misspelled business name ("the senior living place") still resolves.
+  if (!data || data.length === 0) {
+    const hits = (await semanticResolve(query, ["lead"], 5)).filter((h) => h.similarity >= 0.5);
+    if (hits.length > 0) {
+      const { data: sem } = await supabase.from("leads").select(cols).in("id", hits.map((h) => h.refId));
+      data = sem;
+    }
+  }
 
   return {
     matches: (data || []).map((l) => ({

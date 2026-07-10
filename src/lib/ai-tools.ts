@@ -1570,11 +1570,22 @@ async function getSalesSummary(args: {
           return tokens.every((t) => low.includes(t));
         })
       : (cands || []).filter((p) => nameMatchScore(args.productName!, p.name as string) >= 60);
-    // Fallback (paraphrase/typo — no product contains all tokens): fuzzy, then
-    // the vector index. Returns the closest product(s).
+    // Fallback (paraphrase/typo — no product contains all tokens). Use fuzzy,
+    // but if the BEST fuzzy match is weak (< 70) the query is likely a
+    // paraphrase ("sparkling peach celsius" → Celsius Peach Vibe) — prefer the
+    // vector index so a stray weak match with 0 sales can't win.
     if (matched.length === 0) {
-      const fuzzy = (cands || []).filter((p) => nameMatchScore(args.productName!, p.name as string) >= 55);
-      matched = fuzzy.length ? fuzzy : (await semanticProductRows(args.productName, "id, name")) as typeof matched;
+      let fuzzy = (cands || []).filter((p) => nameMatchScore(args.productName!, p.name as string) >= 40);
+      const topScore = fuzzy.reduce((mx, p) => Math.max(mx, nameMatchScore(args.productName!, p.name as string)), 0);
+      if (topScore < 70) {
+        const sem = await semanticProductRows(args.productName, "id, name");
+        if (sem.length > 0) fuzzy = sem as typeof fuzzy;
+      }
+      matched = fuzzy;
+    }
+    if (matched.length === 0) {
+      const sem = await semanticProductRows(args.productName, "id, name");
+      if (sem.length > 0) matched = sem as typeof matched;
     }
     if (matched.length === 0) {
       return { error: `No product matched "${args.productName}".` };

@@ -204,6 +204,9 @@ export async function POST(req?: Request) {
       const machineId = deviceToMachineId.get(m.nayax_device_id);
       if (!machineId) continue;
       for (const p of m.products) {
+        // On a today-only pull we only resolved recently-sold products; skip
+        // the rest quietly (they contribute no today rows anyway).
+        if (todayOnly && !(p.daily_breakdown && Object.keys(p.daily_breakdown).some((d) => d >= recentCutoff))) continue;
         const productId = productMap.get(p.name.trim().toLowerCase());
         if (!productId) { errors.push(`Product ${p.name}: unresolved`); continue; }
         productsCreated++;

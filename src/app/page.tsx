@@ -162,24 +162,38 @@ export default function Dashboard() {
 
   const triggerSync = async (force: boolean) => {
     if (syncing) return;
-    try {
-      const last = Number(localStorage.getItem("dashLastSync") || "0");
-      if (!force && Date.now() - last < 8 * 60 * 1000) return; // throttle
-    } catch { /* localStorage unavailable */ }
+
+    // ALWAYS show the current stored numbers immediately (fast read of
+    // daily_sales, ~1s) so the operator never stares at a blank/stale tile.
+    await reloadData();
+
+    // Should we run the EXPENSIVE machine fetch (the scraper pulls Nayax for
+    // every machine — ~30s and unavoidable)? Only when the data is actually
+    // stale. Re-fetching Nayax when it was just synced returns the same
+    // numbers after 30s of spinning — exactly the wasted wait to avoid.
+    let last = 0;
+    try { last = Number(localStorage.getItem("dashLastSync") || "0"); } catch { /* ignore */ }
+    const ageMs = Date.now() - last;
+    // Manual Refresh forces, but still skips a re-fetch if it ran seconds ago.
+    const skip = force ? ageMs < 90 * 1000 : ageMs < 8 * 60 * 1000;
+    if (skip) {
+      setSyncedAt("just now"); // instant feedback; data is already fresh
+      return; // no 30s Nayax round-trip for data that's already fresh
+    }
+
+    // Data IS stale → pull fresh machine sales in the BACKGROUND. The current
+    // number stays on screen (marked "updating") the whole time — the operator
+    // is never blocked, and the tile snaps to any new value when it lands.
     setSyncing(true);
     try {
-      // FAST path — Nayax only. This writes today's revenue and returns in
-      // ~15s, so the spinner ends the moment the headline number is fresh
-      // instead of waiting on the slow 30-day HAHA history.
-      await fetch("/api/inventory/sync?scope=fast", { method: "POST" });
+      await fetch("/api/inventory/sync?scope=fast", { method: "POST" }); // Nayax = today's revenue
       try { localStorage.setItem("dashLastSync", String(Date.now())); } catch { /* ignore */ }
       setSyncedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
       await reloadData();
     } catch { /* sync best-effort */ } finally {
-      setSyncing(false); // stop the spinner as soon as the useful number is in
+      setSyncing(false);
     }
-    // BACKGROUND — pull the HAHA/Chinese 30-day history without the spinner,
-    // then quietly refresh the cards if it added anything. Not awaited.
+    // HAHA/Chinese 30-day history — background, no spinner, quiet refresh.
     void fetch("/api/inventory/sync?scope=chinese", { method: "POST" })
       .then(() => reloadData())
       .catch(() => { /* best-effort */ });

@@ -219,12 +219,15 @@ export const TOOL_DEFINITIONS = [
       description:
         "Top N products by fleet-wide units sold in the last 30 days. " +
         "Returns name, category, units30d, dailyVelocity, machineCount. " +
-        "Use for 'what's selling best', 'top sellers', 'best products'.",
+        "Use for 'what's selling best', 'top sellers', 'best products', and " +
+        "category questions like 'top selling drink' (pass category:'drink'). " +
+        "Category is matched by product NAME, so it works even though the " +
+        "stored category field is unreliable.",
       parameters: {
         type: "object",
         properties: {
           limit: { type: "integer", description: "How many to return. Default 10.", default: 10 },
-          category: { type: "string", description: "Optional category filter (Snacks/Candy/Drinks/Meals)." },
+          category: { type: "string", description: "Optional: 'drink', 'candy', or 'snack' (or plurals). Filters by product name." },
         },
       },
     },
@@ -870,6 +873,48 @@ async function searchDocs(query: string): Promise<ToolResult> {
   } catch {
     return { error: "docs search failed" };
   }
+}
+
+// Category inference from the product NAME. The stored products.category is
+// unreliable — the bulk import + sync defaulted everything to "Snacks" (Coke,
+// Sprite, Monster all say "Snacks"), so any category filter on that field
+// returns nothing. Classifying by name keywords is what actually works.
+const DRINK_WORDS = [
+  "coke", "cola", "pepsi", "sprite", "fanta", "crush", "squirt", "sunkist",
+  "dr pepper", "dr. pepper", "mountain dew", "mtn dew", "mist twst", "sierra mist",
+  "root beer", "ginger ale", "soda", "pop ", "seltzer", "sparkling", "lacroix",
+  "spindrift", "bubly", "monster", "red bull", "redbull", "rockstar", "bang",
+  "celsius", "reign", "ghost energy", "energy drink", "gatorade", "powerade",
+  "bodyarmor", "body armor", "propel", "water", "aquafina", "dasani", "smartwater",
+  "vitamin water", "vitaminwater", "juice", "lemonade", "arizona", "snapple",
+  "gold peak", "pure leaf", "brisk", "tea", "minute maid", "tropicana", "simply",
+  "v8", "capri sun", "kool aid", "sunny d", "milk", "coffee", "latte", "starbucks",
+  "frappuccino", "cappuccino", "bai", "core power", "muscle milk", "yoo-hoo",
+  "12 oz cans", "16.9 oz", "20 oz bottle", "kombucha", "electrolit", "prime",
+];
+const CANDY_WORDS = [
+  "candy", "chocolate", "snickers", "twix", "kit kat", "kitkat", "m&m", "m & m",
+  "skittles", "starburst", "reese", "hershey", "milky way", "sour patch", "gummy",
+  "gummi", "laffy taffy", "airhead", "jolly rancher", "nerds", "twizzler", "mentos",
+  "tic tac", "haribo", "warheads", "mike & ike", "mike and ike", "hot tamales",
+  "milk duds", "whopper", "butterfinger", "payday", "almond joy", "mounds",
+  "100 grand", "rolo", "york", "junior mint", "raisinet", "swedish fish",
+  "now and later", "ring pop", "blow pop", "tootsie", "lifesaver", "life saver",
+  "jelly belly", "trolli", "sour punch", "pixy stix", "pop rocks", "mamba",
+];
+function inferCategory(name: string): "drink" | "candy" | "snack" {
+  const n = (name || "").toLowerCase();
+  if (DRINK_WORDS.some((w) => n.includes(w))) return "drink";
+  if (CANDY_WORDS.some((w) => n.includes(w))) return "candy";
+  return "snack";
+}
+// Normalize a user's category word ("drinks", "beverage", "sodas") to a class.
+function normalizeCategoryQuery(cat: string): "drink" | "candy" | "snack" | null {
+  const c = cat.toLowerCase();
+  if (/drink|beverage|soda|pop|water|juice|energy/.test(c)) return "drink";
+  if (/candy|chocolate|sweet|gum/.test(c)) return "candy";
+  if (/snack|chip|crisp|cracker|nut|jerky|cookie|pastry/.test(c)) return "snack";
+  return null;
 }
 
 function _norm(s: string): string {
@@ -1837,15 +1882,27 @@ async function getTopSellers(limit: number, category?: string): Promise<ToolResu
     .gte("sale_date", since)
     .range(0, 49999);
 
+  // Resolve a requested category to a class and match by NAME (the stored
+  // category field is unreliable — see inferCategory). Falls back to the
+  // stored field only if the query doesn't map to a known class.
+  const wantClass = category ? normalizeCategoryQuery(category) : null;
   const agg = new Map<string, { name: string; category: string; units: number; revenue: number; machines: Set<string> }>();
   for (const r of salesRows || []) {
     const pid = r.product_id as string;
     const prod = (r as { products?: { name?: string; category?: string } }).products;
     const cat = prod?.category || "?";
-    if (category && cat.toLowerCase() !== category.toLowerCase()) continue;
+    const name = prod?.name || "";
+    if (category) {
+      if (wantClass) {
+        // Name-based classification (robust to the all-"Snacks" data).
+        if (inferCategory(name) !== wantClass) continue;
+      } else if (cat.toLowerCase() !== category.toLowerCase()) {
+        continue;
+      }
+    }
     const e = agg.get(pid) || {
       name: prod?.name || pid,
-      category: cat,
+      category: wantClass || cat,
       units: 0,
       revenue: 0,
       machines: new Set<string>(),

@@ -5,6 +5,7 @@ import {
   batchUpsertMachineInventory,
 } from "@/lib/inventory-store";
 import { createServerClient } from "@/lib/supabase";
+import { dateNDaysAgoInOperatorTz } from "@/lib/operator-timezone";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -132,8 +133,14 @@ export async function GET(req: Request) {
 
 export async function POST(req?: Request) {
   const scope = req ? (new URL(req.url).searchParams.get("scope") || "full") : "full";
-  const doNayax = scope !== "chinese";
-  const doChinese = scope !== "fast" && scope !== "nayax";
+  // scope=today → the LIGHTEST pull: fetch Nayax, write ONLY today's (and
+  // yesterday's, for tz safety) daily_sales, skip machine_inventory / ledger /
+  // 30-day history / Chinese. This is what the Today page auto-refreshes so the
+  // revenue number stays live in ~14s instead of the full ~33s sync.
+  const todayOnly = scope === "today";
+  const doNayax = scope === "fast" || scope === "nayax" || scope === "today" || scope === "full";
+  const doChinese = scope === "chinese" || scope === "full";
+  const recentCutoff = dateNDaysAgoInOperatorTz(1); // yesterday (operator tz)
   try {
     // 1. Fetch inventory status from scraper-api (Nayax). Skipped for the
     //    Chinese-only background pass.
@@ -200,6 +207,8 @@ export async function POST(req?: Request) {
         saleEstimates.push({ productId, machineId, dailySalesRate: p.daily_sales_rate });
         if (p.daily_breakdown) {
           for (const [date, units] of Object.entries(p.daily_breakdown)) {
+            // today-only pull: keep just today's + yesterday's rows.
+            if (todayOnly && date < recentCutoff) continue;
             const rev = (p.daily_revenue && p.daily_revenue[date]) || 0;
             dailySales.push({ productId, machineId, date, units, revenue: rev });
           }
@@ -207,22 +216,23 @@ export async function POST(req?: Request) {
       }
     }
 
-    // Single bulk write for machine_inventory (was one upsert per product).
-    try {
-      await batchUpsertMachineInventory([...deviceToMachineId.values()], miRows);
-      inventoryRows = miRows.length;
-    } catch (err: any) {
-      errors.push(`machine_inventory: ${err.message}`);
-    }
-
-    // Single bulk insert for all sale_estimate ledger rows
+    // machine_inventory + ledger are for refill/projection features, NOT the
+    // Today revenue headline — skip them on a today-only pull to save ~20s.
     let ledgerWrites = 0;
-    try {
-      const before = saleEstimates.length;
-      await bulkRecordSaleEstimates(saleEstimates);
-      ledgerWrites = before;
-    } catch (err: any) {
-      errors.push(`Ledger write: ${err.message}`);
+    if (!todayOnly) {
+      try {
+        await batchUpsertMachineInventory([...deviceToMachineId.values()], miRows);
+        inventoryRows = miRows.length;
+      } catch (err: any) {
+        errors.push(`machine_inventory: ${err.message}`);
+      }
+      try {
+        const before = saleEstimates.length;
+        await bulkRecordSaleEstimates(saleEstimates);
+        ledgerWrites = before;
+      } catch (err: any) {
+        errors.push(`Ledger write: ${err.message}`);
+      }
     }
 
     // ─── HAHA / Chinese machines ─────────────────────────────────────

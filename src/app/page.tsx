@@ -163,41 +163,56 @@ export default function Dashboard() {
   const triggerSync = async (force: boolean) => {
     if (syncing) return;
 
-    // ALWAYS show the current stored numbers immediately (fast read of
-    // daily_sales, ~1s) so the operator never stares at a blank/stale tile.
+    // Show the current stored numbers immediately (fast read of daily_sales,
+    // ~1s) so the operator never stares at a blank tile.
     await reloadData();
 
-    // Should we run the EXPENSIVE machine fetch (the scraper pulls Nayax for
-    // every machine — ~30s and unavoidable)? Only when the data is actually
-    // stale. Re-fetching Nayax when it was just synced returns the same
-    // numbers after 30s of spinning — exactly the wasted wait to avoid.
+    // Pull the LATEST today's revenue with the lightest possible Nayax pull
+    // (scope=today ≈ 14s: today's sales only, no history/refill writes). Always
+    // runs on a manual Refresh so it truly reflects the latest; on background
+    // ticks a small debounce avoids stacking pulls. It runs in the background
+    // with a non-blocking "updating" state — the operator is never stuck.
     let last = 0;
     try { last = Number(localStorage.getItem("dashLastSync") || "0"); } catch { /* ignore */ }
     const ageMs = Date.now() - last;
-    // Manual Refresh forces, but still skips a re-fetch if it ran seconds ago.
-    const skip = force ? ageMs < 90 * 1000 : ageMs < 8 * 60 * 1000;
-    if (skip) {
-      setSyncedAt("just now"); // instant feedback; data is already fresh
-      return; // no 30s Nayax round-trip for data that's already fresh
-    }
+    if (!force && ageMs < 20 * 1000) return; // avoid stacking auto-ticks
 
-    // Data IS stale → pull fresh machine sales in the BACKGROUND. The current
-    // number stays on screen (marked "updating") the whole time — the operator
-    // is never blocked, and the tile snaps to any new value when it lands.
     setSyncing(true);
     try {
-      await fetch("/api/inventory/sync?scope=fast", { method: "POST" }); // Nayax = today's revenue
+      await fetch("/api/inventory/sync?scope=today", { method: "POST" });
       try { localStorage.setItem("dashLastSync", String(Date.now())); } catch { /* ignore */ }
       setSyncedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
       await reloadData();
     } catch { /* sync best-effort */ } finally {
       setSyncing(false);
     }
-    // HAHA/Chinese 30-day history — background, no spinner, quiet refresh.
-    void fetch("/api/inventory/sync?scope=chinese", { method: "POST" })
-      .then(() => reloadData())
-      .catch(() => { /* best-effort */ });
+
+    // Occasionally (or on manual refresh) also run the deeper pull in the
+    // background — refill/machine-inventory + HAHA history — without a spinner,
+    // so those cards stay current too. Throttled to ~8 min.
+    let lastDeep = 0;
+    try { lastDeep = Number(localStorage.getItem("dashLastDeep") || "0"); } catch { /* ignore */ }
+    if (force || Date.now() - lastDeep > 8 * 60 * 1000) {
+      try { localStorage.setItem("dashLastDeep", String(Date.now())); } catch { /* ignore */ }
+      void fetch("/api/inventory/sync?scope=fast", { method: "POST" })
+        .then(() => fetch("/api/inventory/sync?scope=chinese", { method: "POST" }))
+        .then(() => reloadData())
+        .catch(() => { /* best-effort */ });
+    }
   };
+
+  // Auto-refresh: keep today's revenue live while the page is open — a light
+  // scope=today pull every 90s (only when the tab is visible). The operator
+  // rarely needs to click Refresh; the number updates on its own.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        void triggerSync(false);
+      }
+    }, 90 * 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-sync once on open (throttled inside triggerSync).
   useEffect(() => { void triggerSync(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);

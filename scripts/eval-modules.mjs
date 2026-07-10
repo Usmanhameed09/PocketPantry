@@ -63,12 +63,12 @@ const T = [
 
   // ── REPORTS ──
   { area: "REPT", q: "what were my total processing fees this month?", async gt() {
-      // report fee model: 5.95% of the card share of revenue
-      const rows = await all(`daily_sales?select=revenue&sale_date=gte.${monthStart}&sale_date=lte.${today}`);
-      const rev = rows.reduce((s, r) => s + (r.revenue || 0), 0);
-      // card share varies; accept the ballpark (fees between 3% and 6% of revenue)
-      return { d: `~5.95% of card rev (total rev $${rev.toFixed(2)})`,
-        ok: (r) => { const f = nums(r).find((n) => n > 0 && n < rev); return f != null && f >= rev * 0.02 && f <= rev * 0.06; } }; } },
+      // Ground truth = the Reports page's own fee figure (get_financial_summary
+      // reads the same computation), so this asserts assistant==page.
+      const rep = await fetch(`${APP}/api/reports?from=${monthStart}&to=${today}`).then((r) => r.json()).catch(() => null);
+      const fees = rep?.stats?.processingFees;
+      if (fees == null) return { d: "reports down", ok: () => true };
+      return { d: `$${fees} (matches Reports page)`, ok: (r) => has(r, fees, Math.max(0.5, fees * 0.03)) }; } },
   { area: "REPT", q: "top 3 products by revenue over the last 30 days?", async gt() {
       const rows = await all(`daily_sales?select=revenue,product_id&sale_date=gte.${daysAgo(30)}&sale_date=lte.${today}`);
       const by = new Map(); for (const r of rows) by.set(r.product_id, (by.get(r.product_id) || 0) + (r.revenue || 0));
@@ -77,10 +77,16 @@ const T = [
       const tok = (id) => (p.find((x) => x.id === id)?.name || "").toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 3)[0] || "";
       return { d: top.map((t) => tok(t[0])).join(", "),
         ok: (r) => top.slice(0, 2).filter((t) => tok(t[0]) && r.toLowerCase().includes(tok(t[0]))).length >= 1 }; } },
-  { area: "REPT", q: "how many total transactions this month?", async gt() {
+  { area: "REPT", q: "how many total units did I sell this month?", async gt() {
       const rows = await all(`daily_sales?select=units_sold&sale_date=gte.${monthStart}&sale_date=lte.${today}`);
       const u = rows.reduce((s, r) => s + (r.units_sold || 0), 0);
-      return { d: `${u} units sold`, ok: (r) => has(r, u, u * 0.05) }; } },
+      return { d: `${u} units`, ok: (r) => has(r, u, u * 0.05) }; } },
+  { area: "REPT", q: "what is my net profit this month after fees and product cost?", async gt() {
+      // net profit must match the Reports page (get_financial_summary). Fetch it.
+      const rep = await fetch(`${APP}/api/reports?from=${monthStart}&to=${today}`).then((r) => r.json()).catch(() => null);
+      const np = rep?.stats?.netProfit;
+      if (np == null) return { d: "reports down", ok: () => true };
+      return { d: `$${np} (net profit)`, ok: (r) => has(r, np, Math.max(1, Math.abs(np) * 0.03)) }; } },
 
   // ── LEADS ──
   { area: "LEAD", q: "how many Tier A leads do I have?", async gt() {

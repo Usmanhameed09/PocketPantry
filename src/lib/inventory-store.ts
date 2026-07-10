@@ -149,6 +149,92 @@ export async function upsertMachineInventory(params: {
     throw new Error(`upsertMachineInventory: ${error.message}`);
 }
 
+/**
+ * Batch-resolve many product names to ids in a handful of queries instead of
+ * one select+insert PER product. Returns a lowercase-name → id map (matching
+ * ensureProduct's case-insensitive behavior). Existing products are read in
+ * bulk; only genuinely-new names are inserted (rare on a steady-state sync),
+ * one at a time via ensureProduct so SKU generation/collision stays identical.
+ *
+ * This is what makes the sync fast: 10 machines × ~40 products used to be
+ * ~400 sequential round-trips; now it's a few bulk reads.
+ */
+export async function ensureProductsBatch(names: string[]): Promise<Map<string, string>> {
+  const companyId = await ensureDefaultCompany();
+  const supabase = createServerClient();
+  const wanted = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+  const byLower = new Map<string, string>(); // lowercase name → id
+
+  // Bulk-read every existing product for the company (paginated). A constant
+  // handful of queries regardless of how many products the sync touches.
+  const PAGE = 1000;
+  for (let from = 0; from < 200000; from += PAGE) {
+    const { data, error } = await supabase
+      .from("products").select("id, name").eq("company_id", companyId).range(from, from + PAGE - 1);
+    if (error) throw new Error(`ensureProductsBatch read: ${error.message}`);
+    if (!data || data.length === 0) break;
+    for (const p of data) {
+      const k = (p.name as string).toLowerCase();
+      if (!byLower.has(k)) byLower.set(k, p.id as string);
+    }
+    if (data.length < PAGE) break;
+  }
+
+  // Create only the names we don't already have. Sequential, but on a steady
+  // sync this list is empty; only the first-ever sync creates in bulk.
+  for (const name of wanted) {
+    if (byLower.has(name.toLowerCase())) continue;
+    const id = await ensureProduct(name);
+    byLower.set(name.toLowerCase(), id);
+  }
+  return byLower;
+}
+
+/**
+ * Batch-upsert machine_inventory for many (machine, product) pairs. Reads all
+ * existing rows for the given machines in ONE query to preserve each pair's
+ * last_loaded_qty (the refill baseline), computes estimated_remaining, then
+ * upserts in chunks — replacing the per-product select+upsert loop.
+ */
+export async function batchUpsertMachineInventory(
+  machineIds: string[],
+  rows: Array<{ machineId: string; productId: string; dailySalesRate: number; soldSinceRefill: number }>,
+): Promise<void> {
+  if (rows.length === 0) return;
+  const supabase = createServerClient();
+  const uniqMachineIds = [...new Set(machineIds)];
+
+  const lastLoaded = new Map<string, number>(); // "machineId|productId" → last_loaded_qty
+  if (uniqMachineIds.length > 0) {
+    const { data } = await supabase
+      .from("machine_inventory")
+      .select("machine_id, product_id, last_loaded_qty")
+      .in("machine_id", uniqMachineIds);
+    for (const r of data || []) {
+      lastLoaded.set(`${r.machine_id}|${r.product_id}`, (r.last_loaded_qty as number) || 0);
+    }
+  }
+
+  const now = new Date().toISOString();
+  const upsertRows = rows.map((r) => {
+    const baseline = lastLoaded.get(`${r.machineId}|${r.productId}`) || 0;
+    const estimated = baseline > 0 ? Math.max(0, baseline - r.soldSinceRefill) : 0;
+    return {
+      machine_id: r.machineId,
+      product_id: r.productId,
+      estimated_remaining: estimated,
+      daily_sales_rate: r.dailySalesRate,
+      updated_at: now,
+    };
+  });
+  for (let i = 0; i < upsertRows.length; i += 500) {
+    const { error } = await supabase
+      .from("machine_inventory")
+      .upsert(upsertRows.slice(i, i + 500), { onConflict: "machine_id,product_id" });
+    if (error) throw new Error(`batchUpsertMachineInventory: ${error.message}`);
+  }
+}
+
 // ─── Refill Logging ─────────────────────────────────────────────────
 
 export async function logRefill(params: {

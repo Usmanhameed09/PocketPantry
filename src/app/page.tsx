@@ -237,10 +237,24 @@ export default function Dashboard() {
       <Header title="Today" />
 
       {/* ─── Freshness bar: shows when sales last refreshed + manual refresh ─── */}
-      <div style={{ padding: isMobile ? "12px 16px 0" : "20px 32px 0", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 }}>
-        <span style={{ fontSize: 12, color: "#64748b" }}>
-          {syncing ? "Updating sales from machines…" : syncedAt ? `Sales updated ${syncedAt}` : "Sales as of last sync"}
-        </span>
+      <div style={{ padding: isMobile ? "12px 16px 0" : "20px 32px 0", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+        {syncing ? (
+          // Prominent, unmistakable — so a new operator never reads the numbers
+          // below as final while a live pull is still in progress.
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: 8,
+            fontSize: 12.5, fontWeight: 600, color: "#92400e",
+            background: "#fef3c7", border: "1px solid #fcd34d",
+            padding: "6px 13px", borderRadius: 999,
+          }}>
+            <RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} />
+            Updating live sales from machines… numbers below aren&apos;t final yet
+          </span>
+        ) : (
+          <span style={{ fontSize: 12, color: "#64748b" }}>
+            {syncedAt ? `Sales updated ${syncedAt}` : "Sales as of last sync"}
+          </span>
+        )}
         <button
           onClick={() => void triggerSync(true)}
           disabled={syncing}
@@ -265,14 +279,23 @@ export default function Dashboard() {
             icon={<TrendingUp size={20} color="#16a34a" />} iconBg="#dcfce7"
             onClick={() => router.push("/reports")}
             label={
-              sales.liveDataAt
-                ? "Today's Revenue · LIVE"
-                : sales.todayHasData ? "Today's Revenue" : `Last data ${sales.lastSaleDate || "—"}`
+              syncing
+                ? "Today's Revenue · updating"
+                : sales.liveDataAt
+                  ? "Today's Revenue · LIVE"
+                  : sales.todayHasData ? "Today's Revenue" : `Last data ${sales.lastSaleDate || "—"}`
             }
+            // While a sync is in flight the shown figure is provisional — dim it
+            // so it doesn't read as the final number.
+            valueMuted={syncing}
             value={numOrSkel(`$${displayRevenue.toFixed(2)}`)}
             tag={tilesLoading
               ? <span style={{ color: "#94a3b8", fontSize: 12 }}>loading…</span>
-              : <span style={{ color: "#64748b", fontSize: 12 }}>Yesterday: ${sales.yesterdayRevenue.toFixed(2)}</span>
+              : syncing
+                ? <span style={{ color: "#b45309", fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <RefreshCw size={11} style={{ animation: "spin 1s linear infinite" }} /> updating…
+                  </span>
+                : <span style={{ color: "#64748b", fontSize: 12 }}>Yesterday: ${sales.yesterdayRevenue.toFixed(2)}</span>
             }
           />
           <StatCard
@@ -544,9 +567,9 @@ export default function Dashboard() {
 
 /* ────── Small components ────── */
 
-function StatCard({ icon, iconBg, label, value, tag, onClick }: {
+function StatCard({ icon, iconBg, label, value, tag, onClick, valueMuted }: {
   icon: React.ReactNode; iconBg: string; label: string; value: string; tag: React.ReactNode;
-  onClick?: () => void;
+  onClick?: () => void; valueMuted?: boolean;
 }) {
   return (
     <div
@@ -567,7 +590,12 @@ function StatCard({ icon, iconBg, label, value, tag, onClick }: {
       }}>{icon}</div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 500, marginBottom: 2 }}>{label}</div>
-        <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", lineHeight: 1.1 }}>{value}</div>
+        <div style={{
+          fontSize: 22, fontWeight: 800, lineHeight: 1.1,
+          color: valueMuted ? "#94a3b8" : "#0f172a",
+          opacity: valueMuted ? 0.7 : 1,
+          transition: "color .2s, opacity .2s",
+        }}>{value}</div>
         <div style={{ marginTop: 2 }}>{tag}</div>
       </div>
     </div>

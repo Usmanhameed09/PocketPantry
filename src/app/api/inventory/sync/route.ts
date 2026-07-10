@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import {
-  ensureProduct,
   ensureMachine,
-  upsertMachineInventory,
+  ensureProductsBatch,
+  batchUpsertMachineInventory,
 } from "@/lib/inventory-store";
 import { createServerClient } from "@/lib/supabase";
 
@@ -152,59 +152,56 @@ export async function POST() {
       });
     }
 
-    // 2. Sync each machine + its products to Supabase
+    // 2. Sync each machine + its products to Supabase.
+    // BATCHED: machines are resolved sequentially (only ~10), but all product
+    // names are resolved in one bulk pass and machine_inventory is written in
+    // one bulk pass — replacing ~4 sequential DB round-trips PER PRODUCT
+    // (which made the sync take minutes) with a handful of queries total.
     let productsCreated = 0;
     let machinesSynced = 0;
     let inventoryRows = 0;
     const errors: string[] = [];
     const saleEstimates: Array<{ productId: string; machineId: string; dailySalesRate: number }> = [];
     const dailySales: Array<{ productId: string; machineId: string; date: string; units: number; revenue: number }> = [];
+    const miRows: Array<{ machineId: string; productId: string; dailySalesRate: number; soldSinceRefill: number }> = [];
 
+    // Resolve every machine (few) and every product name (bulk) up front.
+    const deviceToMachineId = new Map<string, string>();
     for (const m of machines) {
       try {
-        // Ensure machine exists
-        const machineId = await ensureMachine(
-          m.nayax_device_id,
-          m.machine_name
-        );
+        deviceToMachineId.set(m.nayax_device_id, await ensureMachine(m.nayax_device_id, m.machine_name));
         machinesSynced++;
-
-        // Sync each product
-        for (const p of m.products) {
-          try {
-            const productId = await ensureProduct(p.name);
-            productsCreated++; // counts upserts, not just creates
-
-            await upsertMachineInventory({
-              machineId,
-              productId,
-              estimatedRemaining: 0, // calculated inside based on refill logs
-              dailySalesRate: p.daily_sales_rate,
-              soldSinceRefill: p.sold_since_refill,
-            });
-            inventoryRows++;
-
-            // Collect for bulk ledger write at the end (saves per-product roundtrips)
-            saleEstimates.push({
-              productId,
-              machineId,
-              dailySalesRate: p.daily_sales_rate,
-            });
-
-            // Collect daily breakdown rows for weekly-trend analysis
-            if (p.daily_breakdown) {
-              for (const [date, units] of Object.entries(p.daily_breakdown)) {
-                const rev = (p.daily_revenue && p.daily_revenue[date]) || 0;
-                dailySales.push({ productId, machineId, date, units, revenue: rev });
-              }
-            }
-          } catch (err: any) {
-            errors.push(`Product ${p.name}: ${err.message}`);
-          }
-        }
       } catch (err: any) {
         errors.push(`Machine ${m.machine_name}: ${err.message}`);
       }
+    }
+    const allNames = machines.flatMap((m) => (m.products || []).map((p) => p.name));
+    const productMap = await ensureProductsBatch(allNames); // lowercase name → id
+
+    for (const m of machines) {
+      const machineId = deviceToMachineId.get(m.nayax_device_id);
+      if (!machineId) continue;
+      for (const p of m.products) {
+        const productId = productMap.get(p.name.trim().toLowerCase());
+        if (!productId) { errors.push(`Product ${p.name}: unresolved`); continue; }
+        productsCreated++;
+        miRows.push({ machineId, productId, dailySalesRate: p.daily_sales_rate, soldSinceRefill: p.sold_since_refill });
+        saleEstimates.push({ productId, machineId, dailySalesRate: p.daily_sales_rate });
+        if (p.daily_breakdown) {
+          for (const [date, units] of Object.entries(p.daily_breakdown)) {
+            const rev = (p.daily_revenue && p.daily_revenue[date]) || 0;
+            dailySales.push({ productId, machineId, date, units, revenue: rev });
+          }
+        }
+      }
+    }
+
+    // Single bulk write for machine_inventory (was one upsert per product).
+    try {
+      await batchUpsertMachineInventory([...deviceToMachineId.values()], miRows);
+      inventoryRows = miRows.length;
+    } catch (err: any) {
+      errors.push(`machine_inventory: ${err.message}`);
     }
 
     // Single bulk insert for all sale_estimate ledger rows
@@ -243,21 +240,23 @@ export async function POST() {
             }>;
           }>;
         };
-        for (const cm of chineseData.machines || []) {
+        const cMachines = chineseData.machines || [];
+        // Resolve Chinese product names in one bulk pass too.
+        const cProductMap = await ensureProductsBatch(
+          cMachines.flatMap((cm) => (cm.products || []).map((p) => p.name)),
+        );
+        for (const cm of cMachines) {
           try {
             const machineId = await ensureMachine(cm.nayaxDeviceId, cm.machineName);
             chineseMachinesSynced++;
             for (const p of cm.products || []) {
-              try {
-                const productId = await ensureProduct(p.name);
-                if (p.daily_breakdown) {
-                  for (const [date, units] of Object.entries(p.daily_breakdown)) {
-                    const rev = (p.daily_revenue && p.daily_revenue[date]) || 0;
-                    dailySales.push({ productId, machineId, date, units, revenue: rev });
-                  }
+              const productId = cProductMap.get(p.name.trim().toLowerCase());
+              if (!productId) { errors.push(`Chinese product ${p.name}: unresolved`); continue; }
+              if (p.daily_breakdown) {
+                for (const [date, units] of Object.entries(p.daily_breakdown)) {
+                  const rev = (p.daily_revenue && p.daily_revenue[date]) || 0;
+                  dailySales.push({ productId, machineId, date, units, revenue: rev });
                 }
-              } catch (err: any) {
-                errors.push(`Chinese product ${p.name}: ${err.message}`);
               }
             }
           } catch (err: any) {

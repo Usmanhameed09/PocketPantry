@@ -150,9 +150,16 @@ export const TOOL_DEFINITIONS = [
           productName: {
             type: "string",
             description:
-              "Optional: scope to one product by (fuzzy) NAME — 'Takis Pix', 'coke'. Sales are summed " +
-              "ACROSS all catalog variants matching the name, so duplicate catalog rows can't hide sales. " +
-              "USE THIS for any 'sales of <product>' question (optionally combined with machineName).",
+              "Optional: scope by product NAME. Sums across EVERY product whose name contains the " +
+              "words — brand/family aware: 'coke' → all Coke (12oz + 16.9oz + Diet…); 'Takis Pix' → " +
+              "only Takis with 'pix' (not other flavors). USE for any 'sales of <product>' question.",
+          },
+          category: {
+            type: "string",
+            description:
+              "Optional: scope to a CATEGORY — 'drink', 'candy', or 'snack'. Matched by product name " +
+              "(the stored category field is unreliable). USE for 'how many drink units', 'drink revenue', " +
+              "'% of sales from drinks'. Can combine with machineName.",
           },
           limit: {
             type: "integer",
@@ -618,6 +625,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           machineId: args.machineId ? String(args.machineId) : undefined,
           machineName: args.machineName ? String(args.machineName) : undefined,
           productName: args.productName ? String(args.productName) : undefined,
+          category: args.category ? String(args.category) : undefined,
           limit: Number(args.limit) || 20,
         });
       case "find_lead":
@@ -1498,6 +1506,7 @@ async function getSalesSummary(args: {
   machineId?: string;
   machineName?: string;
   productName?: string;
+  category?: string;
   limit: number;
 }): Promise<ToolResult> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(args.startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(args.endDate)) {
@@ -1538,75 +1547,66 @@ async function getSalesSummary(args: {
       ? `machine id: ${machineId}`
       : "ALL MACHINES (fleet-wide — NOT a single machine's number)";
 
-  // Fuzzy product-name filter. Sums across the best match's VARIANT GROUP —
-  // duplicate rows of the SAME product ("Takis Fuego Pix" / "Takis Snack Takis
-  // Pix Fuego") so no twin can hide sales. It must NOT widen to other flavors:
-  // the old >=40 threshold pulled "TAKIS Purple" into "Takis Pix" totals
-  // (8 units reported when the true answer was 4 — caught by the eval suite).
+  // Product-name filter. Sums across EVERY product whose name contains all the
+  // meaningful query tokens — so it's brand/family-aware:
+  //   "Coke"       → all Coke products (12oz Cans + 16.9oz Bottle + Diet…) = 251
+  //   "Takis Pix"  → Takis products containing "pix" (excludes "Takis Purple") = 4
+  //   "Dr Pepper"  → everything with "pepper"
+  // (The earlier "top match's variant group" logic answered "Coke" with a single
+  // size — 3 units — because sizes have different variant keys.)
   let productIds: string[] | undefined;
   let resolvedProducts: string[] | undefined;
   if (args.productName) {
     const tokens = args.productName.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
-    // Fetch candidates matching ANY meaningful token, not just the longest one.
-    // "sparkling peach celsius" must still fetch "Celsius Peach Vibe" (which
-    // has no "sparkling"); a single-token probe missed it and let the wrong
-    // product ("Saratoga Sparkling") win. Caught by the eval suite.
     const orFilter = tokens.length
       ? tokens.map((t) => `name.ilike.%${t}%`).join(",")
       : `name.ilike.%${args.productName}%`;
     const { data: cands } = await supabase
       .from("products").select("id, name").or(orFilter).limit(500);
-    let matched = (cands || []).filter((p) => nameMatchScore(args.productName!, p.name as string) >= 40);
-    const topFuzzyScore = matched.reduce((mx, p) => Math.max(mx, nameMatchScore(args.productName!, p.name as string)), 0);
-    // If the best string match is WEAK (< 70), the query is likely a paraphrase
-    // ("sparkling peach celsius drinks") — let the vector index decide and, if
-    // it's confident, prefer its result over the weak string match.
-    if (topFuzzyScore < 70) {
-      const semRows = await semanticProductRows(args.productName, "id, name");
-      if (semRows.length > 0) matched = semRows as typeof matched;
+    // Primary: contains ALL meaningful tokens (brand/family-level sum).
+    let matched = tokens.length
+      ? (cands || []).filter((p) => {
+          const low = (p.name as string).toLowerCase();
+          return tokens.every((t) => low.includes(t));
+        })
+      : (cands || []).filter((p) => nameMatchScore(args.productName!, p.name as string) >= 60);
+    // Fallback (paraphrase/typo — no product contains all tokens): fuzzy, then
+    // the vector index. Returns the closest product(s).
+    if (matched.length === 0) {
+      const fuzzy = (cands || []).filter((p) => nameMatchScore(args.productName!, p.name as string) >= 55);
+      matched = fuzzy.length ? fuzzy : (await semanticProductRows(args.productName, "id, name")) as typeof matched;
     }
     if (matched.length === 0) {
-      // Typo fallback — fuzzy over recently-sold products.
-      const since = dateNDaysAgoInOperatorTz(90);
-      const { data: soldRows } = await supabase
-        .from("daily_sales").select("product_id").gte("sale_date", since).range(0, 9999);
-      const soldIds = [...new Set((soldRows || []).map((r) => r.product_id as string))];
-      if (soldIds.length) {
-        const { data: real } = await supabase.from("products").select("id, name").in("id", soldIds);
-        matched = (real || []).filter((p) => nameMatchScore(args.productName!, p.name as string) >= 60);
+      return { error: `No product matched "${args.productName}".` };
+    }
+    productIds = matched.slice(0, 200).map((p) => p.id as string);
+    resolvedProducts = matched.slice(0, 12).map((p) => p.name as string);
+  }
+
+  // Category filter (drink / candy / snack), classified by product NAME because
+  // the stored category field is unreliable (all "Snacks"). A drink class can
+  // be hundreds of ids — too many for a SQL .in() — so we keep it as a Set and
+  // filter the fetched sales rows in JS (unless a productName also narrows it).
+  let categoryIdSet: Set<string> | undefined;
+  if (args.category) {
+    const wantClass = normalizeCategoryQuery(args.category);
+    if (wantClass) {
+      const set = new Set<string>();
+      const PAGEP = 1000;
+      for (let from = 0; from < 200000; from += PAGEP) {
+        const { data } = await supabase.from("products").select("id, name").range(from, from + PAGEP - 1);
+        if (!data || data.length === 0) break;
+        for (const p of data) if (inferCategory(p.name as string) === wantClass) set.add(p.id as string);
+        if (data.length < PAGEP) break;
       }
-    }
-    if (matched.length === 0) {
-      // Semantic fallback before giving up.
-      const semRows = await semanticProductRows(args.productName, "id, name");
-      if (semRows.length > 0) {
-        matched = semRows as typeof matched;
+      if (productIds) {
+        // Both filters → intersect (productIds is small, safe for .in()).
+        productIds = productIds.filter((id) => set.has(id));
+        if (productIds.length === 0) return { error: `No ${wantClass} products matched.` };
       } else {
-        return { error: `No product matched "${args.productName}".` };
+        categoryIdSet = set; // filter rows in JS below
       }
     }
-    // Narrow to the top match's variant group: same noise-stripped token key,
-    // same normalized name, or (strict) containing every query token.
-    const ranked = matched
-      .map((p) => ({ p, score: nameMatchScore(args.productName!, p.name as string) }))
-      .sort((a, b) => b.score - a.score);
-    const top = ranked[0].p;
-    const key = (nm: string): string | null => {
-      const t = nm.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/)
-        .filter((w) => w && !VARIANT_NOISE.has(w) && !/^\d+$/.test(w) && w.length > 1);
-      return t.length >= 2 ? [...new Set(t)].sort().join("|") : null;
-    };
-    const nn = (nm: string) => nm.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    const qTokens = tokens.filter((t) => t.length >= 3);
-    const topKey = key(top.name as string);
-    const group = ranked.filter(({ p }) =>
-      p.id === top.id ||
-      (topKey !== null && key(p.name as string) === topKey) ||
-      nn(p.name as string) === nn(top.name as string) ||
-      (qTokens.length >= 2 && qTokens.every((t) => (p.name as string).toLowerCase().includes(t)))
-    ).map(({ p }) => p);
-    productIds = group.slice(0, 50).map((p) => p.id as string);
-    resolvedProducts = group.slice(0, 50).map((p) => p.name as string);
   }
 
   // Paginate through daily_sales — Supabase caps at 1000 rows per page.
@@ -1625,7 +1625,11 @@ async function getSalesSummary(args: {
     if (productIds) q = q.in("product_id", productIds);
     const { data } = await q;
     if (!data || data.length === 0) break;
-    rows.push(...(data as SalesRow[]));
+    // Category filter applied in JS (too many ids for a SQL .in()).
+    const page = categoryIdSet
+      ? (data as SalesRow[]).filter((r) => categoryIdSet!.has(r.product_id))
+      : (data as SalesRow[]);
+    rows.push(...page);
     if (data.length < PAGE) break;
   }
 

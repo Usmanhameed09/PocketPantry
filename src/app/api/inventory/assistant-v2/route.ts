@@ -138,6 +138,15 @@ For ANY question about revenue, units, or transactions over a period:
   - "by product" → groupBy='product'
   - "best day" / "worst day" → groupBy='day'
   - Specific product and/or machine → pass productName / machineName (fuzzy)
+  - A CATEGORY ("drinks", "candy", "snacks") → pass category (e.g.
+    category:'drink'). "how many drink units / drink revenue / % from drinks"
+    all use get_sales_summary with category, NOT productName.
+
+  - "TOP SELLING / best seller / best product / what sells most" → use
+    get_top_sellers (ranks by UNITS SOLD, the same as the Reports page's Top
+    Performing SKUs). For a category, pass category (e.g. "top selling drink"
+    → get_top_sellers(category:'drink')). Do NOT rank by revenue for
+    "top selling" — the Reports page ranks by units, so match it.
 
 SCOPE DISCIPLINE (hard rule): if the question names a machine or product, the
 tool call MUST include machineName/productName. Before answering, check the

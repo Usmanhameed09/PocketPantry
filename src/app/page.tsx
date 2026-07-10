@@ -168,13 +168,21 @@ export default function Dashboard() {
     } catch { /* localStorage unavailable */ }
     setSyncing(true);
     try {
-      await fetch("/api/inventory/sync", { method: "POST" });
+      // FAST path — Nayax only. This writes today's revenue and returns in
+      // ~15s, so the spinner ends the moment the headline number is fresh
+      // instead of waiting on the slow 30-day HAHA history.
+      await fetch("/api/inventory/sync?scope=fast", { method: "POST" });
       try { localStorage.setItem("dashLastSync", String(Date.now())); } catch { /* ignore */ }
       setSyncedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
       await reloadData();
     } catch { /* sync best-effort */ } finally {
-      setSyncing(false);
+      setSyncing(false); // stop the spinner as soon as the useful number is in
     }
+    // BACKGROUND — pull the HAHA/Chinese 30-day history without the spinner,
+    // then quietly refresh the cards if it added anything. Not awaited.
+    void fetch("/api/inventory/sync?scope=chinese", { method: "POST" })
+      .then(() => reloadData())
+      .catch(() => { /* best-effort */ });
   };
 
   // Auto-sync once on open (throttled inside triggerSync).

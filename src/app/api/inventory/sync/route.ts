@@ -117,34 +117,45 @@ interface NayaxMachineStatus {
 }
 
 /**
- * POST/GET /api/inventory/sync — Fetch live Nayax data and sync to Supabase.
+ * POST/GET /api/inventory/sync — Fetch live sales and sync to Supabase.
+ *
+ * ?scope controls how much runs, so the UI can get the fast, headline-critical
+ * part back quickly instead of waiting on the slow 30-day Chinese history:
+ *   - scope=fast     → Nayax only (today's revenue lands fast) — the Refresh button
+ *   - scope=chinese  → HAHA/Chinese 30-day history only — fired in the background
+ *   - (default/full) → both — used by the scheduled cron
  * GET supported so cron-job.org can hit it without configuring a body.
  */
-export async function GET() {
-  return POST();
+export async function GET(req: Request) {
+  return POST(req);
 }
 
-export async function POST() {
+export async function POST(req?: Request) {
+  const scope = req ? (new URL(req.url).searchParams.get("scope") || "full") : "full";
+  const doNayax = scope !== "chinese";
+  const doChinese = scope !== "fast" && scope !== "nayax";
   try {
-    // 1. Fetch inventory status from scraper-api
-    const resp = await fetch(`${SCRAPER_API_URL}/api/machines/inventory-status`, {
-      headers: {
-        "x-api-key": process.env.SCRAPER_BACKEND_KEY || process.env.API_KEY || "",
-      },
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text();
-      return NextResponse.json(
-        { success: false, error: `Scraper API error: ${resp.status} ${text}` },
-        { status: 502 }
-      );
+    // 1. Fetch inventory status from scraper-api (Nayax). Skipped for the
+    //    Chinese-only background pass.
+    let machines: NayaxMachineStatus[] = [];
+    if (doNayax) {
+      const resp = await fetch(`${SCRAPER_API_URL}/api/machines/inventory-status`, {
+        headers: {
+          "x-api-key": process.env.SCRAPER_BACKEND_KEY || process.env.API_KEY || "",
+        },
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        return NextResponse.json(
+          { success: false, error: `Scraper API error: ${resp.status} ${text}` },
+          { status: 502 }
+        );
+      }
+      const data = await resp.json();
+      machines = data.machines || [];
     }
 
-    const data = await resp.json();
-    const machines: NayaxMachineStatus[] = data.machines || [];
-
-    if (machines.length === 0) {
+    if (doNayax && machines.length === 0 && scope !== "full") {
       return NextResponse.json({
         success: true,
         message: "No machines returned from Nayax",
@@ -222,7 +233,7 @@ export async function POST() {
     // (product_id, machine_id, sale_date) so partial overlap with prior
     // syncs is harmless.
     let chineseMachinesSynced = 0;
-    try {
+    if (doChinese) try {
       const fromIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const toIso = new Date().toISOString().slice(0, 10);
       const chineseResp = await fetch(
@@ -283,6 +294,7 @@ export async function POST() {
 
     return NextResponse.json({
       success: true,
+      scope,
       machinesSynced,
       chineseMachinesSynced,
       productsProcessed: productsCreated,

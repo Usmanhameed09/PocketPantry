@@ -193,7 +193,11 @@ export async function POST(req?: Request) {
         errors.push(`Machine ${m.machine_name}: ${err.message}`);
       }
     }
-    const allNames = machines.flatMap((m) => (m.products || []).map((p) => p.name));
+    // On a today-only pull, resolve just the products that actually sold
+    // recently (fewer names → faster) instead of the whole fleet catalog.
+    const allNames = machines.flatMap((m) => (m.products || [])
+      .filter((p) => !todayOnly || (p.daily_breakdown && Object.keys(p.daily_breakdown).some((d) => d >= recentCutoff)))
+      .map((p) => p.name));
     const productMap = await ensureProductsBatch(allNames); // lowercase name → id
 
     for (const m of machines) {

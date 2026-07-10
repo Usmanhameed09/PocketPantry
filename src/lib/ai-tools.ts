@@ -1724,6 +1724,18 @@ async function getSalesSummary(args: {
       return out;
     });
 
+  // Explicit leaders so "top selling" (UNITS, like the Reports page) is never
+  // confused with "highest revenue". breakdown[] is revenue-sorted; these name
+  // the true leader on each axis.
+  const allB = Array.from(buckets.values());
+  const nm = (k: string) => (args.groupBy === "day" ? k : nameMap.get(k) || k);
+  const byUnits = [...allB].sort((a, b) => b.units - a.units)[0];
+  const byRev = [...allB].sort((a, b) => b.revenue - a.revenue)[0];
+  const leaders = args.groupBy !== "day" && byUnits && byRev ? {
+    topByUnits: { name: nm(byUnits.key), units: byUnits.units, revenue: Math.round(byUnits.revenue * 100) / 100 },
+    topByRevenue: { name: nm(byRev.key), revenue: Math.round(byRev.revenue * 100) / 100, units: byRev.units },
+  } : {};
+
   return {
     scope,
     startDate: args.startDate,
@@ -1733,6 +1745,7 @@ async function getSalesSummary(args: {
     breakdown,
     breakdownCount: buckets.size,
     breakdownTruncated: buckets.size > cap ? buckets.size - cap : 0,
+    ...leaders,
     ...(resolvedMachine ? { machine: resolvedMachine } : {}),
     ...(resolvedProducts ? { matchedProducts: resolvedProducts } : {}),
   };

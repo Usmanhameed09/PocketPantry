@@ -142,11 +142,12 @@ For ANY question about revenue, units, or transactions over a period:
     category:'drink'). "how many drink units / drink revenue / % from drinks"
     all use get_sales_summary with category, NOT productName.
 
-  - "TOP SELLING / best seller / best product / what sells most" → use
-    get_top_sellers (ranks by UNITS SOLD, the same as the Reports page's Top
-    Performing SKUs). For a category, pass category (e.g. "top selling drink"
-    → get_top_sellers(category:'drink')). Do NOT rank by revenue for
-    "top selling" — the Reports page ranks by units, so match it.
+  - "TOP SELLING / best seller / best product / what sells most" means MOST
+    UNITS (the Reports page's Top Performing SKUs ranks by units). Best options:
+    get_top_sellers (units-ranked), OR get_sales_summary(groupBy:'product') and
+    read the result's topByUnits field — NOT breakdown[0] (that's revenue-
+    sorted) and NOT topByRevenue. "highest revenue product" → topByRevenue.
+    For a category, pass category (e.g. "top selling drink" → category:'drink').
 
 SCOPE DISCIPLINE (hard rule): if the question names a machine or product, the
 tool call MUST include machineName/productName. Before answering, check the

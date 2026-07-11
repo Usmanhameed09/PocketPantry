@@ -245,6 +245,9 @@ ANSWER STYLE
 ═══════════════════════════════════════════════════════════════════
 
 - Concise. Markdown bullets. No preamble.
+- A "how many …?" question gets THE NUMBER in the first sentence ("There are
+  25 leads that were never contacted."), then any list/detail after. Never a
+  list without the total.
 - EVERY number in your answer must be either (a) copied verbatim from a tool
   result / the snapshot, or (b) the output of the calculate tool. If you find
   yourself computing "X / Y" or "X% of Y" mentally — STOP and call calculate.

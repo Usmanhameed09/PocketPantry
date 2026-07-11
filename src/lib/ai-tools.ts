@@ -1282,18 +1282,31 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   // warehouse stock but a close alternative's group does, switch to it.
   // Liveness is GROUP-summed (via v_product_stock) because the stock often
   // sits on a sibling variant, not the matched row itself.
+  // "Live" = recent SALES first, then stock. Sales matter more than stock for
+  // near-equal name matches: "sparkling peach celsius" fuzzy-tied between
+  // "Celsius Eng Drk Sprklng Peach Vibe" (0 sales) and "Celsius Peach Vibe"
+  // (the real seller) — the stock-only check kept the dead twin and answered
+  // "no sales". Caught by the pre-handover battery.
   const groupKeyOf = (p: Record<string, unknown>) => (p.group_id as string) || (p.id as string);
   if (ranked.length > 1) {
     const near = ranked.filter((r) => r.score >= ranked[0].score - 15).slice(0, 8);
     if (near.length > 1) {
       const keys = [...new Set(near.map((r) => groupKeyOf(r.item)))];
-      const { data: stockRows } = await supabase
-        .from("v_product_stock").select("group_key, on_hand_units").in("group_key", keys);
+      const nearIds = near.map((r) => r.item.id as string);
+      const since90 = dateNDaysAgoInOperatorTz(90);
+      const [{ data: stockRows }, { data: soldRows }] = await Promise.all([
+        supabase.from("v_product_stock").select("group_key, on_hand_units").in("group_key", keys),
+        supabase.from("daily_sales").select("product_id, units_sold").in("product_id", nearIds).gte("sale_date", since90).range(0, 9999),
+      ]);
       const stockByKey = new Map<string, number>();
       for (const s of stockRows || []) stockByKey.set(s.group_key as string, (s.on_hand_units as number) || 0);
-      const live = (p: Record<string, unknown>) => (stockByKey.get(groupKeyOf(p)) || 0) > 0;
-      if (!live(product)) {
-        const alt = near.find((r) => live(r.item));
+      const soldById = new Map<string, number>();
+      for (const s of soldRows || []) soldById.set(s.product_id as string, (soldById.get(s.product_id as string) || 0) + ((s.units_sold as number) || 0));
+      const sells = (p: Record<string, unknown>) => (soldById.get(p.id as string) || 0) > 0;
+      const stocked = (p: Record<string, unknown>) => (stockByKey.get(groupKeyOf(p)) || 0) > 0;
+      if (!sells(product)) {
+        // Prefer a near-match that actually SELLS; else one that has stock.
+        const alt = near.find((r) => sells(r.item)) || (!stocked(product) ? near.find((r) => stocked(r.item)) : undefined);
         if (alt) product = alt.item;
       }
     }
@@ -1904,11 +1917,23 @@ async function getTopSellers(limit: number, category?: string): Promise<ToolResu
   const supabase = createServerClient();
   const since = dateNDaysAgoInOperatorTz(30);
 
-  const { data: salesRows } = await supabase
-    .from("daily_sales")
-    .select("product_id, units_sold, revenue, machine_id, products(name, category)")
-    .gte("sale_date", since)
-    .range(0, 49999);
+  // Paginate — PostgREST caps every request at 1000 rows regardless of range;
+  // a single .range(0, 49999) silently truncated ~60% of a 30-day window and
+  // undercounted every top seller (Coke reported 87 units, truth 124 — caught
+  // by the pre-handover battery).
+  type TopRow = { product_id: string; units_sold: number; revenue: number; machine_id: string; products?: { name?: string; category?: string } };
+  const salesRows: TopRow[] = [];
+  const PAGE = 1000;
+  for (let from = 0; from < 100000; from += PAGE) {
+    const { data } = await supabase
+      .from("daily_sales")
+      .select("product_id, units_sold, revenue, machine_id, products(name, category)")
+      .gte("sale_date", since)
+      .range(from, from + PAGE - 1);
+    if (!data || data.length === 0) break;
+    salesRows.push(...(data as unknown as TopRow[]));
+    if (data.length < PAGE) break;
+  }
 
   // Resolve a requested category to a class and match by NAME (the stored
   // category field is unreliable — see inferCategory). Falls back to the
@@ -2161,11 +2186,19 @@ async function getWeeklyTrendsTool(): Promise<ToolResult> {
   const supabase = createServerClient();
   const sinceStr = dateNDaysAgoInOperatorTz(14);
   const cutoffStr = dateNDaysAgoInOperatorTz(7);
-  const { data } = await supabase
-    .from("daily_sales")
-    .select("product_id, sale_date, units_sold, products(name)")
-    .gte("sale_date", sinceStr)
-    .range(0, 49999);
+  // Paginate — PostgREST caps at 1000 rows/request; a 14-day window exceeds it.
+  type TrendRow = { product_id: string; sale_date: string; units_sold: number; products?: { name?: string } };
+  const data: TrendRow[] = [];
+  for (let from = 0; from < 100000; from += 1000) {
+    const { data: page } = await supabase
+      .from("daily_sales")
+      .select("product_id, sale_date, units_sold, products(name)")
+      .gte("sale_date", sinceStr)
+      .range(from, from + 999);
+    if (!page || page.length === 0) break;
+    data.push(...(page as unknown as TrendRow[]));
+    if (page.length < 1000) break;
+  }
 
   if (!data || data.length === 0) {
     return { available: false, message: "No daily sales data in the last 14 days." };

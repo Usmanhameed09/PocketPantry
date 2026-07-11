@@ -126,21 +126,17 @@ You land on the **Overview** tab. The other tabs (Warehouse, Scan, Products, etc
 4. Click anywhere on a row to open the PO detail page.
 5. Click the green **Approve** button (top-right).
 
-✅ The status badge changes to **Approved**.
+✅ **Approving AUTOMATICALLY adds the full ordered quantity of every line to your warehouse stock** — no separate receive step is needed. The warehouse On Hand goes up immediately, and because all lines are received in full, the PO status jumps straight to **Received**.
 
-### Step B — Mark a PO as purchased (after you place the actual order with the supplier)
+ℹ️ If the actual delivery is short or over, use the "Receive now" column afterward to correct the received quantities — it stays editable.
 
-1. From the PO detail page (with status Approved), click the green **Mark purchased** button.
-
-✅ The status badge changes to **Purchased**.
-
-### Step C — Receive a PO (when the delivery arrives at your warehouse)
+### Step B — Correct received quantities (only if the delivery didn't match the order)
 
 1. From the PO detail page, find the "Receive now" column on each line.
-2. Type how many units of that line you actually received.
+2. Type the correction for that line.
 3. Click the green **Submit receipt** button at the bottom-right.
 
-✅ Each line's "Received" column updates. When every line is fully received, the PO status auto-changes to **Received** and your warehouse stock goes up.
+✅ Each line's "Received" column updates and warehouse stock adjusts to match.
 
 ### Step D (Optional) — Distribute received stock straight to machines
 

@@ -11,10 +11,13 @@ interface HeaderProps {
 export default function Header({ title, subtitle }: HeaderProps) {
   const isMobile = useIsMobile();
   const today = new Date();
+  // Business date is EASTERN TIME (the operator's timezone) — a browser in
+  // another timezone must still show the ET business day.
   const dateString = today.toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
     day: "numeric",
+    timeZone: "America/New_York",
   });
 
   return (

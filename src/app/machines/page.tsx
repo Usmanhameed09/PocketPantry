@@ -845,7 +845,7 @@ export default function MachinesPage() {
                 </div>
                 {ordersSyncedAt && (
                   <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
-                    Saved to backend: {new Date(ordersSyncedAt).toLocaleString()}
+                    Saved to backend: {formatMachineOrderDate(ordersSyncedAt)}
                     {ordersSource ? ` · Source: ${ordersSource === "live" ? "Live API" : "Stored snapshot"}` : ""}
                   </div>
                 )}
@@ -1186,11 +1186,13 @@ function formatMachineOrderDate(value: string | null | undefined) {
   if (!value) return "--";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString([], {
+  // ET — all clock times in the app display in the operator's timezone.
+  return date.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "America/New_York",
   });
 }
 

@@ -21,6 +21,7 @@ import {
   Modal, Select, BtnPrimary, BtnSecondary, pageContainer,
 } from "./ui";
 import RefillModal from "./RefillModal";
+import { dateTimeET } from "@/lib/format-et";
 
 type Product = {
   id: string; name: string; sku: string; category: string;
@@ -235,7 +236,7 @@ export default function WarehouseView() {
                 <tbody>
                   {history.map((m, idx) => (
                     <tr key={m.id} style={{ borderTop: idx === 0 ? "none" : "1px solid #f1f5f9" }}>
-                      <Td color="#64748b"><span style={{ fontSize: 11 }}>{new Date(m.createdAt).toLocaleString()}</span></Td>
+                      <Td color="#64748b"><span style={{ fontSize: 11 }}>{dateTimeET(m.createdAt)}</span></Td>
                       <Td><span style={{ fontSize: 12 }}>{REASON_LABELS[m.reason] || m.reason}</span></Td>
                       <Td><span style={{ fontSize: 12, color: "#64748b" }}>{m.location === "warehouse" ? "Warehouse" : `Machine ${(m.machineId || "").slice(0, 6)}`}</span></Td>
                       <Td align="right" mono bold color={m.qty > 0 ? "#15803d" : "#dc2626"}>{m.qty > 0 ? "+" : ""}{m.qty}</Td>

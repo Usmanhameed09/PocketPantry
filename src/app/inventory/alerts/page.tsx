@@ -139,7 +139,7 @@ export default function AlertsPage() {
                       </div>
                       <p style={{ fontSize: 14, color: "#334155", margin: 0 }}>{a.message}</p>
                       <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 11, color: "#94a3b8", flexWrap: "wrap" }}>
-                        <span>{new Date(a.createdAt).toLocaleString()}</span>
+                        <span>{new Date(a.createdAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET"}</span>
                         {a.daysRemaining !== null && <span>· {a.daysRemaining}d remaining</span>}
                         {a.recommendedQty !== null && <span>· Buy {a.recommendedQty}</span>}
                         {a.ageHours !== null && <span>· {a.ageHours.toFixed(1)}h since last data</span>}

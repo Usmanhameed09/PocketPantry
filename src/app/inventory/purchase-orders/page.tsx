@@ -99,7 +99,7 @@ export default function PurchaseOrdersPage() {
                       <Td><Badge color={STATUS_COLOR[p.status] || "gray"}>{p.status}</Badge></Td>
                       <Td align="right" mono>{p.lineCount}</Td>
                       <Td align="right" mono bold>${p.totalCost.toFixed(2)}</Td>
-                      <Td color="#64748b">{new Date(p.createdAt).toLocaleDateString()}</Td>
+                      <Td color="#64748b">{new Date(p.createdAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })}</Td>
                       <Td>
                         <div style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
                           <Link href={`/inventory/purchase-orders/${p.id}`} title="Open" style={{ color: "#16a34a", display: "inline-flex" }}>

@@ -769,7 +769,7 @@ export default function ScanPage() {
                   <div>
                     <div style={{ fontSize: 14, fontWeight: 600 }}>{h.productName}</div>
                     <div style={{ fontSize: 11, color: "#94a3b8" }}>
-                      {new Date(h.at).toLocaleTimeString()} · barcode {h.barcode}
+                      {new Date(h.at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET"} · barcode {h.barcode}
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>

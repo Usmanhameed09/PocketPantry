@@ -59,8 +59,6 @@ export default function ReportsPage() {
   // the chosen machines (e.g. all machines at one location).
   const [machineIds, setMachineIds] = useState<string[]>([]);
   const [machineMenuOpen, setMachineMenuOpen] = useState(false);
-  const [backfilling, setBackfilling] = useState(false);
-  const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
 
   const fmtDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   // "Last month" = previous calendar month (e.g. on May 28 → April 1 to April 30)
@@ -367,75 +365,8 @@ export default function ReportsPage() {
               background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
               fontSize: 13, fontWeight: 500, cursor: "pointer",
             }}><Printer size={14} /> Print</button>
-            <button
-              onClick={async () => {
-                if (!confirm("Backfill all Nayax sales from the last 365 days into daily_sales? This runs in 4 chunks of 90 days, takes ~2-5 minutes total. Safe to re-run.")) return;
-                setBackfilling(true);
-                setBackfillMsg("Starting…");
-                // 4 chunks of 90 days each = 360 days back from today.
-                // Sequential to keep each Vercel call under the 300s timeout.
-                const chunks = [0, 90, 180, 270];
-                let totalWritten = 0;
-                let earliestDate: string | null = null;
-                let machinesProcessed = 0;
-                const errors: string[] = [];
-                for (let i = 0; i < chunks.length; i++) {
-                  const offset = chunks[i];
-                  setBackfillMsg(`Chunk ${i + 1}/4: backfilling days ${offset + 1} to ${offset + 90} ago…`);
-                  try {
-                    const res = await fetch(`/api/admin/backfill-nayax?days=90&offset=${offset}`, { method: "POST" });
-                    const j = await res.json();
-                    if (j.ok) {
-                      totalWritten += j.dailySalesWritten || 0;
-                      machinesProcessed = Math.max(machinesProcessed, j.machinesProcessed || 0);
-                      if (j.fromDate && (!earliestDate || j.fromDate < earliestDate)) earliestDate = j.fromDate;
-                    } else {
-                      errors.push(`Chunk ${i + 1}: ${j.error || "unknown"}`);
-                    }
-                  } catch (e) {
-                    errors.push(`Chunk ${i + 1}: ${e instanceof Error ? e.message : "network error"}`);
-                  }
-                }
-                if (errors.length === 0) {
-                  setBackfillMsg(`Done. Wrote ${totalWritten} rows across ${machinesProcessed} machines, back to ${earliestDate || "?"}.`);
-                } else if (totalWritten > 0) {
-                  setBackfillMsg(`Partial: wrote ${totalWritten} rows, ${errors.length} chunk(s) failed: ${errors.join("; ")}`);
-                } else {
-                  setBackfillMsg(`Backfill failed: ${errors.join("; ")}`);
-                }
-                setBackfilling(false);
-                void load();
-              }}
-              disabled={backfilling}
-              style={{
-                display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
-                background: backfilling ? "#94a3b8" : "#0d9488", color: "#fff",
-                border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600,
-                cursor: backfilling ? "wait" : "pointer",
-              }}
-              title="Pull every Nayax transaction from the last 365 days into daily_sales — one-time backfill so Reports/Machines show true historical numbers"
-            >
-              {backfilling ? "Backfilling…" : "Backfill Nayax 365d"}
-            </button>
           </div>
         </div>
-
-        {backfillMsg && (
-          <div style={{
-            margin: "0 0 16px",
-            padding: "10px 14px",
-            background: backfillMsg.startsWith("Done") ? "#f0fdf4" : "#fef2f2",
-            border: `1px solid ${backfillMsg.startsWith("Done") ? "#86efac" : "#fecaca"}`,
-            color: backfillMsg.startsWith("Done") ? "#166534" : "#991b1b",
-            borderRadius: 8, fontSize: 13,
-            display: "flex", justifyContent: "space-between", alignItems: "center",
-          }}>
-            <span>{backfillMsg}</span>
-            <button onClick={() => setBackfillMsg(null)} style={{
-              background: "none", border: "none", cursor: "pointer", color: "inherit",
-            }}>✕</button>
-          </div>
-        )}
 
         {/* Data quality banner */}
         {dataQuality.flaggedCostProducts > 0 && (

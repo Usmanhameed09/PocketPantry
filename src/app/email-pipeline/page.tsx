@@ -644,7 +644,7 @@ export default function EmailPipelinePage() {
       const res = await fetch("/api/email-agent/check-inbox");
       const data = await res.json();
       if (res.ok) {
-        setLastInboxCheck(new Date().toLocaleTimeString());
+        setLastInboxCheck(new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET");
         if (data.matched > 0) {
           setCallStatus({ leadId: "inbox", message: `Found ${data.matched} new replies — stages updated automatically`, type: "success" });
           fetchLeads();
@@ -3613,11 +3613,11 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalli
         <div style={{
           fontSize: 11, color: "#1e40af", marginBottom: 4,
           background: "#dbeafe", padding: "4px 6px", borderRadius: 4,
-        }} title={lead.nextActionAt ? `Scheduled ${new Date(lead.nextActionAt).toLocaleString()}` : ""}>
+        }} title={lead.nextActionAt ? `Scheduled ${new Date(lead.nextActionAt).toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET"}` : ""}>
           → {lead.nextAction}
           {lead.nextActionAt && (
             <span style={{ color: "#64748b", marginLeft: 4 }}>
-              ({new Date(lead.nextActionAt).toLocaleDateString()})
+              ({new Date(lead.nextActionAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })})
             </span>
           )}
         </div>
@@ -3626,7 +3626,7 @@ function KanbanCard({ lead, expanded, onToggle, onTriggerCall, onDelete, isCalli
       {/* Last touch */}
       {lead.lastTouchAt && (
         <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 4 }}>
-          Last touch: {new Date(lead.lastTouchAt).toLocaleDateString()}
+          Last touch: {new Date(lead.lastTouchAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })}
         </div>
       )}
 

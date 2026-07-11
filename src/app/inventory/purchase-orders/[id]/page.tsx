@@ -171,10 +171,10 @@ export default function PODetailPage() {
                 <Badge color={STATUS_COLOR[po.status] || "gray"}>{po.status}</Badge>
               </div>
               <div style={{ fontSize: 13, color: "#64748b" }}>
-                Created {new Date(po.createdAt).toLocaleString()}
-                {po.approvedAt && ` · Approved ${new Date(po.approvedAt).toLocaleDateString()}`}
-                {po.purchasedAt && ` · Purchased ${new Date(po.purchasedAt).toLocaleDateString()}`}
-                {po.receivedAt && ` · Received ${new Date(po.receivedAt).toLocaleDateString()}`}
+                Created {new Date(po.createdAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET"}
+                {po.approvedAt && ` · Approved ${new Date(po.approvedAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })}`}
+                {po.purchasedAt && ` · Purchased ${new Date(po.purchasedAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })}`}
+                {po.receivedAt && ` · Received ${new Date(po.receivedAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })}`}
               </div>
               <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", marginTop: 8 }}>${po.totalCost.toFixed(2)}</div>
             </div>

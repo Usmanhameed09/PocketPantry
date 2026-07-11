@@ -66,8 +66,8 @@ export default function ReplacementsPage() {
                   </div>
                   {p.notes && <p style={{ fontSize: 13, color: "#475569", marginTop: 10, marginBottom: 0 }}>{p.notes}</p>}
                   <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>
-                    Started {new Date(p.startedAt).toLocaleDateString()}
-                    {p.completedAt && ` · Completed ${new Date(p.completedAt).toLocaleDateString()}`}
+                    Started {new Date(p.startedAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })}
+                    {p.completedAt && ` · Completed ${new Date(p.completedAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })}`}
                   </div>
                 </div>
               ))}

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Header from "@/components/Header";
+import { timeET } from "@/lib/format-et";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useRouter } from "next/navigation";
 import {
@@ -164,41 +165,40 @@ export default function Dashboard() {
     } catch { /* ignore */ }
   };
 
-  const triggerSync = async (force: boolean) => {
+  // mount  = page opened / browser-refreshed → ALWAYS pull latest (operator
+  //          expectation: a reload means "give me the newest number now")
+  // manual = Refresh button → ALWAYS pull latest + the deeper background sync
+  // tick   = 90s background timer → debounced so ticks don't stack
+  const triggerSync = async (mode: "mount" | "manual" | "tick") => {
     if (syncing) return;
 
     // Show the current stored numbers immediately (fast read of daily_sales,
     // ~1s) so the operator never stares at a blank tile.
     await reloadData();
 
-    // Pull the LATEST today's revenue with the lightest possible Nayax pull
-    // (scope=today ≈ 14s: today's sales only, no history/refill writes). Always
-    // runs on a manual Refresh so it truly reflects the latest; on background
-    // ticks a small debounce avoids stacking pulls. It runs in the background
-    // with a non-blocking "updating" state — the operator is never stuck.
     let last = 0;
     try { last = Number(localStorage.getItem("dashLastSync") || "0"); } catch { /* ignore */ }
-    const ageMs = Date.now() - last;
-    if (!force && ageMs < 20 * 1000) return; // avoid stacking auto-ticks
+    if (mode === "tick" && Date.now() - last < 20 * 1000) return; // avoid stacking ticks
 
+    // Pull the LATEST today's sales (scope=today ≈ 20s, lightest Nayax pull),
+    // in the background with the non-blocking "syncing" state.
     setSyncing(true);
     try {
       // keepalive lets the write finish even if the operator navigates/reloads
       // mid-sync — no record is lost. (The upsert is idempotent regardless.)
       await fetch("/api/inventory/sync?scope=today", { method: "POST", keepalive: true });
       try { localStorage.setItem("dashLastSync", String(Date.now())); } catch { /* ignore */ }
-      setSyncedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+      setSyncedAt(timeET());
       await reloadData();
     } catch { /* sync best-effort */ } finally {
       setSyncing(false);
     }
 
-    // Occasionally (or on manual refresh) also run the deeper pull in the
-    // background — refill/machine-inventory + HAHA history — without a spinner,
-    // so those cards stay current too. Throttled to ~8 min.
+    // Deeper pull (refill/machine-inventory + HAHA history) in the background,
+    // no spinner. Manual refresh always; mount/tick throttled to ~8 min.
     let lastDeep = 0;
     try { lastDeep = Number(localStorage.getItem("dashLastDeep") || "0"); } catch { /* ignore */ }
-    if (force || Date.now() - lastDeep > 8 * 60 * 1000) {
+    if (mode === "manual" || Date.now() - lastDeep > 8 * 60 * 1000) {
       try { localStorage.setItem("dashLastDeep", String(Date.now())); } catch { /* ignore */ }
       void fetch("/api/inventory/sync?scope=fast", { method: "POST" })
         .then(() => fetch("/api/inventory/sync?scope=chinese", { method: "POST" }))
@@ -213,7 +213,7 @@ export default function Dashboard() {
   useEffect(() => {
     const id = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        void triggerSync(false);
+        void triggerSync("tick");
       }
     }, 90 * 1000);
     return () => clearInterval(id);
@@ -235,8 +235,8 @@ export default function Dashboard() {
     }
   }, [tiles]);
 
-  // Auto-sync once on open (throttled inside triggerSync).
-  useEffect(() => { void triggerSync(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // Auto-sync on every open / browser refresh — always pulls the latest.
+  useEffect(() => { void triggerSync("mount"); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   // Progressive render: never block the WHOLE page on data. Use empty
   // placeholder values until each fetch lands; the per-tile/per-section
@@ -310,11 +310,16 @@ export default function Dashboard() {
           </span>
         ) : (
           <span style={{ fontSize: 12, color: "#64748b" }}>
-            {syncedAt ? `Sales updated ${syncedAt}` : "Sales as of last sync"}
+            {syncedAt ? (
+              <>
+                <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "#16a34a", marginRight: 6 }} />
+                Live · synced {syncedAt}
+              </>
+            ) : "Sales as of last sync"}
           </span>
         )}
         <button
-          onClick={() => void triggerSync(true)}
+          onClick={() => void triggerSync("manual")}
           disabled={syncing}
           title="Pull the latest Nayax + HAHA sales now"
           style={{
@@ -534,7 +539,7 @@ export default function Dashboard() {
                     </div>
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{recentReply.from}</div>
-                      <div style={{ fontSize: 11, color: "#64748b" }}>{new Date(recentReply.receivedAt).toLocaleDateString()}</div>
+                      <div style={{ fontSize: 11, color: "#64748b" }}>{new Date(recentReply.receivedAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })}</div>
                     </div>
                   </div>
                   {recentReply.intent && (

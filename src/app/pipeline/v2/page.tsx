@@ -412,7 +412,7 @@ export default function PipelineV2Page() {
                   fontSize: 11, padding: "3px 8px", background: "#f0fdfa", color: "#0d9488",
                   border: "1px solid #99f6e4", borderRadius: 4, fontWeight: 600,
                 }}>
-                  {new Date(s.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })} {s.time}
+                  {new Date(s.date).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" })} {s.time}
                 </span>
               ))}
             </div>

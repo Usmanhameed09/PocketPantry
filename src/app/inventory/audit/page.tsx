@@ -173,8 +173,8 @@ export default function AuditPage() {
                   return (
                     <tr key={e.id} style={{ borderTop: idx === 0 ? "none" : "1px solid #f1f5f9" }}>
                       <Td>
-                        <div style={{ fontSize: 12, color: "#0f172a" }}>{new Date(e.createdAt).toLocaleDateString()}</div>
-                        <div style={{ fontSize: 11, color: "#94a3b8" }}>{new Date(e.createdAt).toLocaleTimeString()}</div>
+                        <div style={{ fontSize: 12, color: "#0f172a" }}>{new Date(e.createdAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })}</div>
+                        <div style={{ fontSize: 11, color: "#94a3b8" }}>{new Date(e.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET"}</div>
                       </Td>
                       <Td><Badge color={badge.color}>{badge.label}</Badge></Td>
                       <Td>

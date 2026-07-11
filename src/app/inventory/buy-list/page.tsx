@@ -113,7 +113,7 @@ export default function BuyListPage() {
               <h2 style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", margin: 0 }}>Weekly buy list</h2>
               <p style={{ fontSize: 13, color: "#64748b", margin: "4px 0 0" }}>
                 Horizon: <strong>{horizonDays}d</strong> · Safety: <strong>{safetyDays}d</strong>
-                {generatedAt && ` · Last run ${new Date(generatedAt).toLocaleString()}`}
+                {generatedAt && ` · Last run ${new Date(generatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET"}`}
               </p>
             </div>
             <BtnPrimary onClick={generate} disabled={generating}>

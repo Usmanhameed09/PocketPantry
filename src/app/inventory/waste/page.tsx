@@ -251,7 +251,7 @@ function WasteTab({ report, isMobile }: { report: WasteReport | null; isMobile: 
               <tbody>
                 {report.recentEvents.map((e, idx) => (
                   <tr key={e.movementId} style={{ borderTop: idx === 0 ? "none" : "1px solid #f1f5f9" }}>
-                    <Td color="#64748b">{new Date(e.createdAt).toLocaleDateString()}</Td>
+                    <Td color="#64748b">{new Date(e.createdAt).toLocaleDateString("en-US", { timeZone: "America/New_York" })}</Td>
                     <Td><strong>{e.productName}</strong></Td>
                     <Td><Badge color={REASON_BADGE[e.reason].color}>{REASON_BADGE[e.reason].label}</Badge></Td>
                     <Td>{e.machineName || "warehouse"}</Td>

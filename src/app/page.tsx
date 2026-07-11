@@ -193,16 +193,24 @@ export default function Dashboard() {
     void reloadData();
 
     try {
-      await livePull;
+      const res = await livePull;
+      const j = await res.json().catch(() => ({} as { changed?: boolean }));
       try { localStorage.setItem("dashLastSync", String(Date.now())); } catch { /* ignore */ }
-      setSyncedAt(timeET());
-      await reloadData();
+      if (j && j.changed === false) {
+        // Checked the machines — nothing new. Say so explicitly (instead of
+        // silently re-showing the same number) and skip the re-read.
+        setSyncedAt(`${timeET()} — no new sales`);
+      } else {
+        setSyncedAt(timeET());
+        await reloadData();
+      }
     } catch { /* sync best-effort */ } finally {
       setSyncing(false);
     }
 
     // Deeper pull (refill/machine-inventory + HAHA history) in the background,
-    // no spinner. Manual refresh always; mount/tick throttled to ~8 min.
+    // no spinner. Runs AFTER the live pull (never concurrently — parallel
+    // requests contend on the scraper and stretched the live pull to 40-50s).
     let lastDeep = 0;
     try { lastDeep = Number(localStorage.getItem("dashLastDeep") || "0"); } catch { /* ignore */ }
     if (mode === "manual" || Date.now() - lastDeep > 8 * 60 * 1000) {

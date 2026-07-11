@@ -301,6 +301,20 @@ export async function POST(req?: Request) {
       errors.push(`Chinese fetch: ${err.message}`);
     }
 
+    // CHANGE DETECTION (today-only pulls): compare today's stored totals
+    // before vs after the upsert so the UI can say "no new sales" honestly
+    // instead of silently re-showing the same number after a long check.
+    const todaysTotals = async (): Promise<{ u: number; rev: number }> => {
+      const supabase = createServerClient();
+      const { data } = await supabase
+        .from("daily_sales").select("units_sold, revenue")
+        .gte("sale_date", recentCutoff).range(0, 4999);
+      let u = 0, rev = 0;
+      for (const r of data || []) { u += (r.units_sold as number) || 0; rev += (r.revenue as number) || 0; }
+      return { u, rev: Math.round(rev * 100) / 100 };
+    };
+    const before = todayOnly ? await todaysTotals() : null;
+
     // Bulk-upsert daily_sales rows for weekly trends (now includes HAHA rows)
     let dailySalesWritten = 0;
     try {
@@ -309,9 +323,16 @@ export async function POST(req?: Request) {
       errors.push(`daily_sales: ${err.message}`);
     }
 
+    let changed: boolean | undefined;
+    if (todayOnly && before) {
+      const after = await todaysTotals();
+      changed = after.u !== before.u || after.rev !== before.rev;
+    }
+
     return NextResponse.json({
       success: true,
       scope,
+      ...(changed !== undefined ? { changed } : {}),
       machinesSynced,
       chineseMachinesSynced,
       productsProcessed: productsCreated,

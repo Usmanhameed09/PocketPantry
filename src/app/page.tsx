@@ -172,21 +172,28 @@ export default function Dashboard() {
   const triggerSync = async (mode: "mount" | "manual" | "tick") => {
     if (syncing) return;
 
-    // Show the current stored numbers immediately (fast read of daily_sales,
-    // ~1s) so the operator never stares at a blank tile.
-    await reloadData();
-
     let last = 0;
     try { last = Number(localStorage.getItem("dashLastSync") || "0"); } catch { /* ignore */ }
-    if (mode === "tick" && Date.now() - last < 20 * 1000) return; // avoid stacking ticks
+    if (mode === "tick" && Date.now() - last < 20 * 1000) {
+      await reloadData(); // still re-read stored numbers on a debounced tick
+      return;
+    }
 
-    // Pull the LATEST today's sales (scope=today ≈ 20s, lightest Nayax pull),
-    // in the background with the non-blocking "syncing" state.
+    // Start the LIVE sync THE INSTANT the page opens — indicator on and the
+    // request in flight before anything else. Two reasons:
+    //   1. The operator sees "syncing" immediately, so they know to wait a
+    //      moment for live numbers (no silent stale window).
+    //   2. keepalive means even if they navigate away a second later, the
+    //      request still completes and the DB gets the fresh data — so other
+    //      pages show correct numbers too. Nothing is lost by leaving early.
     setSyncing(true);
+    const livePull = fetch("/api/inventory/sync?scope=today", { method: "POST", keepalive: true });
+
+    // Load the current stored numbers IN PARALLEL (never delays the sync).
+    void reloadData();
+
     try {
-      // keepalive lets the write finish even if the operator navigates/reloads
-      // mid-sync — no record is lost. (The upsert is idempotent regardless.)
-      await fetch("/api/inventory/sync?scope=today", { method: "POST", keepalive: true });
+      await livePull;
       try { localStorage.setItem("dashLastSync", String(Date.now())); } catch { /* ignore */ }
       setSyncedAt(timeET());
       await reloadData();

@@ -32,7 +32,9 @@ const nums = (t) => [...String(t).replace(/,/g, "").matchAll(/-?\d+(?:\.\d+)?/g)
 const has = (r, v, tol = 0.02) => nums(r).some((n) => Math.abs(n - v) <= Math.max(tol, Math.abs(v) * 0.02));
 const word = (r, w) => new RegExp((w || "").split(/\s+/)[0], "i").test(r);
 const DRINK = /coke|cola|pepsi|sprite|fanta|crush|dr\.? pepper|mountain dew|mtn dew|soda|seltzer|sparkling|monster|red ?bull|celsius|energy|gatorade|powerade|body ?armor|water|juice|lemonade|arizona|snapple|gold peak|brisk|tea|minute maid|tropicana|milk|coffee|starbucks|12 oz cans|16\.9 oz|prime/i;
-const CANDY = /candy|chocolate|snickers|twix|kit ?kat|m&m|skittles|starburst|reese|hershey|sour patch|gummy|laffy|airhead|nerds|mentos|haribo|mike & ike|butterfinger|payday|tootsie|mamba/i;
+// note: no bare "chocolate" — it wrongly classifies cookies (Famous Amos
+// Chocolate Chip) as candy; brand terms only.
+const CANDY = /candy|snickers|twix|kit ?kat|m&m|skittles|starburst|reese|hershey|sour patch|gummy|laffy|airhead|nerds|mentos|haribo|mike & ike|butterfinger|payday|tootsie|mamba/i;
 
 async function sales({ from, to = today, machineFrag, ids } = {}) {
   let q = `daily_sales?select=units_sold,revenue,machine_id,product_id&sale_date=gte.${from}&sale_date=lte.${to}`;

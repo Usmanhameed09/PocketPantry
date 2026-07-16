@@ -24,7 +24,10 @@ import { TOOL_DEFINITIONS, executeTool, buildMiniSnapshot } from "@/lib/ai-tools
 import { openAiChat } from "@/lib/openai-chat";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// 5 minutes — the platform maximum (the sync route already runs at 300s).
+// A heavy hybrid question (many tool calls + retries) must produce an ANSWER,
+// not a timeout; 60s was cutting off legitimate long questions.
+export const maxDuration = 300;
 
 type ChatMessage = {
   role: "user" | "assistant" | "system" | "tool";

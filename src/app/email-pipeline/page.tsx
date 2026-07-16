@@ -769,6 +769,28 @@ export default function EmailPipelinePage() {
     }
   };
 
+  // Bulk delete every selected lead in one API call (kanban checkboxes feed
+  // selectedLeadIds — the same selection "Email Selected" uses).
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const removeSelectedLeads = async () => {
+    if (selectedLeadIds.length === 0 || bulkDeleting) return;
+    if (!confirm(`Delete ${selectedLeadIds.length} selected lead${selectedLeadIds.length === 1 ? "" : "s"}? This cannot be undone.`)) return;
+    setBulkDeleting(true);
+    try {
+      const res = await fetch(`/api/leads?ids=${encodeURIComponent(selectedLeadIds.join(","))}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete leads.");
+      const removed = new Set(selectedLeadIds);
+      setLeads((current) => current.filter((l) => !removed.has(l.id)));
+      clearLeadSelection();
+      setCallStatus({ leadId: "", message: `Deleted ${data.deletedCount ?? selectedLeadIds.length} lead(s).`, type: "success" });
+    } catch (error) {
+      setCallStatus({ leadId: "", message: error instanceof Error ? error.message : "Failed to delete leads.", type: "error" });
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
   const bookCalendlyMeeting = async (leadId: string, startTime?: string) => {
     setBookingLeadId(leadId);
     setBookingStatus((current) => {
@@ -1057,11 +1079,27 @@ export default function EmailPipelinePage() {
               {bulkCalling ? <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Sending...</> : <><CheckSquare size={14} /> Email Selected</>}
             </button>
             {selectedLeadIds.length > 0 && (
-              <button onClick={clearLeadSelection} style={{
-                display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
-                background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
-                fontSize: 13, fontWeight: 500, cursor: "pointer",
-              }}><RotateCcw size={14} /> Clear Selection</button>
+              <>
+                <button
+                  onClick={removeSelectedLeads}
+                  disabled={bulkDeleting}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
+                    background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca", borderRadius: 8,
+                    fontSize: 13, fontWeight: 600, cursor: bulkDeleting ? "not-allowed" : "pointer",
+                    opacity: bulkDeleting ? 0.7 : 1,
+                  }}
+                >
+                  {bulkDeleting
+                    ? <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Deleting…</>
+                    : <>Delete Selected ({selectedLeadIds.length})</>}
+                </button>
+                <button onClick={clearLeadSelection} style={{
+                  display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
+                  background: "#fff", color: "#374151", border: "1px solid #d5d9e2", borderRadius: 8,
+                  fontSize: 13, fontWeight: 500, cursor: "pointer",
+                }}><RotateCcw size={14} /> Clear Selection</button>
+              </>
             )}
             <button
               onClick={checkInbox}

@@ -63,10 +63,21 @@ const NOISE = new Set([
   "bottles", "can", "cans", "cup", "cups", "single", "serve", "size",
   "assorted", "variety", "original", "classic", "inc", "llc", "co",
 ]);
-const norm = (s) => s.toLowerCase().replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();
+const norm = (s) => s.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();
 const tokens = (s) => norm(s).split(" ").filter(Boolean);
+// Canonicalize a word: strip digits glued onto letters ("herrs1.5" → "herrs")
+// and a plural trailing s ("ribs" → "rib", "herrs" → "herr") so twins like
+// "Herr's Baby Back Ribs" / "Herrs1.5 Baby Back Rib Chip" share a key.
+const canonWord = (w) => {
+  let x = w.replace(/^([a-z]+)[\d.]+$/, "$1"); // letters+glued number → letters
+  if (x.length >= 4 && x.endsWith("s") && !x.endsWith("ss")) x = x.slice(0, -1);
+  return x;
+};
 const meaningfulKey = (s) => {
-  const t = tokens(s).filter((w) => !NOISE.has(w) && !/^[\d.]+$/.test(w) && w.length > 1);
+  const t = tokens(s)
+    .filter((w) => !NOISE.has(w) && !/^[\d.]+$/.test(w) && w.length > 1)
+    .map(canonWord)
+    .filter((w) => !NOISE.has(w) && w.length > 1);
   return t.length >= 2 ? [...new Set(t)].sort().join("|") : null;
 };
 

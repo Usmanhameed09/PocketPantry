@@ -910,6 +910,29 @@ const CANDY_WORDS = [
   "now and later", "ring pop", "blow pop", "tootsie", "lifesaver", "life saver",
   "jelly belly", "trolli", "sour punch", "pixy stix", "pop rocks", "mamba",
 ];
+// Per-instance cache of name-classified product ids. The "is my mix balanced"
+// style question triggers 3-4 category tool calls; each used to rescan the
+// whole 6,458-row catalog (7 paginated queries), stacking up past the route's
+// 60s limit → Vercel returned a plain-text error page. One scan now serves
+// all classes for 5 minutes.
+let _catCache: { at: number; byClass: Record<string, Set<string>> } | null = null;
+async function categoryIdsForClass(
+  supabase: ReturnType<typeof createServerClient>,
+  wantClass: "drink" | "candy" | "snack",
+): Promise<Set<string>> {
+  if (_catCache && Date.now() - _catCache.at < 5 * 60 * 1000) return _catCache.byClass[wantClass];
+  const byClass: Record<string, Set<string>> = { drink: new Set(), candy: new Set(), snack: new Set() };
+  const PAGEP = 1000;
+  for (let from = 0; from < 200000; from += PAGEP) {
+    const { data } = await supabase.from("products").select("id, name").range(from, from + PAGEP - 1);
+    if (!data || data.length === 0) break;
+    for (const p of data) byClass[inferCategory(p.name as string)].add(p.id as string);
+    if (data.length < PAGEP) break;
+  }
+  _catCache = { at: Date.now(), byClass };
+  return byClass[wantClass];
+}
+
 function inferCategory(name: string): "drink" | "candy" | "snack" {
   const n = (name || "").toLowerCase();
   if (DRINK_WORDS.some((w) => n.includes(w))) return "drink";
@@ -1264,9 +1287,20 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   // vs "Cheetos Flamin Hot") and must never be conflated: the "Velocity of
   // Cheetos" bug came from swapping an exact match for a better-selling
   // different flavor.
+  // canonWord: strip digits glued to letters ("herrs1.5"→"herrs") + plural s
+  // ("ribs"→"rib") so "Herrs Chips Baby Back Rib" and "Herrs1.5 Baby Back Rib
+  // Chip" (27 real units in 6 machines) land in one group. Mirrors the
+  // backfill script — keep in sync.
+  const canonWord = (w: string): string => {
+    let x = w.replace(/^([a-z]+)[\d.]+$/, "$1");
+    if (x.length >= 4 && x.endsWith("s") && !x.endsWith("ss")) x = x.slice(0, -1);
+    return x;
+  };
   const variantKey = (nm: string): string | null => {
-    const t = nm.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/)
-      .filter((w) => w && !VARIANT_NOISE.has(w) && !/^\d+$/.test(w) && w.length > 1);
+    const t = nm.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9.]+/g, " ").trim().split(/\s+/)
+      .filter((w) => w && !VARIANT_NOISE.has(w) && !/^[\d.]+$/.test(w) && w.length > 1)
+      .map(canonWord)
+      .filter((w) => !VARIANT_NOISE.has(w) && w.length > 1);
     return t.length >= 2 ? [...new Set(t)].sort().join("|") : null;
   };
   const normName = (nm: string) => nm.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -1615,14 +1649,7 @@ async function getSalesSummary(args: {
   if (args.category) {
     const wantClass = normalizeCategoryQuery(args.category);
     if (wantClass) {
-      const set = new Set<string>();
-      const PAGEP = 1000;
-      for (let from = 0; from < 200000; from += PAGEP) {
-        const { data } = await supabase.from("products").select("id, name").range(from, from + PAGEP - 1);
-        if (!data || data.length === 0) break;
-        for (const p of data) if (inferCategory(p.name as string) === wantClass) set.add(p.id as string);
-        if (data.length < PAGEP) break;
-      }
+      const set = await categoryIdsForClass(supabase, wantClass);
       if (productIds) {
         // Both filters → intersect (productIds is small, safe for .in()).
         productIds = productIds.filter((id) => set.has(id));

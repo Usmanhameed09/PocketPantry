@@ -163,6 +163,16 @@ export default function ReportsPage() {
       ? (machineOptions.find((m) => m.machineId === machineIds[0])?.machine || "1 machine")
       : `${machineIds.length} machines`;
   const paymentSplit = data?.paymentSplit ?? null;
+  // Human period label for the stat tiles — must match the SELECTED preset.
+  // (It used to show "· 30d" even when "This Month" was selected, because the
+  // API echoes a days field that defaults to 30 for calendar ranges.)
+  const periodLabel =
+    preset === "thisMonth" ? "This Month" :
+    preset === "month" ? "Last Month" :
+    preset === "90d" ? "Last 90 Days" :
+    preset === "30d" ? "Last 30 Days" :
+    preset === "7d" ? "Last 7 Days" :
+    data?.range ? `${data.range.fromDate} → ${data.range.toDate}` : "Custom";
   const inventoryTurns = data?.inventoryTurns ?? null;
   const inventoryNote = data?.inventoryNote ?? null;
   const dataQuality = data?.dataQuality ?? {
@@ -394,7 +404,7 @@ export default function ReportsPage() {
           <BigStat icon={<DollarSign size={20} color="#16a34a" />} iconBg="#dcfce7"
             label="Total Revenue"
             value={loading ? "—" : `$${stats.totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
-            sub={loading ? "loading…" : `${stats.totalUnits.toLocaleString()} units · ${data?.range?.days ?? "—"}d`} />
+            sub={loading ? "loading…" : `${stats.totalUnits.toLocaleString()} units · ${periodLabel}`} />
           <BigStat icon={<TrendingUp size={20} color="#059669" />} iconBg="#d1fae5"
             label="Net Profit"
             value={loading ? "—" : `$${stats.netProfit.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}

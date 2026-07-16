@@ -241,6 +241,27 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
+    // Bulk: ?ids=a,b,c — deletes many in one call (kanban "Delete Selected").
+    const idsParam = searchParams.get("ids");
+
+    if (idsParam) {
+      const ids = idsParam.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 200);
+      if (ids.length === 0) {
+        return NextResponse.json({ error: "No lead ids provided" }, { status: 400 });
+      }
+      let deletedCount = 0;
+      const failed: string[] = [];
+      for (const one of ids) {
+        try {
+          if (await deleteLead(one)) deletedCount++;
+          else failed.push(one);
+        } catch {
+          failed.push(one);
+        }
+      }
+      await invalidateOnLeadWrite();
+      return NextResponse.json({ ok: true, deletedCount, failed: failed.length ? failed : undefined });
+    }
 
     if (!id) {
       return NextResponse.json({ error: "Missing lead id" }, { status: 400 });

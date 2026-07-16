@@ -45,14 +45,31 @@ export function useAssistantChat(opts?: { persistKey?: string }) {
     setMessages(next);
     setSending(true);
     try {
-      const res = await fetch(ASSISTANT_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next.map((m) => ({ role: m.role, content: m.content })) }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Assistant failed");
-      setMessages((cur) => [...cur, { role: "assistant", content: data.reply, ts: new Date().toISOString() }]);
+      // One transparent retry: a Vercel function timeout returns a plain-text
+      // "An error occurred…" page (not JSON), which used to surface as
+      // «Unexpected token 'A' … is not valid JSON». Parse defensively and
+      // retry once before showing a human-readable error.
+      let reply: string | null = null;
+      let lastErr = "The assistant took too long. Please ask again.";
+      for (let attempt = 0; attempt < 2 && reply === null; attempt++) {
+        const res = await fetch(ASSISTANT_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: next.map((m) => ({ role: m.role, content: m.content })) }),
+        });
+        const text = await res.text();
+        let data: { success?: boolean; reply?: string; error?: string } | null = null;
+        try { data = JSON.parse(text); } catch { data = null; }
+        if (data && data.success && data.reply) {
+          reply = data.reply;
+        } else {
+          lastErr = data?.error
+            ? data.error
+            : "That question took longer than the time limit. Try asking it in a simpler or more specific way.";
+        }
+      }
+      if (reply === null) throw new Error(lastErr);
+      setMessages((cur) => [...cur, { role: "assistant", content: reply as string, ts: new Date().toISOString() }]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
     } finally {

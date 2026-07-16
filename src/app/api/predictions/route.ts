@@ -45,7 +45,13 @@ async function applyProductHealthGuardrail(json: Record<string, unknown>): Promi
       for (const r of data) soldBy.set(r.product_id as string, (soldBy.get(r.product_id as string) || 0) + ((r.units_sold as number) || 0));
       if (data.length < PAGE) break;
     }
-    const { data: mi } = await supabase.from("machine_inventory").select("product_id").gt("estimated_remaining", -1).range(0, 9999);
+    // "Currently in a machine" = the sync refreshed its machine_inventory row
+    // within the last 7 days. Rows are never deleted when a machine drops a
+    // product — they just stop being refreshed — so updated_at recency is the
+    // real presence signal (a plain row-exists check counts years-old slots).
+    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
+    const { data: mi } = await supabase
+      .from("machine_inventory").select("product_id").gte("updated_at", weekAgo).range(0, 9999);
     const inMachine = new Set((mi || []).map((r) => r.product_id as string));
 
     const prodTokens = products.map((p) => ({ id: p.id, set: new Set(tokensOf(p.name)) }));

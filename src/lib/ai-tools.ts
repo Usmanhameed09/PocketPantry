@@ -1323,7 +1323,10 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   // "no sales". Caught by the pre-handover battery.
   const groupKeyOf = (p: Record<string, unknown>) => (p.group_id as string) || (p.id as string);
   if (ranked.length > 1) {
-    const near = ranked.filter((r) => r.score >= ranked[0].score - 15).slice(0, 8);
+    // Wide window: a generic brand query ("Herrs") ties DOZENS of flavors at
+    // the same score; the previous 8-item cap often excluded the one that
+    // actually sells, so the answer was a dead flavor with "0 velocity".
+    const near = ranked.filter((r) => r.score >= ranked[0].score - 15).slice(0, 40);
     if (near.length > 1) {
       const keys = [...new Set(near.map((r) => groupKeyOf(r.item)))];
       const nearIds = near.map((r) => r.item.id as string);
@@ -1336,12 +1339,16 @@ async function getProductDetails(name: string): Promise<ToolResult> {
       for (const s of stockRows || []) stockByKey.set(s.group_key as string, (s.on_hand_units as number) || 0);
       const soldById = new Map<string, number>();
       for (const s of soldRows || []) soldById.set(s.product_id as string, (soldById.get(s.product_id as string) || 0) + ((s.units_sold as number) || 0));
-      const sells = (p: Record<string, unknown>) => (soldById.get(p.id as string) || 0) > 0;
+      const unitsOf = (p: Record<string, unknown>) => soldById.get(p.id as string) || 0;
       const stocked = (p: Record<string, unknown>) => (stockByKey.get(groupKeyOf(p)) || 0) > 0;
-      if (!sells(product)) {
-        // Prefer a near-match that actually SELLS; else one that has stock.
-        const alt = near.find((r) => sells(r.item)) || (!stocked(product) ? near.find((r) => stocked(r.item)) : undefined);
-        if (alt) product = alt.item;
+      if (unitsOf(product) === 0) {
+        // Prefer the BEST-selling near-match; else one that has stock.
+        const bySales = [...near].sort((a, b) => unitsOf(b.item) - unitsOf(a.item))[0];
+        if (bySales && unitsOf(bySales.item) > 0) product = bySales.item;
+        else if (!stocked(product)) {
+          const alt = near.find((r) => stocked(r.item));
+          if (alt) product = alt.item;
+        }
       }
     }
   }

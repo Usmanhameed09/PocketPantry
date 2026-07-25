@@ -24,6 +24,7 @@ import "server-only";
 import { createServerClient } from "@/lib/supabase";
 import { ensureDefaultCompany } from "@/lib/inventory-store";
 import { dateNDaysAgoInOperatorTz, todayInOperatorTz } from "@/lib/operator-timezone";
+import { resolveProducts } from "@/lib/product-resolver";
 
 // ─────────────────────────────────────────────────────────────────────
 // Tool definitions exposed to GPT-4o via the `tools` parameter.
@@ -1128,6 +1129,9 @@ async function searchProducts(query: string, limit: number): Promise<ToolResult>
     .limit(100);
 
   let rows = candidates || [];
+  // Resolver-first: active-only universe + brand synonyms, sellers first.
+  const famHits = await resolveProducts(query);
+  if (famHits.length > 0) rows = famHits as unknown as typeof rows;
   // Typo / abbreviation fallback: if the substring search found nothing, fuzzy-
   // match against the REAL (recently-sold) catalog so "ceke", "mtndew", etc.
   // still resolve.
@@ -1228,54 +1232,60 @@ async function getProductDetails(name: string): Promise<ToolResult> {
   const supabase = createServerClient();
 
   const cols = "id, name, sku, category, vendor, unit_cost, default_vend_price, case_size, status, group_id";
-  // Candidate pass across ALL meaningful tokens (plus the full phrase). A
-  // single common word ("sweet") matches hundreds of rows, so a small
-  // unordered cap silently truncated the real answer ("Arizona Sweet Tea")
-  // out of the set. 500 with token-OR captures every plausible match; the
-  // fuzzy ranker + prefer-live step then choose among them.
-  const nameTokens = name.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
-  const orClauses = [`name.ilike.%${name}%`, ...nameTokens.map((t) => `name.ilike.%${t}%`)];
-  const firstWord = name.trim().split(/\s+/)[0];
-  if (nameTokens.length === 0) orClauses.push(`name.ilike.%${firstWord}%`);
-  let { data: products } = await supabase
-    .from("products")
-    .select(cols)
-    .eq("company_id", companyId)
-    .or(orClauses.join(","))
-    .limit(500);
 
-  // Typo / abbreviation fallback: match against the REAL catalog (products
-  // sold in the last 60d) so "ceke", "84L"-style shorthand, etc. still resolve.
-  let usedFallback = false;
-  if (!products || products.length === 0) {
-    usedFallback = true;
-    const since = dateNDaysAgoInOperatorTz(60);
-    const { data: soldRows } = await supabase
-      .from("daily_sales").select("product_id").gte("sale_date", since).range(0, 9999);
-    const ids = [...new Set((soldRows || []).map((r) => r.product_id as string))];
-    if (ids.length) {
-      const { data: real } = await supabase.from("products").select(cols).in("id", ids);
-      products = real;
+  // FIRST: the canonical resolver — matches only ACTIVE products (sold /
+  // stocked / in a machine), with brand synonyms (coca cola → Coke), ordered
+  // sellers-first. Dead catalog rows are invisible here, which kills the
+  // whole "answered about an inactive product" failure class.
+  type LooseRow = Record<string, unknown>;
+  let products: LooseRow[] | null = null;
+  let ranked: Array<{ item: LooseRow; score: number }> = [];
+  const fam = await resolveProducts(name);
+  if (fam.length > 0) {
+    products = fam as unknown as LooseRow[];
+    // Resolver order (sellers first) IS the ranking — descending scores so the
+    // downstream near-window logic keeps working.
+    ranked = fam.map((p, i) => ({ item: p as unknown as LooseRow, score: 100 - Math.min(i, 40) }));
+  }
+
+  if (!products) {
+    // Fallback: substring pass across ALL meaningful tokens (typos, names the
+    // resolver's token match can't reach), then recently-sold fuzzy, then the
+    // semantic index.
+    const nameTokens = name.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+    const orClauses = [`name.ilike.%${name}%`, ...nameTokens.map((t) => `name.ilike.%${t}%`)];
+    const firstWord = name.trim().split(/\s+/)[0];
+    if (nameTokens.length === 0) orClauses.push(`name.ilike.%${firstWord}%`);
+    const { data: subRows } = await supabase
+      .from("products")
+      .select(cols)
+      .eq("company_id", companyId)
+      .or(orClauses.join(","))
+      .limit(500);
+    products = (subRows || []) as LooseRow[];
+
+    let usedFallback = false;
+    if (products.length === 0) {
+      usedFallback = true;
+      const since = dateNDaysAgoInOperatorTz(60);
+      const { data: soldRows } = await supabase
+        .from("daily_sales").select("product_id").gte("sale_date", since).range(0, 9999);
+      const ids = [...new Set((soldRows || []).map((r) => r.product_id as string))];
+      if (ids.length) {
+        const { data: real } = await supabase.from("products").select(cols).in("id", ids);
+        products = (real || []) as LooseRow[];
+      }
     }
-  }
 
-  if (!products || products.length === 0) {
-    return { error: `No product matched "${name}"` };
-  }
-
-  // Fuzzy-rank and answer for the BEST match — never demand the exact name.
-  // In the fallback path (no substring hit) require a CONFIDENT score so a bad
-  // typo resolves to nothing ("did you mean…?") rather than a wrong product.
-  let ranked = fuzzyRank(name, products, (p) => p.name as string);
-  if (ranked.length === 0 || (usedFallback && ranked[0].score < 60)) {
-    // Semantic (vector) fallback — catches paraphrases and heavy typos the
-    // string matcher can't ("sparkling peach celsius drink").
-    const semRows = await semanticProductRows(name, cols);
-    if (semRows.length > 0) {
-      products = semRows as typeof products;
-      ranked = semRows.map((p) => ({ item: p as NonNullable<typeof products>[number], score: 60 }));
-    } else {
-      return { error: `No product matched "${name}"` };
+    ranked = fuzzyRank(name, products, (p) => p.name as string);
+    if (ranked.length === 0 || (usedFallback && ranked[0].score < 60)) {
+      const semRows = await semanticProductRows(name, cols);
+      if (semRows.length > 0) {
+        products = semRows as LooseRow[];
+        ranked = semRows.map((p) => ({ item: p as LooseRow, score: 60 }));
+      } else {
+        return { error: `No product matched "${name}"` };
+      }
     }
   }
 
@@ -1611,6 +1621,15 @@ async function getSalesSummary(args: {
   let productIds: string[] | undefined;
   let resolvedProducts: string[] | undefined;
   if (args.productName) {
+    // FIRST: the canonical resolver — active-products-only universe with brand
+    // synonyms (coca cola → Coke…). Dead catalog rows are invisible to it.
+    const fam = await resolveProducts(args.productName);
+    if (fam.length > 0) {
+      productIds = fam.slice(0, 200).map((p) => p.id);
+      resolvedProducts = fam.slice(0, 12).map((p) => p.name);
+    }
+  }
+  if (args.productName && !productIds) {
     const tokens = args.productName.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
     const orFilter = tokens.length
       ? tokens.map((t) => `name.ilike.%${t}%`).join(",")

@@ -145,6 +145,16 @@ For ANY question about revenue, units, or transactions over a period:
     category:'drink'). "how many drink units / drink revenue / % from drinks"
     all use get_sales_summary with category, NOT productName.
 
+  DEMAND / "HOW MANY DO I NEED" (hard rule): "how many <product> do I need
+  for a month / how much should I buy" is a DEMAND question. Answer it from
+  the WHOLE product family's last-30-day sales — get_sales_summary(productName)
+  over the last 30 days — NEVER from one variant's velocity. Then convert to
+  CASES with caseSize (from search_products / get_product_details): the
+  operator buys in cases. Format: "≈152 units/month ≈ 6-7 cases of 24".
+  Sanity-check yourself: if your answer implies less than 1 case a month for
+  a brand the operator stocks in multiple machines, you scoped it wrong —
+  re-check with the family before answering.
+
   - "TOP SELLING / best seller / best product / what sells most" means MOST
     UNITS (the Reports page's Top Performing SKUs ranks by units). Best options:
     get_top_sellers (units-ranked), OR get_sales_summary(groupBy:'product') and

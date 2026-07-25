@@ -376,15 +376,20 @@ export async function POST(req: Request) {
 
       if (!res.ok) {
         const text = await res.text();
-        // A 429 that survived all retries means the org is genuinely over its
-        // rate limit — return a friendly, retryable message, not a raw 502.
-        if (res.status === 429) {
-          return NextResponse.json(
-            { success: true, reply: "I'm handling a lot of requests right now — give me a few seconds and ask again." },
-          );
+        // A 429 that survived all retries = genuinely over the rate limit;
+        // a 5xx that survived them = OpenAI outage. Either way the operator
+        // gets a plain retry message — NEVER a raw JSON error dump.
+        if (res.status === 429 || res.status >= 500) {
+          return NextResponse.json({
+            success: true,
+            reply: res.status === 429
+              ? "I'm handling a lot of requests right now — give me a few seconds and ask again."
+              : "The AI service is having a temporary problem on their side. Wait a minute and ask again — your data is fine.",
+          });
         }
+        console.error("[assistant-v2] OpenAI error", res.status, text.slice(0, 300));
         return NextResponse.json(
-          { success: false, error: `OpenAI ${res.status}: ${text.slice(0, 300)}` },
+          { success: false, error: "The assistant hit an unexpected error. Please try again." },
           { status: 502 }
         );
       }

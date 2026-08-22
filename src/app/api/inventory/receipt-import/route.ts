@@ -39,7 +39,26 @@ Respond with ONLY valid JSON, no markdown:
 {"store":"...","date":"YYYY-MM-DD or null","orderNumber":"... or null","items":[{"name":"...","packQty":1,"unitsPerPack":24,"totalUnits":24,"totalPrice":12.34}]}`;
 
 async function pdfToText(base64: string): Promise<string> {
-  // pdf-parse v2 API: new PDFParse({ data }) → getText() → { text }.
+  // FALLBACK ONLY (primary path sends the PDF to GPT-4o directly).
+  // pdfjs (inside pdf-parse) expects browser globals that don't exist in the
+  // Node serverless runtime — polyfill the ones it touches for text extraction.
+  const g = globalThis as Record<string, unknown>;
+  if (typeof g.DOMMatrix === "undefined") {
+    g.DOMMatrix = class DOMMatrixStub {
+      a = 1; b = 0; c = 0; d = 1; e = 0; f = 0;
+      multiply() { return this; }
+      translate() { return this; }
+      scale() { return this; }
+      transformPoint(p: unknown) { return p; }
+    };
+  }
+  if (typeof (Promise as unknown as { withResolvers?: unknown }).withResolvers === "undefined") {
+    (Promise as unknown as { withResolvers: () => unknown }).withResolvers = function () {
+      let resolve!: (v: unknown) => void, reject!: (e: unknown) => void;
+      const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+      return { promise, resolve, reject };
+    };
+  }
   const { PDFParse } = await import("pdf-parse");
   const parser = new PDFParse({ data: new Uint8Array(Buffer.from(base64, "base64")) });
   try {
@@ -60,14 +79,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "fileBase64 and mimeType are required" }, { status: 400 });
     }
 
-    // Build the model input: text for PDFs, image content for photos.
+    // Build the model input. PDFs go to GPT-4o DIRECTLY as a file part — no
+    // server-side PDF library needed (pdfjs needs browser globals that broke
+    // in serverless: "DOMMatrix is not defined"), and it handles scanned PDFs
+    // too. The pdfToText path remains as a fallback below.
     let userContent: unknown;
+    let pdfFallbackAvailable = false;
     if (body.mimeType === "application/pdf") {
-      const text = await pdfToText(body.fileBase64);
-      if (text.trim().length < 30) {
-        return NextResponse.json({ success: false, error: "Couldn't read text from this PDF — try a photo of the receipt instead." });
-      }
-      userContent = `Receipt text:\n\n${text.slice(0, 12000)}`;
+      pdfFallbackAvailable = true;
+      userContent = [
+        { type: "text", text: "Parse this receipt PDF." },
+        { type: "file", file: { filename: body.fileName || "receipt.pdf", file_data: `data:application/pdf;base64,${body.fileBase64}` } },
+      ];
     } else if (body.mimeType.startsWith("image/")) {
       userContent = [
         { type: "text", text: "Parse this receipt photo." },
@@ -79,7 +102,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: `Unsupported file type: ${body.mimeType}. Upload a PDF or a photo.` }, { status: 400 });
     }
 
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    const callModel = (content: unknown) => fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
@@ -89,12 +112,23 @@ export async function POST(req: Request) {
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: EXTRACT_PROMPT },
-          { role: "user", content: userContent },
+          { role: "user", content },
         ],
       }),
     });
+
+    let res = await callModel(userContent);
+    if (!res.ok && pdfFallbackAvailable) {
+      // If the API rejected the file part, extract the text ourselves and retry.
+      try {
+        const text = await pdfToText(body.fileBase64);
+        if (text.trim().length >= 30) {
+          res = await callModel(`Receipt text:\n\n${text.slice(0, 12000)}`);
+        }
+      } catch { /* fall through to the error below */ }
+    }
     if (!res.ok) {
-      return NextResponse.json({ success: false, error: "The AI parser is temporarily unavailable — try again in a minute." }, { status: 502 });
+      return NextResponse.json({ success: false, error: "The AI parser couldn't read this file — try again, or upload a photo of the receipt." }, { status: 502 });
     }
     const data = await res.json();
     let parsed: { store?: string; date?: string | null; orderNumber?: string | null; items?: ParsedItem[] };

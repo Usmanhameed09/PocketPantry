@@ -72,6 +72,10 @@ export async function POST(req: Request) {
         const patch: Record<string, unknown> = {};
         if (line.updateCost && line.unitCost && line.unitCost > 0 && line.unitCost < 20) patch.unit_cost = line.unitCost;
         if (line.caseSize && line.caseSize > 1) patch.case_size = line.caseSize;
+        // Vendor = where the operator BUYS it (buy lists group by vendor for
+        // shopping trips). The receipt's store is ground truth — it replaces
+        // manufacturer junk left by the UPC import ("COCA COLA REFRE").
+        if (body.store) patch.vendor = body.store;
         if (Object.keys(patch).length > 0) {
           await supabase.from("products").update(patch).eq("id", productId);
           if (patch.unit_cost) costUpdates++;

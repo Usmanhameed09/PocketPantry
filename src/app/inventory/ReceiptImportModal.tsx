@@ -27,13 +27,14 @@ type ReviewLine = ParsedLine & {
   units: number;
   updateCost: boolean;
 };
+type CommitResult = { unitsAdded: number; linesImported: number; newProducts: number; costUpdates: number; errors?: string[] };
 
 export default function ReceiptImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [phase, setPhase] = useState<"pick" | "parsing" | "review" | "committing" | "done">("pick");
   const [error, setError] = useState<string | null>(null);
   const [meta, setMeta] = useState<{ store: string | null; date: string | null; orderNumber: string | null }>({ store: null, date: null, orderNumber: null });
   const [lines, setLines] = useState<ReviewLine[]>([]);
-  const [result, setResult] = useState<{ unitsAdded: number; linesImported: number; newProducts: number; costUpdates: number } | null>(null);
+  const [result, setResult] = useState<CommitResult | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function handleFile(f: File) {
@@ -215,6 +216,14 @@ export default function ReceiptImportModal({ onClose, onDone }: { onClose: () =>
             {result.newProducts > 0 ? ` · ${result.newProducts} new product${result.newProducts === 1 ? "" : "s"} created` : ""}
             {result.costUpdates > 0 ? ` · ${result.costUpdates} unit cost${result.costUpdates === 1 ? "" : "s"} corrected from the receipt` : ""}
           </div>
+          {result.errors && result.errors.length > 0 && (
+            <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 10, background: "#fffbeb", color: "#92400e", border: "1px solid #fcd34d", fontSize: 12.5, textAlign: "left" }}>
+              <strong>{result.errors.length} line{result.errors.length === 1 ? "" : "s"} failed:</strong>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                {result.errors.slice(0, 5).map((e, i) => <li key={i}>{e}</li>)}
+              </ul>
+            </div>
+          )}
           <div style={{ marginTop: 18 }}>
             <BtnPrimary onClick={onDone}><Check size={15} /> Done</BtnPrimary>
           </div>

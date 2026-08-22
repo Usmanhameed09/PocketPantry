@@ -81,6 +81,15 @@ export async function POST(req: Request) {
       }
     }
 
+    // If NOTHING was written, that's a failure — never show a success screen
+    // saying "0 units added" (that's how the reference_id type bug hid).
+    if (added === 0 && errors.length > 0) {
+      return NextResponse.json({
+        success: false,
+        error: `No stock was added — every line failed. First error: ${errors[0]}`,
+        errors,
+      }, { status: 500 });
+    }
     return NextResponse.json({
       success: true,
       unitsAdded: added,

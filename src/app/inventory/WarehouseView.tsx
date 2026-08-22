@@ -14,13 +14,14 @@ import { usePagination } from "@/hooks/usePagination";
 import Pagination from "@/components/Pagination";
 import {
   Loader2, Search, Warehouse, Plus, Minus, Package, AlertTriangle,
-  History, Save, ClipboardList,
+  History, Save, ClipboardList, FileUp,
 } from "lucide-react";
 import {
   CARD, StatCard, Th, Td, EmptyState, LoadingBox,
   Modal, Select, BtnPrimary, BtnSecondary, pageContainer,
 } from "./ui";
 import RefillModal from "./RefillModal";
+import ReceiptImportModal from "./ReceiptImportModal";
 import { dateTimeET } from "@/lib/format-et";
 
 type Product = {
@@ -65,6 +66,7 @@ export default function WarehouseView() {
   const [machines, setMachines] = useState<MachineOption[]>([]);
   const [productList, setProductList] = useState<ProductOption[]>([]);
   const [showRefill, setShowRefill] = useState(false);
+  const [showReceipt, setShowReceipt] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -143,14 +145,25 @@ export default function WarehouseView() {
               }}
             />
           </div>
-          <button onClick={() => setShowRefill(true)}
-            style={{
-              padding: "10px 16px", background: "#16a34a", color: "#fff", border: "none",
-              borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer",
-              display: "inline-flex", alignItems: "center", gap: 8,
-            }}>
-            <ClipboardList size={16} /> Log Refill
-          </button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setShowReceipt(true)}
+              title="Upload a store receipt (PDF or photo) — the AI reads it and adds the stock"
+              style={{
+                padding: "10px 16px", background: "#0369a1", color: "#fff", border: "none",
+                borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer",
+                display: "inline-flex", alignItems: "center", gap: 8,
+              }}>
+              <FileUp size={16} /> Import Receipt
+            </button>
+            <button onClick={() => setShowRefill(true)}
+              style={{
+                padding: "10px 16px", background: "#16a34a", color: "#fff", border: "none",
+                borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer",
+                display: "inline-flex", alignItems: "center", gap: 8,
+              }}>
+              <ClipboardList size={16} /> Log Refill
+            </button>
+          </div>
         </div>
 
         <div style={CARD}>
@@ -255,6 +268,12 @@ export default function WarehouseView() {
           products={productList}
           onClose={() => setShowRefill(false)}
           onDone={() => { setShowRefill(false); load(); }}
+        />
+      )}
+      {showReceipt && (
+        <ReceiptImportModal
+          onClose={() => setShowReceipt(false)}
+          onDone={() => { setShowReceipt(false); load(); }}
         />
       )}
     </>

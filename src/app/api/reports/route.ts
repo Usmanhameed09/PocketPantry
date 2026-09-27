@@ -199,7 +199,10 @@ async function buildReports(searchParams: URLSearchParams): Promise<Record<strin
         units: v.units,
       }));
 
-    // ─── 4. Top SKUs (by units sold) ──────────────────────────────────
+    // ─── 4. SKUs (sorted by units sold) ───────────────────────────────
+    // Returned in full, not sliced: the Overview card shows the top by UNITS,
+    // while the SKUs tab re-sorts by REVENUE. Slicing to 20-by-units here made
+    // the "Top 20 by revenue" list silently drop high-revenue/low-unit items.
     const skuMap = new Map<string, { units: number; revenue: number; cost: number }>();
     for (const r of rows) {
       const e = skuMap.get(r.product_id) || { units: 0, revenue: 0, cost: 0 };
@@ -216,8 +219,7 @@ async function buildReports(searchParams: URLSearchParams): Promise<Record<strin
         cost: Math.round(v.cost * 100) / 100,
         margin: v.revenue > 0 ? Math.round(((v.revenue - v.cost) / v.revenue) * 100) : 0,
       }))
-      .sort((a, b) => b.units - a.units)
-      .slice(0, 20);
+      .sort((a, b) => b.units - a.units || b.revenue - a.revenue);
 
     // ─── 5. Per-machine breakdown ─────────────────────────────────────
     const machineMap = new Map<string, {

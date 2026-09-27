@@ -77,12 +77,20 @@ export async function ensureMachine(
   const companyId = await ensureDefaultCompany();
   const supabase = createServerClient();
 
-  // Check if machine exists by nayax_device_id
-  const { data: existing } = await supabase
+  // Check if machine exists by nayax_device_id. Two guards against duplicate
+  // machines (a second "NEC" row once got created and every sale was then
+  // stored twice, inflating Reports):
+  //   - a FAILED lookup must throw, never fall through to the insert below;
+  //   - always pick the OLDEST row, so an unordered limit(1) can't alternate
+  //     between rows across syncs.
+  const lookup = () => supabase
     .from("machines")
     .select("id")
     .eq("nayax_device_id", nayaxDeviceId)
+    .order("created_at", { ascending: true })
     .limit(1);
+  const { data: existing, error: lookupError } = await lookup();
+  if (lookupError) throw new Error(`ensureMachine(${nayaxDeviceId}) lookup: ${lookupError.message}`);
 
   if (existing && existing.length > 0) {
     // Update name/last_sync
@@ -106,7 +114,15 @@ export async function ensureMachine(
     .select("id")
     .single();
 
-  if (error) throw new Error(`ensureMachine(${nayaxDeviceId}): ${error.message}`);
+  if (error) {
+    // Unique index on nayax_device_id (migration 009): a concurrent sync won
+    // the insert race — use its row instead of failing.
+    if (error.code === "23505") {
+      const { data: again } = await lookup();
+      if (again?.[0]?.id) return again[0].id as string;
+    }
+    throw new Error(`ensureMachine(${nayaxDeviceId}): ${error.message}`);
+  }
   return data.id;
 }
 

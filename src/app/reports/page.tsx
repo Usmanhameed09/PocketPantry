@@ -181,6 +181,10 @@ export default function ReportsPage() {
     paymentSplitWindowNote: null,
   };
   const totalSkuRevenue = topSkus.reduce((s, x) => s + x.revenue, 0);
+  // The API returns every SKU sorted by units (Overview card). The SKUs tab is
+  // labelled "by revenue", so it must actually rank by revenue.
+  const skusByRevenue = [...topSkus].sort((a, b) => b.revenue - a.revenue).slice(0, 20);
+  const shortLabel = (s: string, max: number) => (s.length > max ? s.slice(0, max - 1) + "…" : s);
 
   function exportCsv() {
     const lines = [
@@ -665,14 +669,18 @@ export default function ReportsPage() {
             <div style={{ ...cardStyle, padding: 20, gridColumn: "1 / -1" }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>SKU Revenue Breakdown</div>
               <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>Top 20 products by revenue</div>
-              {topSkus.length === 0 ? (
+              {skusByRevenue.length === 0 ? (
                 <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>No SKU data.</div>
               ) : (
-                <ResponsiveContainer width="100%" height={Math.max(300, topSkus.length * 22)}>
-                  <BarChart data={topSkus.slice(0, 15)} layout="vertical" margin={{ left: 150 }}>
+                // No extra left margin: the YAxis width already reserves label
+                // space. margin.left=150 + width=150 left ~0px for bars on phones.
+                <ResponsiveContainer width="100%" height={Math.max(300, Math.min(15, skusByRevenue.length) * 28)}>
+                  <BarChart data={skusByRevenue.slice(0, 15)} layout="vertical" margin={{ left: 0, right: 12 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                     <XAxis type="number" tick={{ fontSize: 11, fill: "#94a3b8" }} tickFormatter={(v) => `$${v}`} />
-                    <YAxis type="category" dataKey="product" tick={{ fontSize: 11, fill: "#374151" }} tickLine={false} axisLine={false} width={150} />
+                    <YAxis type="category" dataKey="product" tick={{ fontSize: isMobile ? 10 : 11, fill: "#374151" }} tickLine={false} axisLine={false}
+                      width={isMobile ? 110 : 180} interval={0}
+                      tickFormatter={(v: string) => shortLabel(v, isMobile ? 16 : 26)} />
                     <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #d5d9e2" }}
                       formatter={(value) => [`$${Number(value).toFixed(2)}`, "Revenue"]} />
                     <Bar dataKey="revenue" fill="#16a34a" radius={[0, 6, 6, 0]} barSize={16} />
@@ -689,7 +697,7 @@ export default function ReportsPage() {
                 }}>
                   <TH>Product</TH><TH>Units</TH><TH>Revenue</TH><TH>Margin</TH><TH>Rev Share</TH>
                 </div>
-                {topSkus.map((s, i) => {
+                {skusByRevenue.map((s, i) => {
                   const share = totalSkuRevenue > 0 ? (s.revenue / totalSkuRevenue) * 100 : 0;
                   return (
                     <div key={i} style={{

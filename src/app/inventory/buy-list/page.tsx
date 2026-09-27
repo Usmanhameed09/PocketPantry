@@ -19,7 +19,9 @@ type BuyListLine = {
   safetyBuffer: number; netNeedUnits: number;
   recommendedCases: number; recommendedQty: number;
   estimatedCost: number; explanation: string;
+  machineStockTracked?: boolean; costKnown?: boolean; variants?: string[];
 };
+type DataQuality = { machineStockTracked: boolean; linesMissingCost: number; linesWithoutCaseSize: number; staleDraftPOs?: number };
 type VendorGroup = { vendor: string; lines: BuyListLine[]; subtotal: number };
 
 export default function BuyListPage() {
@@ -32,6 +34,7 @@ export default function BuyListPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [converting, setConverting] = useState(false);
   const [resultMsg, setResultMsg] = useState<{ text: string; type: "ok" | "err" } | null>(null);
+  const [quality, setQuality] = useState<DataQuality | null>(null);
 
   const generate = useCallback(async () => {
     setGenerating(true);
@@ -50,6 +53,7 @@ export default function BuyListPage() {
       }
       const vendorGroups = data.data?.vendorGroups || [];
       setGroups(vendorGroups);
+      setQuality(data.data?.dataQuality || null);
       setHorizonDays(data.data?.horizonDays || 7);
       setSafetyDays(data.data?.safetyStockDays || 5);
       setGeneratedAt(data.data?.generatedAt || new Date().toISOString());
@@ -100,6 +104,11 @@ export default function BuyListPage() {
   const totalCost = groups.reduce((s, g) => s + g.subtotal, 0);
   const totalUnits = groups.reduce((s, g) => s + g.lines.reduce((s2, l) => s2 + l.recommendedQty, 0), 0);
   const totalCases = groups.reduce((s, g) => s + g.lines.reduce((s2, l) => s2 + l.recommendedCases, 0), 0);
+  const lineCount = groups.reduce((s, g) => s + g.lines.length, 0);
+  // Case sizes are only meaningful when set — with case size 1 a "case" is a
+  // single unit, so "299 cases / 363 units" read as nonsense. Show units, and
+  // say how many lines still need a case size.
+  const caseSizesKnown = !!quality && quality.linesWithoutCaseSize === 0;
 
   return (
     <div style={{ minHeight: "100vh", background: PAGE_BG }}>
@@ -137,11 +146,14 @@ export default function BuyListPage() {
               display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(3, 1fr) auto", gap: 16, marginBottom: 16,
             }}>
               <StatCard icon={<DollarSign size={20} />} iconBg="#dcfce7" iconColor="#16a34a"
-                label="Total cost" value={`$${totalCost.toFixed(2)}`} sub="estimated" />
+                label="Total cost" value={`$${totalCost.toFixed(2)}`}
+                sub={quality && quality.linesMissingCost > 0 ? `${quality.linesMissingCost} of ${lineCount} items have no cost` : "estimated"} />
               <StatCard icon={<Package size={20} />} iconBg="#ede9fe" iconColor="#6366f1"
-                label="Cases / units" value={`${totalCases} / ${totalUnits}`} sub="cases of all sizes" />
+                label={caseSizesKnown ? "Cases / units" : "Units to buy"}
+                value={caseSizesKnown ? `${totalCases} / ${totalUnits}` : totalUnits}
+                sub={caseSizesKnown ? "cases of all sizes" : `${quality?.linesWithoutCaseSize ?? 0} items have no case size`} />
               <StatCard icon={<Store size={20} />} iconBg="#fef3c7" iconColor="#d97706"
-                label="Vendors" value={groups.length} sub={`${groups.reduce((s, g) => s + g.lines.length, 0)} line items`} />
+                label="Vendors" value={groups.length} sub={`${lineCount} line items`} />
               <div style={{ ...CARD, padding: 18, display: "flex", alignItems: "center" }}>
                 <BtnPrimary onClick={convertToPOs} disabled={converting} fullWidth>
                   {converting ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : <ShoppingCart size={16} />}
@@ -149,6 +161,34 @@ export default function BuyListPage() {
                 </BtnPrimary>
               </div>
             </div>
+
+            {quality && (!quality.machineStockTracked || quality.linesMissingCost > 0 || (quality.staleDraftPOs ?? 0) > 0) && (
+              <div style={{
+                ...CARD, padding: "12px 16px", marginBottom: 16, fontSize: 13, lineHeight: 1.5,
+                background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e",
+              }}>
+                {!quality.machineStockTracked && (
+                  <div>
+                    <strong>Machine stock isn&apos;t counted yet.</strong> The list subtracts what&apos;s in each machine, but
+                    that number is only known after a refill is logged (Warehouse tab → Log Refill). No refills have been logged,
+                    so every item assumes the machines are empty and the list will over-order.
+                  </div>
+                )}
+                {quality.linesMissingCost > 0 && (
+                  <div style={{ marginTop: !quality.machineStockTracked ? 6 : 0 }}>
+                    <strong>{quality.linesMissingCost} of {lineCount} items have no unit cost</strong>, so the total cost is
+                    understated. Set costs on the Products page (or import a receipt) to fix it.
+                  </div>
+                )}
+                {(quality.staleDraftPOs ?? 0) > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <strong>{quality.staleDraftPOs} draft PO{quality.staleDraftPOs === 1 ? " is" : "s are"} older than 14 days</strong> and
+                    {quality.staleDraftPOs === 1 ? " was" : " were"} never approved, so {quality.staleDraftPOs === 1 ? "it's" : "they're"} no
+                    longer counted as incoming stock. Approve or delete {quality.staleDraftPOs === 1 ? "it" : "them"} on the Purchase Orders tab.
+                  </div>
+                )}
+              </div>
+            )}
 
             {groups.map((g) => {
               const isOpen = expanded.has(g.vendor);
@@ -194,7 +234,11 @@ export default function BuyListPage() {
                                 <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2, fontFamily: "ui-monospace, monospace" }}>{l.sku}</div>
                               </Td>
                               <Td align="right" mono>{l.warehouseOnHand}</Td>
-                              <Td align="right" mono>{l.inMachines}</Td>
+                              <Td align="right" mono>
+                                {l.machineStockTracked === false
+                                  ? <span title="No refill logged — machine stock unknown" style={{ color: "#94a3b8" }}>n/a</span>
+                                  : l.inMachines}
+                              </Td>
                               <Td align="right" mono>{l.reservedInOpenPos}</Td>
                               <Td align="right">
                                 <div style={{ fontWeight: 700, color: "#0f172a" }}>
@@ -204,8 +248,8 @@ export default function BuyListPage() {
                                   {l.recommendedQty} units ({l.caseSize}/case)
                                 </div>
                               </Td>
-                              <Td align="right" mono>${l.caseCost.toFixed(2)}</Td>
-                              <Td align="right" mono bold>${l.estimatedCost.toFixed(2)}</Td>
+                              <Td align="right" mono>{l.costKnown === false ? <span style={{ color: "#94a3b8" }}>no cost</span> : `$${l.caseCost.toFixed(2)}`}</Td>
+                              <Td align="right" mono bold>{l.costKnown === false ? <span style={{ color: "#94a3b8" }}>—</span> : `$${l.estimatedCost.toFixed(2)}`}</Td>
                               <Td><span style={{ fontSize: 11, color: "#64748b" }}>{l.explanation}</span></Td>
                             </tr>
                           ))}

@@ -103,14 +103,25 @@ You land on the **Overview** tab. The other tabs (Warehouse, Scan, Products, etc
 3. Click the green **Generate buy list** button.
 4. Wait a few seconds. The list appears, grouped by vendor.
 5. Review each line — the **Why** column explains why each item was suggested.
-6. To change a quantity, edit the cell directly (some lines support inline editing).
-7. When the list looks right, click **Convert to PO drafts** (top-right of the totals card).
+6. Quantities can't be changed on the buy list or on a draft PO. If you buy a different amount than suggested, approve the PO, then correct the stock with **Adjust** on the **Warehouse** tab. (Approving a PO adds every line's quantity to the warehouse automatically.)
+7. When the list looks right, click **Convert to PO drafts** (the green button next to the totals cards).
+
+**How the quantity is worked out:** for each item,
+(sales per day × 7-day horizon) + (sales per day × 5 safety days)
+− warehouse stock − **stock still in the machines** − units already on open POs,
+then rounded up to whole cases.
+
+- **Sales per day** is the last 30 days of real Nayax sales, across all machines.
+- **Stock in the machines** is only known once you **log refills** (Warehouse tab → **Log Refill**): the app takes what you loaded and subtracts what has sold since. Until refills are logged, the *In machines* column shows **n/a**, a yellow notice appears, and the list assumes the machines are empty, so it will suggest more than you really need.
+- **Units already on open POs** counts Approved and Purchased POs, plus Draft POs from the last 14 days. An older draft that was never approved is ignored and shows up in the yellow notice. Approve it or delete it.
+- Items with no unit cost show **no cost** and aren't included in the total. Set costs on the **Products** tab, or import a receipt.
+- If an item appears under more than one name (for example, the Nayax name and the name on your Sam's Club receipt), and the two names are linked as the same product, they're combined into one line. Their sales and stock are added together.
 
 ✅ **What you should see:** A green message: "Created 1 purchase order draft." The list clears and a new PO appears in the **Purchase Orders** tab.
 
 💡 **Note:** All lines get rolled into ONE purchase order — the scraped vendor names (Walmart, Sam's Club) aren't your real suppliers, so the PO is now one consolidated document you can hand off as a single document.
 
-❌ **If the list is empty:** Your warehouse + machine stock + open POs already cover the next 12 days of demand. No order needed. Check back next week.
+❌ **If the list is empty:** Your warehouse + machine stock + open POs already cover the next 12 days (7-day horizon + 5 safety days) of demand. No order needed. Check back next week.
 
 ---
 

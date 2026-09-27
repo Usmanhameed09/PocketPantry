@@ -37,6 +37,11 @@ export type BuyListLine = {
   recommendedQty: number;       // recommendedCases × caseSize (display units)
   estimatedCost: number;
   explanation: string;
+  // false = no refill has ever been logged for this product in any machine,
+  // so "inMachines" is UNKNOWN (shown as 0), not a real zero.
+  machineStockTracked: boolean;
+  costKnown: boolean;           // false = no unit cost on file → $0 line
+  variants: string[];           // other catalog names folded into this line
 };
 
 export type BuyListResult = {
@@ -45,26 +50,45 @@ export type BuyListResult = {
   safetyStockDays: number;
   lines: BuyListLine[];
   vendorGroups: Array<{ vendor: string; lines: BuyListLine[]; subtotal: number }>;
+  dataQuality: {
+    machineStockTracked: boolean;   // any refill baseline anywhere in the fleet
+    linesMissingCost: number;       // recommended lines with no unit cost
+    linesWithoutCaseSize: number;   // recommended lines with case size 1 (unset)
+    staleDraftPOs: number;          // Draft POs older than 14d, ignored as "reserved"
+  };
 };
 
-async function getReservedByProduct(): Promise<Map<string, number>> {
+// A Draft PO older than this is treated as abandoned: it was never placed, so
+// its lines must not keep suppressing the buy list as "incoming" stock.
+const STALE_DRAFT_DAYS = 14;
+
+async function getReservedByProduct(): Promise<{ reserved: Map<string, number>; staleDrafts: number }> {
   const supabase = createServerClient();
   const { data } = await supabase
     .from("po_lines")
-    .select("product_id, qty_ordered, qty_received, purchase_orders!inner(status)")
+    .select("product_id, qty_ordered, qty_received, po_id, purchase_orders!inner(status, created_at)")
     .in("purchase_orders.status", ["Draft", "Approved", "Purchased"]);
+  const cutoff = Date.now() - STALE_DRAFT_DAYS * 864e5;
   const map = new Map<string, number>();
-  for (const r of (data || []) as Array<{
+  const stale = new Set<string>();
+  for (const r of (data || []) as unknown as Array<{
     product_id: string;
     qty_ordered: number;
     qty_received: number;
+    po_id: string;
+    purchase_orders: { status: string; created_at: string };
   }>) {
+    const po = r.purchase_orders;
+    if (po?.status === "Draft" && new Date(po.created_at).getTime() < cutoff) {
+      stale.add(r.po_id);
+      continue;
+    }
     const open = (r.qty_ordered || 0) - (r.qty_received || 0);
     if (open > 0) {
       map.set(r.product_id, (map.get(r.product_id) || 0) + open);
     }
   }
-  return map;
+  return { reserved: map, staleDrafts: stale.size };
 }
 
 export async function generateBuyList(): Promise<BuyListResult> {
@@ -72,48 +96,105 @@ export async function generateBuyList(): Promise<BuyListResult> {
   const supabase = createServerClient();
   const settings = await getProjectionSettings();
   const projections = await getProjections();
-  const reserved = await getReservedByProduct();
+  const { reserved, staleDrafts } = await getReservedByProduct();
 
-  // Pull warehouse on-hand + vendor + case size + machine remaining
+  // ── Catalog variants ────────────────────────────────────────────────
+  // The same physical item often exists as several catalog rows: the Nayax
+  // name that SELLS ("Coke 16.9 oz Bottle") and the purchased/receipt name
+  // that holds warehouse STOCK, cost and case size. product_groups (migration
+  // 008) links them. Aggregate per group so sales on one variant are netted
+  // against stock on another, and cost/case size come from the variant that
+  // is actually bought. Ungrouped products are a group of one.
   const productIds = projections.map((p) => p.productId);
   const safeIds = productIds.length > 0 ? productIds : ["00000000-0000-0000-0000-000000000000"];
 
-  const { data: products } = await supabase
-    .from("products")
-    .select("id, vendor, case_size")
-    .in("id", safeIds);
-  const vendorById = new Map(
-    (products || []).map((p) => [p.id as string, (p.vendor as string) || "Default"])
-  );
-  const caseSizeById = new Map(
-    (products || []).map((p) => [p.id as string, Math.max(1, (p.case_size as number) || 1)])
-  );
+  type CatalogRow = { id: string; name: string; vendor: string | null; case_size: number | null; unit_cost: number | null; group_id: string | null };
+  const catalog = new Map<string, CatalogRow>();
+  for (let i = 0; i < safeIds.length; i += 200) {
+    const { data } = await supabase
+      .from("products")
+      .select("id, name, vendor, case_size, unit_cost, group_id")
+      .in("id", safeIds.slice(i, i + 200));
+    for (const p of (data || []) as CatalogRow[]) catalog.set(p.id, p);
+  }
+  const groupIds = [...new Set([...catalog.values()].map((p) => p.group_id).filter((g): g is string => !!g))];
+  for (let i = 0; i < groupIds.length; i += 200) {
+    const { data } = await supabase
+      .from("products")
+      .select("id, name, vendor, case_size, unit_cost, group_id")
+      .in("group_id", groupIds.slice(i, i + 200));
+    for (const p of (data || []) as CatalogRow[]) catalog.set(p.id, p);
+  }
+  const groupKeyOf = (productId: string) => catalog.get(productId)?.group_id || productId;
+  const membersByGroup = new Map<string, CatalogRow[]>();
+  for (const p of catalog.values()) {
+    const k = p.group_id || p.id;
+    const arr = membersByGroup.get(k) || [];
+    arr.push(p);
+    membersByGroup.set(k, arr);
+  }
 
   const { data: warehouse } = await supabase
     .from("warehouse_inventory")
     .select("product_id, on_hand")
     .eq("company_id", companyId);
   const onHandById = new Map(
-    (warehouse || []).map((w) => [w.product_id as string, w.on_hand as number])
+    (warehouse || []).map((w) => [w.product_id as string, (w.on_hand as number) || 0])
   );
 
-  // NEW: estimated remaining across all machines per product
-  const { data: machineInv } = await supabase
-    .from("machine_inventory")
-    .select("product_id, estimated_remaining")
-    .in("product_id", safeIds);
+  // Machine stock is only KNOWN once a refill has been logged for that
+  // product/machine (last_loaded_qty = the baseline; remaining = baseline −
+  // sales since). Without a baseline estimated_remaining is always 0, so we
+  // track whether it's a real zero or "not tracked yet".
   const inMachinesById = new Map<string, number>();
-  for (const m of machineInv || []) {
-    const pid = m.product_id as string;
-    inMachinesById.set(pid, (inMachinesById.get(pid) || 0) + (m.estimated_remaining as number));
+  const trackedIds = new Set<string>();
+  for (let from = 0; from < 50000; from += 1000) {
+    const { data } = await supabase
+      .from("machine_inventory")
+      .select("product_id, estimated_remaining, last_loaded_qty")
+      .range(from, from + 999);
+    if (!data?.length) break;
+    for (const m of data) {
+      const pid = m.product_id as string;
+      if (((m.last_loaded_qty as number) || 0) <= 0) continue;
+      trackedIds.add(pid);
+      inMachinesById.set(pid, (inMachinesById.get(pid) || 0) + ((m.estimated_remaining as number) || 0));
+    }
+    if (data.length < 1000) break;
+  }
+  const fleetTracked = trackedIds.size > 0;
+
+  // Collapse projections into one entry per group.
+  const byGroup = new Map<string, typeof projections>();
+  for (const p of projections) {
+    const k = groupKeyOf(p.productId);
+    const arr = byGroup.get(k) || [];
+    arr.push(p);
+    byGroup.set(k, arr);
   }
 
-  const lines: BuyListLine[] = projections.map((p) => {
-    const onHand = onHandById.get(p.productId) || 0;
-    const inMachines = inMachinesById.get(p.productId) || 0;
-    const reservedQty = reserved.get(p.productId) || 0;
-    const caseSize = caseSizeById.get(p.productId) || 1;
-    const velocity = p.velocityPerDay * (p.seasonalMultiplier || 1);
+  const lines: BuyListLine[] = [...byGroup.entries()].map(([groupKey, projs]) => {
+    const members = membersByGroup.get(groupKey) || projs.map((p) => ({ id: p.productId } as CatalogRow));
+    const memberIds = members.map((m) => m.id);
+    // Display = the best-selling variant; order = the variant we actually buy
+    // (has a cost, prefer one with a real case size), else the best seller.
+    const topSeller = [...projs].sort((a, b) => b.velocityPerDay - a.velocityPerDay)[0];
+    const buyVariant =
+      members.find((m) => (m.unit_cost || 0) > 0 && (m.case_size || 1) > 1) ||
+      members.find((m) => (m.unit_cost || 0) > 0) ||
+      catalog.get(topSeller.productId) ||
+      ({ id: topSeller.productId } as CatalogRow);
+    const unitCost = (buyVariant.unit_cost as number) || topSeller.cost || 0;
+    const caseSize = Math.max(1, (buyVariant.case_size as number) || 1);
+    const vendor = buyVariant.vendor || catalog.get(topSeller.productId)?.vendor || "Default";
+
+    const sum = (m: Map<string, number>) => memberIds.reduce((s, id) => s + (m.get(id) || 0), 0);
+    const onHand = sum(onHandById);
+    const inMachines = sum(inMachinesById);
+    const reservedQty = sum(reserved);
+    const machineTracked = memberIds.some((id) => trackedIds.has(id));
+
+    const velocity = projs.reduce((s, p) => s + p.velocityPerDay * (p.seasonalMultiplier || 1), 0);
     const horizonDemand = velocity * settings.horizonDays;
     const safety = velocity * settings.safetyStockDays;
     // Subtract ALL stock that will help meet demand (warehouse + in-machine + reserved POs)
@@ -121,22 +202,25 @@ export async function generateBuyList(): Promise<BuyListResult> {
     // Round UP to whole cases (vendors don't sell loose units)
     const recommendedCases = netNeedUnits > 0 ? Math.ceil(netNeedUnits / caseSize) : 0;
     const recommendedQty = recommendedCases * caseSize;
-    const caseCost = Math.round(p.cost * caseSize * 100) / 100;
+    const caseCost = Math.round(unitCost * caseSize * 100) / 100;
+    const variants = [...new Set(members.map((m) => m.name).filter((n) => n && n !== topSeller.productName))];
 
     const explanation =
       `${velocity.toFixed(2)}/day × ${settings.horizonDays}d + ${settings.safetyStockDays}d safety = ${(horizonDemand + safety).toFixed(1)} need` +
-      `, minus ${onHand} warehouse + ${inMachines} in-machine${reservedQty > 0 ? ` + ${reservedQty} reserved` : ""}` +
+      `, minus ${onHand} warehouse + ${machineTracked ? `${inMachines} in-machine` : "in-machine not tracked (no refill logged)"}` +
+      `${reservedQty > 0 ? ` + ${reservedQty} reserved` : ""}` +
       (recommendedCases > 0
         ? ` = order ${recommendedCases} case${recommendedCases === 1 ? "" : "s"} of ${caseSize}`
-        : ` = no order needed`);
+        : ` = no order needed`) +
+      (variants.length > 0 ? ` · includes ${variants.length} other catalog name${variants.length === 1 ? "" : "s"}` : "");
 
     return {
-      productId: p.productId,
-      productName: p.productName,
-      sku: p.sku,
-      category: p.category,
-      vendor: vendorById.get(p.productId) || "Default",
-      unitCost: p.cost,
+      productId: buyVariant.id,
+      productName: topSeller.productName,
+      sku: projs.find((p) => p.productId === buyVariant.id)?.sku || topSeller.sku,
+      category: topSeller.category,
+      vendor,
+      unitCost,
       caseSize,
       caseCost,
       warehouseOnHand: onHand,
@@ -148,8 +232,11 @@ export async function generateBuyList(): Promise<BuyListResult> {
       netNeedUnits: Math.round(netNeedUnits * 10) / 10,
       recommendedCases,
       recommendedQty,
-      estimatedCost: Math.round(recommendedQty * p.cost * 100) / 100,
+      estimatedCost: Math.round(recommendedQty * unitCost * 100) / 100,
       explanation,
+      machineStockTracked: machineTracked,
+      costKnown: unitCost > 0,
+      variants,
     };
   });
 
@@ -175,12 +262,19 @@ export async function generateBuyList(): Promise<BuyListResult> {
     snapshot: { lines, vendorGroups },
   });
 
+  const recommended = vendorGroups.flatMap((g) => g.lines);
   return {
     generatedAt: new Date().toISOString(),
     horizonDays: settings.horizonDays,
     safetyStockDays: settings.safetyStockDays,
     lines,
     vendorGroups,
+    dataQuality: {
+      machineStockTracked: fleetTracked,
+      linesMissingCost: recommended.filter((l) => !l.costKnown).length,
+      linesWithoutCaseSize: recommended.filter((l) => l.caseSize <= 1).length,
+      staleDraftPOs: staleDrafts,
+    },
   };
 }
 

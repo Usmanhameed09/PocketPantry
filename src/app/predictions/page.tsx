@@ -184,11 +184,11 @@ export default function PredictionsPage() {
     try { localStorage.removeItem("dismissedProductHealth"); } catch {}
   }
 
-  const fetchPredictions = useCallback(async () => {
+  const fetchPredictions = useCallback(async (fresh = false) => {
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch("/api/predictions");
+      const res = await fetch(fresh ? "/api/predictions?fresh=1" : "/api/predictions", { cache: "no-store" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Failed to load predictions" }));
         throw new Error(err.error || `HTTP ${res.status}`);
@@ -251,7 +251,7 @@ export default function PredictionsPage() {
         fileInputRef.current.value = "";
       }
 
-      await fetchPredictions();
+      await fetchPredictions(true); // bypass the cache — show the model we just trained
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Retrain failed");
     } finally {
@@ -300,7 +300,7 @@ export default function PredictionsPage() {
           <code style={{ background: "#f1f5f9", padding: "10px 16px", borderRadius: 8, fontSize: 13, color: "#334155" }}>
             cd prediction-api &amp;&amp; python server.py
           </code>
-          <button onClick={fetchPredictions} style={{
+          <button onClick={() => fetchPredictions(true)} style={{
             marginTop: 8, padding: "10px 24px", background: "#16a34a", color: "#fff",
             border: "none", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer",
           }}>Try Again</button>

@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
-import { withCache, CACHE_KEYS, TTL } from "@/lib/cache";
+import { withCache, invalidateKeys, CACHE_KEYS, TTL } from "@/lib/cache";
 import { createServerClient } from "@/lib/supabase";
 import { dateNDaysAgoInOperatorTz } from "@/lib/operator-timezone";
 
-export const maxDuration = 30;
+// 120s: a retrain (POST) runs ~12s but includes a Nayax fetch with a 60s
+// upstream timeout — 30s risked Vercel killing it mid-retrain.
+export const maxDuration = 120;
 
 const PREDICTION_API = process.env.PREDICTION_API_URL || "http://localhost:5000";
 
@@ -155,6 +157,10 @@ export async function POST(request: Request) {
     }
 
     const data = await res.json();
+    // The GET is cached for 30 min — drop it so the page shows the NEW model
+    // right away (it used to reload the old cached predictions after a
+    // successful retrain, so the buttons looked like they did nothing).
+    await invalidateKeys([CACHE_KEYS.predictions]);
     return NextResponse.json(data);
   } catch {
     return NextResponse.json(
